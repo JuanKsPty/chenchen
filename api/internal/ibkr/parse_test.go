@@ -10,7 +10,7 @@ import (
 // unlike the fixtures below that specifically exercise it, to also cover a
 // report row that never carries the attribute at all.
 const sampleStatement = `<?xml version="1.0" encoding="UTF-8"?>
-<FlexQueryResponse queryName="corebank" type="AF">
+<FlexQueryResponse queryName="chenchen" type="AF">
   <FlexStatements count="1">
     <FlexStatement accountId="U1234567" fromDate="20240101" toDate="20240131">
       <CashTransactions>

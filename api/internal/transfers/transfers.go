@@ -11,8 +11,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Window is how many days apart the two sides of a transfer may be booked. A

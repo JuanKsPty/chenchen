@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/JuanKsPty/corebank/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
 )
 
 // errorEnvelope is the single error shape the API ever returns, so the frontend
@@ -68,7 +68,7 @@ func writeEnvelope(w http.ResponseWriter, r *http.Request, apiErr *Error) {
 		RequestID: RequestIDFromContext(r.Context()),
 	}})
 	if err != nil {
-		http.Error(w, `{"error":{"code":"internal_error","message":"Ocurrió un error inesperado."}}`,
+		http.Error(w, `{"error":{"code":"internal_error","message":"Algo falló de nuestro lado. Tus datos están bien; intenta otra vez en un momento."}}`,
 			http.StatusInternalServerError)
 		return
 	}
@@ -91,7 +91,8 @@ const maxRequestBody = 1 << 20
 func Decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	if ct := r.Header.Get("Content-Type"); ct != "" {
 		if mediaType := strings.TrimSpace(strings.Split(ct, ";")[0]); mediaType != "application/json" {
-			return BadRequest("unsupported_media_type", "El cuerpo de la petición debe ser JSON.")
+			return BadRequest("unsupported_media_type", unreadableRequest).
+				WithCause(fmt.Errorf("content type %q, want application/json", mediaType))
 		}
 	}
 
@@ -104,10 +105,16 @@ func Decode(w http.ResponseWriter, r *http.Request, dst any) error {
 	// A second value in the same body is a client bug worth surfacing, not
 	// something to silently drop.
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
-		return BadRequest("malformed_json", "El cuerpo debe contener un único objeto JSON.")
+		return BadRequest("malformed_json", unreadableRequest).
+			WithCause(errors.New("the body holds more than one JSON value"))
 	}
 	return nil
 }
+
+// unreadableRequest is what a person reads when the body itself is wrong. Only
+// a broken client sends one, so there is nothing for them to fix but trying
+// again; the specific problem is the cause, for the log.
+const unreadableRequest = "No pudimos procesar lo que enviaste. Intenta otra vez."
 
 func decodeError(err error) error {
 	var (
@@ -117,29 +124,27 @@ func decodeError(err error) error {
 	)
 	switch {
 	case errors.As(err, &syntaxErr):
-		return BadRequest("malformed_json",
-			fmt.Sprintf("El JSON tiene un error de sintaxis en la posición %d.", syntaxErr.Offset))
+		return BadRequest("malformed_json", unreadableRequest).WithCause(err)
 
 	case errors.As(err, &typeErr):
 		e := Invalid(map[string]string{
-			typeErr.Field: fmt.Sprintf("Se esperaba un valor de tipo %s.", typeErr.Type.String()),
+			typeErr.Field: "Este dato no tiene el formato esperado.",
 		})
 		return e.WithCause(err)
 
 	case errors.As(err, &maxErr):
 		return &Error{
 			Status: http.StatusRequestEntityTooLarge, Code: "body_too_large",
-			Message: "El cuerpo de la petición es demasiado grande.", cause: err,
+			Message: "Lo que enviaste es demasiado grande.", cause: err,
 		}
 
 	case errors.Is(err, io.EOF):
-		return BadRequest("empty_body", "El cuerpo de la petición no puede estar vacío.")
+		return BadRequest("empty_body", unreadableRequest).WithCause(err)
 
 	case strings.HasPrefix(err.Error(), "json: unknown field "):
-		field := strings.Trim(strings.TrimPrefix(err.Error(), "json: unknown field "), `"`)
-		return BadRequest("unknown_field", fmt.Sprintf("El campo %q no es válido.", field))
+		return BadRequest("unknown_field", unreadableRequest).WithCause(err)
 
 	default:
-		return BadRequest("malformed_json", "El cuerpo de la petición no es JSON válido.")
+		return BadRequest("malformed_json", unreadableRequest).WithCause(err)
 	}
 }

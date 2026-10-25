@@ -9,11 +9,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/config"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/config"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // ErrEmailTaken means the address is already registered.

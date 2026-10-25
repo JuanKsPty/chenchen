@@ -1,4 +1,4 @@
-module github.com/JuanKsPty/corebank/api
+module github.com/JuanKsPty/chenchen/api
 
 go 1.26.5
 

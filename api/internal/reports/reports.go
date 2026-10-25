@@ -14,11 +14,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Service computes reports.
@@ -84,7 +84,7 @@ func dates(r *http.Request) (civil.Date, civil.Date, error) {
 		if raw := r.URL.Query().Get(name); raw != "" {
 			d, err := civil.Parse(raw)
 			if err != nil {
-				return civil.Date{}, civil.Date{}, httpx.BadRequest("invalid_date", "Las fechas van en formato AAAA-MM-DD.")
+				return civil.Date{}, civil.Date{}, httpx.BadRequest("invalid_date", "Revisa las fechas.")
 			}
 			*dest = d
 		}
@@ -108,7 +108,7 @@ func (h *Handler) categories(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range r.URL.Query()["account_id"] {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			httpx.Fail(w, r, httpx.BadRequest("invalid_account", "account_id no es válido."))
+			httpx.Fail(w, r, httpx.BadRequest("invalid_account", "Esa cuenta no existe."))
 			return
 		}
 		accounts = append(accounts, id)

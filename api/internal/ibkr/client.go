@@ -10,9 +10,9 @@
 // alive. Live intraday quotes are the one thing this trades away, and are
 // deliberately out of scope for this package.
 //
-// This package knows nothing about corebank's accounts or its database — it
+// This package knows nothing about chenchén's accounts or its database — it
 // only fetches and parses IBKR's own XML. See internal/investments for how a
-// parsed Statement becomes corebank data.
+// parsed Statement becomes chenchén data.
 //
 // # Unverified against a live account
 //
@@ -50,6 +50,11 @@ var (
 	// an unknown query id, or a report window IBKR refuses to generate) rather
 	// than merely asking the caller to wait.
 	ErrRequestFailed = errors.New("ibkr: flex web service rejected the request")
+
+	// ErrUnavailable means the Flex Web Service answered with an HTTP error (an
+	// outage, a rate limit) instead of a verdict on the request: worth trying
+	// again later, and no reason to doubt the token or the query.
+	ErrUnavailable = errors.New("ibkr: flex web service unavailable")
 )
 
 // Client fetches Flex Query reports for one token and query.
@@ -61,7 +66,7 @@ type Client struct {
 	HTTPClient *http.Client
 	// Token is the Flex Web Service token generated in Client Portal under
 	// Settings > Flex Web Service. It authorises fetching any Flex Query
-	// configured for the account, not just one — corebank scopes it to one
+	// configured for the account, not just one — chenchén scopes it to one
 	// query per stored link regardless.
 	Token string
 	// QueryID identifies which configured Flex Query to run.
@@ -197,7 +202,7 @@ func (c *Client) get(ctx context.Context, target string) ([]byte, error) {
 		return nil, fmt.Errorf("ibkr: reading response: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("%w: http %d", ErrRequestFailed, resp.StatusCode)
+		return nil, fmt.Errorf("%w: http %d", ErrUnavailable, resp.StatusCode)
 	}
 	return body, nil
 }

@@ -16,10 +16,10 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/JuanKsPty/corebank/api/internal/config"
-	"github.com/JuanKsPty/corebank/api/internal/investments"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/config"
+	"github.com/JuanKsPty/chenchen/api/internal/investments"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 func main() {

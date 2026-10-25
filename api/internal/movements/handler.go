@@ -12,13 +12,13 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Handler serves /api/entries.
@@ -53,7 +53,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range r.URL.Query()["account_id"] {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			httpx.Fail(w, r, httpx.BadRequest("invalid_account", "account_id no es válido."))
+			httpx.Fail(w, r, httpx.BadRequest("invalid_account", "Esa cuenta no existe."))
 			return
 		}
 		ids = append(ids, id)
@@ -89,35 +89,35 @@ func ParseQuery(r *http.Request) (Query, error) {
 		if raw := v.Get(name); raw != "" {
 			d, err := civil.Parse(raw)
 			if err != nil {
-				return Query{}, httpx.BadRequest("invalid_date", "Las fechas van en formato AAAA-MM-DD.")
+				return Query{}, httpx.BadRequest("invalid_date", "Revisa las fechas.")
 			}
 			*dest = d
 		}
 	}
 	for _, k := range v["kind"] {
 		if !validKind(k) {
-			return Query{}, httpx.BadRequest("invalid_kind", "kind no es válido.")
+			return Query{}, httpx.BadRequest("invalid_kind", "Revisa el tipo de movimiento.")
 		}
 		q.Kinds = append(q.Kinds, k)
 	}
 	for _, raw := range v["category_id"] {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			return Query{}, httpx.BadRequest("invalid_category", "category_id no es válido.")
+			return Query{}, httpx.BadRequest("invalid_category", "Esa categoría no existe.")
 		}
 		q.CategoryIDs = append(q.CategoryIDs, id)
 	}
 	if raw := v.Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 || n > 200 {
-			return Query{}, httpx.BadRequest("invalid_limit", "limit debe estar entre 1 y 200.")
+			return Query{}, httpx.BadRequest("invalid_limit", "No pudimos cargar los movimientos. Intenta otra vez.")
 		}
 		q.Limit = n
 	}
 	if raw := v.Get("cursor"); raw != "" {
 		c, err := decodeCursor(raw)
 		if err != nil {
-			return Query{}, httpx.BadRequest("invalid_cursor", "El cursor no es válido.")
+			return Query{}, httpx.BadRequest("invalid_cursor", "No pudimos cargar más movimientos. Intenta otra vez.")
 		}
 		q.Before = &c
 	}

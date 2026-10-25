@@ -5,7 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
 )
 
 // TransferCandidate is a pair of movements in two of the user's accounts

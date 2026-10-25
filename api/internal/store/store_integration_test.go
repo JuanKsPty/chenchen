@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/store"
-	"github.com/JuanKsPty/corebank/api/internal/storetest"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/storetest"
 )
 
 func TestMigrationsApplyToAnEmptyDatabaseAndAreIdempotent(t *testing.T) {

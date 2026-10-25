@@ -13,10 +13,10 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 var (

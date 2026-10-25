@@ -9,12 +9,12 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/statement"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/statement"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 const maxUploadSize = 20 << 20
@@ -42,19 +42,18 @@ func (h *Handler) Routes() http.Handler {
 func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("upload_too_large_or_malformed",
-			"El archivo es demasiado grande o la petición no es un formulario multipart válido."))
+		httpx.Fail(w, r, statement.UploadTooLarge().WithCause(err))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("missing_file", "Falta el campo \"file\" con el archivo a importar."))
+		httpx.Fail(w, r, statement.MissingFile().WithCause(err))
 		return
 	}
 	defer file.Close()
 	data, err := io.ReadAll(file)
 	if err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("upload_unreadable", "No se pudo leer el archivo."))
+		httpx.Fail(w, r, statement.UploadUnreadable().WithCause(err))
 		return
 	}
 
@@ -64,7 +63,7 @@ func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 	if raw := r.FormValue("account_id"); raw != "" {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			httpx.Fail(w, r, httpx.Invalid(map[string]string{"account_id": "La cuenta no es válida."}))
+			httpx.Fail(w, r, httpx.Invalid(map[string]string{"account_id": "Esa cuenta no existe."}))
 			return
 		}
 		expect = &id
@@ -72,7 +71,7 @@ func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Import(r.Context(), identity.MustFromContext(r.Context()), header.Filename, data, expect)
 	if err != nil {
-		httpx.Fail(w, r, translate(err))
+		httpx.Fail(w, r, translate(r, err))
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, newResultView(result))
@@ -81,7 +80,7 @@ func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 	accountID, err := uuid.Parse(r.URL.Query().Get("account_id"))
 	if err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("account_required", "Indica account_id."))
+		httpx.Fail(w, r, httpx.BadRequest("account_required", "Elige una cuenta."))
 		return
 	}
 	limit := 20
@@ -102,18 +101,16 @@ func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, map[string]any{"runs": out})
 }
 
-func translate(err error) error {
+func translate(r *http.Request, err error) error {
 	switch {
-	case errors.Is(err, statement.ErrUnrecognised):
-		return httpx.Unprocessable("unrecognised_format",
-			"El archivo no corresponde a ningún formato soportado (Banco General cuenta o tarjeta, BAC).").WithCause(err)
+	case errors.Is(err, statement.ErrUnrecognised), errors.Is(err, ErrUnreadable):
+		// The same wording as the dry run: the line, when the parser names one,
+		// and what to do. The parser's own message stays in the log, at warn.
+		statement.LogParseProblem(r, err)
+		return statement.ParseProblem(err)
 	case errors.Is(err, ErrAccountMismatch):
 		return httpx.Conflict("account_mismatch",
-			"Este archivo es de otra cuenta. Impórtalo desde la página de esa cuenta o desde Cuentas.").WithCause(err)
-	case errors.Is(err, ErrUnreadable):
-		// The parser's message names the line and the problem, which is what
-		// the owner needs to fix the file or report the format.
-		return httpx.Unprocessable("unreadable_statement", errors.Unwrap(err).Error()).WithCause(err)
+			"Este archivo es de otra cuenta. Impórtalo desde esa cuenta o desde Cuentas.").WithCause(err)
 	default:
 		return err
 	}

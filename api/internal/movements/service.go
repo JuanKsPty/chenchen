@@ -15,9 +15,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 var (

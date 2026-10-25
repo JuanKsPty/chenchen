@@ -11,8 +11,8 @@ import (
 
 	"github.com/xuri/excelize/v2"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // excelEpoch is Excel's day zero. A BG export's date cell is a serial number of

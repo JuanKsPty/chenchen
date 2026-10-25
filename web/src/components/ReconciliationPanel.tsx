@@ -1,215 +1,219 @@
-import { useEffect, useRef, useState } from 'react'
-import { ChevronDownIcon } from 'lucide-react'
+/**
+ * <ReconciliationPanel account />
+ *
+ * The second half of the review sheet: each imported statement against what its
+ * movements add up to, and, for a bank that prints a running balance, the lines with
+ * both balances, opened where they part. Nothing here corrects anything: a difference
+ * is shown so its cause can be found (a statement never imported, a line missing, a
+ * starting balance typed wrong).
+ *
+ * Statements: newest first, "01–31 jul · 7 movimientos · Cierre $3,104.84" with
+ * "Cuadra" or "No cuadra · $X", a missing period and the importer's warnings.
+ * Línea por línea: a window of lines (around the first break, or the latest ones)
+ * that opens to all of them.
+ */
+import { FileTextIcon } from 'lucide-react'
+import { useId, useState } from 'react'
 
-import type {
-  Account,
-  ReconciliationCheck,
-  ReconciliationLine,
-  StatementCheck,
-} from '@/api/types'
-import { Badge } from '@/components/ui/badge'
+import type { Account, ReconciliationLine, StatementCheck } from '@/api/types'
+import { Amount, Tile } from '@/components/kit'
+import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { formatCivilDate, money } from '@/lib/format'
+import { formatRange } from '@/lib/format'
 import { useReconciliation } from '@/lib/queries'
 import { cn } from '@/lib/utils'
+import { LOAD_FAILED, shortDate, statedAmount } from './account/bank'
 
-/**
- * "¿Cuadra con el banco?": every statement's own balances against what the
- * movements add up to, and — for a bank that prints a running balance — every line
- * with both balances side by side, opened at the line where they part.
- *
- * Nothing here corrects anything. A difference is shown so its cause can be found:
- * a statement never imported, a line missing from an export, a starting balance
- * typed wrong.
- */
 export function ReconciliationPanel({ account }: { account: Account }) {
-  const [open, setOpen] = useState(false)
-  const rec = useReconciliation(account.id, { enabled: open })
+  const reconciliation = useReconciliation(account.id)
+  const data = reconciliation.data
+
+  if (reconciliation.isLoading) return <Skeleton className="h-40 w-full" />
+  if (reconciliation.isError) {
+    return <p className="text-body text-pretty text-muted-foreground">{LOAD_FAILED}</p>
+  }
+  if (!data) return null
+
+  const statements = [...data.statements].reverse()
+  const withBank = data.lines.some((line) => line.bank)
 
   return (
-    <section className="card">
-      <button
-        type="button"
-        onClick={() => setOpen(!open)}
-        className="flex w-full items-center justify-between p-4 text-left"
-        aria-expanded={open}
-      >
-        <span>
-          <span className="type-eyebrow block">¿Cuadra con el banco?</span>
-          <span className="mt-1 block text-[0.8125rem] text-ink-faint">
-            Compara cada saldo que imprimió tu banco con lo que suman los movimientos.
-          </span>
-        </span>
-        <ChevronDownIcon
-          className={cn('size-4 text-ink-faint transition-transform', open && 'rotate-180')}
-        />
-      </button>
+    <div className="flex flex-col gap-6">
+      {statements.length > 0 && <Statements account={account} statements={statements} />}
+      {withBank && (
+        <Lines account={account} lines={data.lines} firstBreak={data.first_break} />
+      )}
+    </div>
+  )
+}
 
-      {open && (
-        <div className="space-y-4 border-t border-rule p-4">
-          {rec.isLoading && <Skeleton className="h-24 w-full" />}
-          {rec.data && (
+function Statements({
+  account,
+  statements,
+}: {
+  account: Account
+  statements: StatementCheck[]
+}) {
+  const headingId = useId()
+  return (
+    <section aria-labelledby={headingId} className="flex flex-col gap-1">
+      <h3 id={headingId} className="flex min-h-11 items-center text-body font-semibold">
+        Estados de cuenta
+      </h3>
+      <ul className="-mx-4 flex flex-col">
+        {statements.map((statement) => (
+          <li key={statement.id}>
+            <StatementRow account={account} statement={statement} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
+function StatementRow({
+  account,
+  statement,
+}: {
+  account: Account
+  statement: StatementCheck
+}) {
+  const checks = [statement.opening, statement.closing].filter(
+    (check) => check !== undefined,
+  )
+  const off = Math.max(0, ...checks.map((check) => Math.abs(check.difference.cents)))
+  const notes = [
+    ...(statement.gap ? ['Falta un periodo antes de este estado.'] : []),
+    ...statement.warnings,
+  ]
+
+  return (
+    <div className="grid min-h-16 grid-cols-[2.5rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-2.5 md:min-h-14 md:py-2">
+      <Tile icon={FileTextIcon} />
+      <span className="flex min-w-0 flex-col">
+        <span className="truncate text-body font-medium">
+          {formatRange(statement.period_start, statement.period_end)}
+        </span>
+        <span className="truncate text-small font-medium text-muted-foreground">
+          {statement.line_count === 1
+            ? '1 movimiento'
+            : `${statement.line_count} movimientos`}
+          {statement.closing && (
             <>
-              {!rec.data.anchor && (
-                <p className="text-[0.8125rem] text-hold-text">
-                  Sin saldo de partida: los saldos se calculan desde cero y no se pueden
-                  comparar con el banco.
-                </p>
-              )}
-              {rec.data.statements.length > 0 && (
-                <ul className="space-y-2">
-                  {rec.data.statements.map((s) => (
-                    <StatementRow key={s.id} statement={s} />
-                  ))}
-                </ul>
-              )}
-              {rec.data.checks.filter(
-                (c) => c.checkpoint.source === 'manual' || c.checkpoint.source === 'broker',
-              ).length > 0 && (
-                <ul className="space-y-1 text-[0.8125rem]">
-                  {rec.data.checks
-                    .filter(
-                      (c) =>
-                        c.checkpoint.source === 'manual' ||
-                        c.checkpoint.source === 'broker',
-                    )
-                    .map((c) => (
-                      <li key={c.checkpoint.id} className="flex flex-wrap gap-x-2">
-                        <span className="text-ink-faint">
-                          {c.checkpoint.source === 'broker' ? 'IBKR' : 'Ingresado por ti'}{' '}
-                          al {formatCivilDate(c.checkpoint.as_of)}:
-                        </span>
-                        <CheckFigures check={c} />
-                      </li>
-                    ))}
-                </ul>
-              )}
-              <Timeline lines={rec.data.lines} firstBreak={rec.data.first_break} />
+              {' · Cierre '}
+              <Amount
+                amount={statedAmount(account, statement.closing.checkpoint.balance)}
+                size="inline"
+              />
             </>
           )}
-        </div>
+        </span>
+      </span>
+      <span className="text-right text-small font-semibold whitespace-nowrap">
+        {checks.length === 0 ? (
+          <span className="font-medium text-muted-foreground">Sin saldo impreso</span>
+        ) : off === 0 ? (
+          <span className="text-positive">Cuadra</span>
+        ) : (
+          <span className="text-attention">
+            No cuadra · <Amount amount={off} size="inline" />
+          </span>
+        )}
+      </span>
+      {notes.length > 0 && (
+        <ul className="col-start-2 col-end-4 flex flex-col text-small font-medium text-attention">
+          {notes.map((note) => (
+            <li key={note}>{note}</li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
+/** How many lines show before "Ver todas". */
+const WINDOW = 8
+
+function Lines({
+  account,
+  lines,
+  firstBreak,
+}: {
+  account: Account
+  lines: ReconciliationLine[]
+  firstBreak?: string
+}) {
+  const headingId = useId()
+  const [all, setAll] = useState(false)
+  const breakAt = firstBreak ? lines.findIndex((line) => line.id === firstBreak) : -1
+  const start = breakAt >= 0 ? Math.max(0, breakAt - 3) : Math.max(0, lines.length - WINDOW)
+  const shown = all ? lines : lines.slice(start, start + WINDOW)
+
+  return (
+    <section aria-labelledby={headingId} className="flex flex-col gap-1">
+      <div className="flex flex-col gap-0.5 py-2.5">
+        <h3 id={headingId} className="text-body font-semibold">
+          Línea por línea
+        </h3>
+        <p
+          className={cn(
+            'text-small font-medium text-pretty',
+            breakAt >= 0 ? 'text-attention' : 'text-muted-foreground',
+          )}
+        >
+          {breakAt >= 0
+            ? 'La diferencia empieza en la línea marcada.'
+            : 'Cada saldo que imprimió el banco coincide con tus movimientos.'}
+        </p>
+      </div>
+      <ol className="-mx-2 flex flex-col">
+        {shown.map((line) => (
+          <li key={line.id}>
+            <LineRow account={account} line={line} marked={line.id === firstBreak} />
+          </li>
+        ))}
+      </ol>
+      {lines.length > shown.length && (
+        <Button variant="ghost" className="-ml-3 self-start" onClick={() => setAll(true)}>
+          Ver todas las líneas ({lines.length})
+        </Button>
       )}
     </section>
   )
 }
 
-function StatementRow({ statement }: { statement: StatementCheck }) {
-  return (
-    <li className="rounded-[5px] border border-rule p-3 text-[0.8125rem]">
-      <p className="flex flex-wrap items-baseline gap-2">
-        <span className="font-medium">
-          {formatCivilDate(statement.period_start)} al{' '}
-          {formatCivilDate(statement.period_end)}
-        </span>
-        <span className="text-ink-faint">{statement.line_count} movimientos</span>
-        {statement.gap && (
-          <Badge variant="outline" className="border-hold/40 text-hold-text">
-            Falta un período antes de este
-          </Badge>
-        )}
-      </p>
-      {statement.opening && (
-        <p className="mt-1 flex flex-wrap gap-x-2">
-          <span className="text-ink-faint">Saldo inicial:</span>
-          <CheckFigures check={statement.opening} />
-        </p>
-      )}
-      {statement.closing && (
-        <p className="flex flex-wrap gap-x-2">
-          <span className="text-ink-faint">Saldo final:</span>
-          <CheckFigures check={statement.closing} />
-        </p>
-      )}
-      {statement.warnings.map((w) => (
-        <p key={w} className="mt-1 text-hold-text">
-          {w}
-        </p>
-      ))}
-    </li>
-  )
-}
-
-function CheckFigures({ check }: { check: ReconciliationCheck }) {
-  const ok = check.difference.cents === 0
-  return (
-    <span className={ok ? 'text-credit' : 'text-hold-text'}>
-      banco {money(check.checkpoint.balance)} · calculado {money(check.computed)}
-      {!ok && ` · diferencia ${money(check.difference)}`}
-    </span>
-  )
-}
-
-function Timeline({
-  lines,
-  firstBreak,
+/** Balances read as the bank prints them (a card's debt positive); the line's own amount keeps its sign. */
+function LineRow({
+  account,
+  line,
+  marked,
 }: {
-  lines: ReconciliationLine[]
-  firstBreak?: string
+  account: Account
+  line: ReconciliationLine
+  marked: boolean
 }) {
-  const breakRef = useRef<HTMLTableRowElement>(null)
-  const withBank = lines.filter((l) => l.bank)
-
-  useEffect(() => {
-    breakRef.current?.scrollIntoView({ block: 'center' })
-  }, [firstBreak])
-
-  if (withBank.length === 0) {
-    return (
-      <p className="text-[0.75rem] text-ink-faint">
-        Este tipo de archivo no trae el saldo línea por línea, así que la comparación es por
-        estado de cuenta.
-      </p>
-    )
-  }
+  const off = line.bank && line.difference && line.difference.cents !== 0
 
   return (
-    <div>
-      <div className="flex items-baseline justify-between">
-        <h3 className="type-eyebrow">Línea por línea</h3>
-        {firstBreak ? (
-          <span className="text-[0.75rem] text-hold-text">
-            La diferencia empieza en la línea marcada.
-          </span>
-        ) : (
-          <span className="text-[0.75rem] text-credit">Cada saldo del banco coincide.</span>
-        )}
-      </div>
-      <div className="mt-2 max-h-80 overflow-y-auto rounded-[5px] border border-rule">
-        <table className="w-full text-[0.75rem]">
-          <thead className="sticky top-0 bg-paper-raised">
-            <tr className="text-left text-ink-faint">
-              <th className="px-2 py-1.5 font-normal">Fecha</th>
-              <th className="px-2 py-1.5 font-normal">Movimiento</th>
-              <th className="px-2 py-1.5 text-right font-normal">Monto</th>
-              <th className="px-2 py-1.5 text-right font-normal">Calculado</th>
-              <th className="px-2 py-1.5 text-right font-normal">Banco</th>
-            </tr>
-          </thead>
-          <tbody className="type-figure">
-            {lines.map((l) => {
-              const isBreak = l.id === firstBreak
-              const off = l.difference && l.difference.cents !== 0
-              return (
-                <tr
-                  key={l.id}
-                  ref={isBreak ? breakRef : undefined}
-                  className={cn(
-                    'border-t border-rule',
-                    isBreak && 'bg-hold/15',
-                    off && !isBreak && 'text-hold-text',
-                  )}
-                >
-                  <td className="px-2 py-1">{l.booked_on}</td>
-                  <td className="max-w-40 truncate px-2 py-1 font-sans">{l.description}</td>
-                  <td className="px-2 py-1 text-right">{money(l.amount)}</td>
-                  <td className="px-2 py-1 text-right">{money(l.computed)}</td>
-                  <td className="px-2 py-1 text-right">{l.bank ? money(l.bank) : '—'}</td>
-                </tr>
-              )
-            })}
-          </tbody>
-        </table>
-      </div>
+    <div
+      className={cn(
+        'grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 rounded-2xl px-2 py-2.5 md:py-2',
+        marked && 'bg-attention-soft',
+      )}
+    >
+      <span className="truncate text-body font-medium">{line.description}</span>
+      <Amount amount={line.amount} signed className="text-right" />
+      <span className="truncate text-small font-medium text-muted-foreground">
+        {shortDate(line.booked_on)} · Saldo{' '}
+        <Amount amount={statedAmount(account, line.computed)} size="inline" />
+      </span>
+      {off && line.bank ? (
+        <span className="text-right text-small font-semibold whitespace-nowrap text-attention">
+          Banco <Amount amount={statedAmount(account, line.bank)} size="inline" />
+        </span>
+      ) : (
+        <span />
+      )}
     </div>
   )
 }

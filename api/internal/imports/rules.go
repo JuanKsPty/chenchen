@@ -5,11 +5,11 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/statement"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/statement"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
-// defaultCardRules maps Banco General's own card categories onto the default
+// defaultCardRules maps the card statement's own categories onto the default
 // categories every user starts with, so a first card import is already mostly
 // categorised. "Pagos" and "Cargos" are absent on purpose: a payment is a
 // transfer and a charge is the bank's fee, which the importer's kind already

@@ -1,56 +1,64 @@
 <!doctype html>
-<html lang="es">
+<html lang="es-PA">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>corebank</title>
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover"
+    />
+    <title>chenchén</title>
     <meta
       name="description"
-      content="Banca en línea: consulta saldos, mueve dinero entre tus cuentas y pídelo en español. Nada se mueve hasta que lo confirmas."
+      content="Sube los estados de cuenta de tu banco y chenchén te dice, al centavo, si cada cuenta cuadra. No movemos tu plata: solo la ordenamos."
     />
     <meta name="color-scheme" content="light dark" />
-    <meta name="theme-color" content="#FBF9F5" media="(prefers-color-scheme: light)" />
-    <meta name="theme-color" content="#122420" media="(prefers-color-scheme: dark)" />
+    <!-- One theme-color, not a light/dark media pair: the script below sets it to the
+         appearance actually in use, which can differ from the OS when somebody picks
+         Claro or Oscuro in Ajustes. ThemeProvider keeps it in step afterwards. -->
+    <meta name="theme-color" content="#FCF8F8" />
 
     <!-- Applies the stored appearance (or the OS preference, on "Sistema") before
-         React ever mounts. Without this, the page always paints light first and
-         then flips — visible on every load for anyone who chose dark. Kept to
-         three lines and no template literals: this runs before anything else on
-         the page, including any bundler transform. -->
+         React mounts, so a dark choice never paints light first. Plain ES5 and no
+         template literals: this runs before anything else on the page. -->
     <script>
       ;(function () {
+        var dark = false
         try {
-          var stored = localStorage.getItem('corebank.theme')
-          var dark =
+          var stored = localStorage.getItem('chenchen.theme')
+          dark =
             stored === 'dark' ||
             (stored !== 'light' &&
               window.matchMedia('(prefers-color-scheme: dark)').matches)
-          if (dark) document.documentElement.classList.add('dark')
         } catch (e) {
-          // Storage unavailable — falls back to light, same as no preference saved.
+          // Storage unavailable: falls back to light, same as no preference saved.
         }
+        if (dark) document.documentElement.classList.add('dark')
+        var meta = document.querySelector('meta[name="theme-color"]')
+        if (meta) meta.setAttribute('content', dark ? '#150E11' : '#FCF8F8')
       })()
     </script>
 
-    <!-- The two variable faces the whole interface is set in. Preloaded because
-         the greeting and every amount depend on them: without the hint they land
-         after first paint and the numbers visibly reflow. -->
+    <!-- The two faces the interface is set in. Only the latin subsets are preloaded:
+         every screen needs them before first paint, latin-ext only for rare letters. -->
     <link
       rel="preload"
-      href="/fonts/archivo-latin.woff2"
+      href="/fonts/figtree-latin.woff2"
       as="font"
       type="font/woff2"
       crossorigin
     />
     <link
       rel="preload"
-      href="/fonts/spline-mono-latin.woff2"
+      href="/fonts/gabarito-latin.woff2"
       as="font"
       type="font/woff2"
       crossorigin
     />
 
+    <link rel="icon" href="/favicon.ico" sizes="32x32" />
     <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
   </head>
   <body>
     <div id="root"></div>

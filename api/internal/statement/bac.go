@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 const (
@@ -193,7 +193,7 @@ func parseBAC(data []byte) (File, error) {
 	}
 	if opening+sum != saldoLibros {
 		st.Warnings = append(st.Warnings, fmt.Sprintf(
-			"El saldo inicial (%s) más los movimientos (%s) no da el saldo en libros que muestra BAC (%s).",
+			"El saldo inicial (%s) más los movimientos (%s) no da el saldo en libros que muestra el banco (%s).",
 			opening, sum, saldoLibros))
 	}
 	checkBACSummary(&st, sections.summary, debitCount, debitTotal, creditCount, creditTotal)
@@ -280,7 +280,7 @@ func checkBACSummary(st *Statement, summary []string, dCount int, dTotal money.C
 		}
 		if n[0] != dCount || debits != dTotal || n[1] != cCount || credits != cTotal {
 			st.Warnings = append(st.Warnings, fmt.Sprintf(
-				"El resumen de BAC dice %d débitos por %s y %d créditos por %s; el detalle tiene %d por %s y %d por %s.",
+				"El resumen del estado de cuenta dice %d débitos por %s y %d créditos por %s; el detalle tiene %d por %s y %d por %s.",
 				n[0], debits, n[1], credits, dCount, dTotal, cCount, cTotal))
 		}
 		return

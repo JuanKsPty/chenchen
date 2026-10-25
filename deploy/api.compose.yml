@@ -12,7 +12,7 @@ services:
   api:
     build:
       context: ../api
-    image: corebank-api
+    image: chenchen-api
     environment:
       HTTP_ADDR: ":8080"
       # The managed PostgreSQL, by service name on the shared network.

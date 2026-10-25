@@ -12,7 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/JuanKsPty/corebank/api/migrations"
+	"github.com/JuanKsPty/chenchen/api/migrations"
 )
 
 // Migrate brings the schema up to date from the migrations embedded in the

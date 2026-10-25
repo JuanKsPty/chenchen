@@ -176,7 +176,8 @@ export async function requestUpload<T>(
 async function toApiError(response: Response): Promise<ApiError> {
   let body: ApiErrorBody['error'] = {
     code: 'unknown',
-    message: 'No se pudo completar la operación. Inténtalo de nuevo.',
+    message:
+      'Algo falló de nuestro lado. Tus datos están bien; intenta otra vez en un momento.',
   }
   try {
     const parsed = (await response.json()) as ApiErrorBody

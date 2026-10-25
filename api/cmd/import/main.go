@@ -14,11 +14,11 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/config"
-	"github.com/JuanKsPty/corebank/api/internal/imports"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/config"
+	"github.com/JuanKsPty/chenchen/api/internal/imports"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 func main() {
@@ -29,7 +29,7 @@ func main() {
 }
 
 func run() error {
-	email := flag.String("email", "", "email of the corebank user to import into")
+	email := flag.String("email", "", "email of the chenchén user to import into")
 	path := flag.String("file", "", "path to the statement file to import")
 	flag.Parse()
 	if *email == "" || *path == "" {

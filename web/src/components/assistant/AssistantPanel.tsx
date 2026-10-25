@@ -1,18 +1,48 @@
-import { ArrowUpIcon, PanelRightCloseIcon, SparklesIcon } from 'lucide-react'
+/**
+ * <AssistantPanel variant="panel"|"sheet" onClose? className? />
+ *
+ * The assistant's header, transcript and composer. A pure renderer: the
+ * conversation lives in AssistantProvider, so the shell can mount this in the
+ * desktop panel or the mobile sheet without either owning a second copy.
+ *
+ *   panel  (spec assistantPanel) inside the shell's 400px floating card. Header
+ *          56: the 20px assistant icon in primary-text and "Asistente" in heading
+ *          22; 40px icon buttons. Body padding 20, gap 16. Composer padding
+ *          12 16 16, a 48px pill with a 40px send button 4px from its edge.
+ *   sheet  (spec assistantSheet) inside the shell's full-screen sheet, which
+ *          already pads both safe areas. Header 56 with 44px icon buttons and 24px
+ *          icons; body padding 16; chips, buttons and send are 44px. Composer
+ *          padding 8 16.
+ *
+ * What the transcript shows, top to bottom:
+ *   - the intro (voice.assistantIntro), always;
+ *   - with no conversation yet, the three suggestion chips;
+ *   - each question as a primary-soft bubble on the right, each reply as plain
+ *     text with its figures in 600 and, above it, a muted line naming what the
+ *     assistant looked at (the tool trace);
+ *   - a reply's proposals right under it (the stream's `proposal` events), and
+ *     the ones no turn on screen produced (after a reload) after the stored
+ *     history, so whatever is asked in this visit stays below them;
+ *   - on the sheet, once a conversation exists, the suggestions not yet asked, in
+ *     a row that scrolls sideways (C-Asistente-Mobile).
+ * When the engine is not the model (no key, budget spent, model down), one muted
+ * line under the header says so.
+ */
+import { Fragment, useId, useRef, useState } from 'react'
+import {
+  ArrowUpIcon,
+  CircleAlertIcon,
+  InfoIcon,
+  Loader2Icon,
+  Trash2Icon,
+  XIcon,
+} from 'lucide-react'
 
-import type { ChatEngine, ChatProvider } from '@/api/types'
-
-import { Badge } from '@/components/ui/badge'
+import type { ChatProvider, Proposal } from '@/api/types'
+import { AssistantIcon } from '@/components/brand'
+import { Alert, AlertAction, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Bubble, BubbleContent } from '@/components/ui/bubble'
 import { Button } from '@/components/ui/button'
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty'
 import {
   InputGroup,
   InputGroupAddon,
@@ -28,29 +58,45 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
-import { Spinner } from '@/components/ui/spinner'
+import { useProposals } from '@/lib/queries'
 import { cn } from '@/lib/utils'
-import { TOOL_LABELS, useAssistant, type Turn } from './AssistantProvider'
-import { PendingProposals } from './ProposalCard'
+import {
+  STORED_PREFIX,
+  TOOL_LABELS,
+  useAssistant,
+  useAssistantProposals,
+  type AnnouncedProposal,
+  type ToolRun,
+  type Turn,
+} from './AssistantProvider'
+import { ProposalList } from './ProposalCard'
+import { renderReply } from './replyText'
 
-/**
- * The assistant's transcript, composer and all.
- *
- * A pure renderer: every piece of state it touches lives in the provider above it, so
- * this component can be mounted in the desktop column, in the phone's sheet, or in
- * both, without any of them owning a second conversation.
- *
- * A turn carries what the assistant said and which tools it ran.
- */
+type Variant = 'panel' | 'sheet'
+
+const INTRO =
+  'Pregúntame lo que quieras de tu chenchén. Yo reviso tus movimientos; tú decides qué aplicar.'
+
+const SUGGESTIONS = [
+  '¿Cuánto gasté en comida este mes?',
+  '¿Qué cuenta no cuadra?',
+  'Ordena lo que está sin categoría',
+]
+
 export function AssistantPanel({
   className,
+  variant = 'panel',
   onClose,
 }: {
   className?: string
-  /** Present only where there is somewhere to close to — the docked column. */
+  /** 'panel' is the desktop aside, 'sheet' the full-screen mobile sheet. */
+  variant?: Variant
+  /** Closes the panel or the sheet. */
   onClose?: () => void
 }) {
+  const sheet = variant === 'sheet'
   const {
     turns,
     draft,
@@ -65,85 +111,191 @@ export function AssistantPanel({
     provider,
     loadingHistory,
   } = useAssistant()
+  const { byTurn, applied, dismissed, orderOf } = useAssistantProposals()
+  const proposals = useProposals()
+  const rootRef = useRef<HTMLDivElement>(null)
+  const inputId = useId()
+  // Discarding a card removes the button that had focus; the panel takes it.
+  const refocus = () => rootRef.current?.focus({ preventScroll: true })
+
+  const groups = groupTurns(turns)
+  const placed = placeProposals(groups, byTurn, {
+    pending: proposals.data?.proposals ?? [],
+    fetchedAt: proposals.dataUpdatedAt,
+    applied,
+    dismissed,
+    orderOf,
+  })
+  // Proposals no reply on screen made (after a reload, or left over from a
+  // cleared conversation) close the stored history: they are older than
+  // anything asked in this visit, so a new question and its answer go below
+  // them and stay the last thing in the transcript.
+  const lastStored = lastStoredIndex(groups)
+  const orphans = (
+    <ProposalList proposals={placed.unplaced} size={variant} onGone={refocus} />
+  )
+
+  const asked = new Set(
+    turns.filter((turn) => turn.role === 'user').map((turn) => turn.text),
+  )
+  const remaining = SUGGESTIONS.filter((suggestion) => !asked.has(suggestion))
+  const note = provider ? engineNote(provider) : null
+  const canSend = !streaming && draft.trim().length > 0
 
   return (
-    <div className={cn('flex min-h-0 flex-col bg-paper-raised', className)}>
-      <header className="flex items-center gap-3 border-b border-rule px-4 py-3">
-        <div className="min-w-0 flex-1">
-          <h2 className="type-display text-[0.9375rem]">Asistente</h2>
-          {provider && <EngineLabel provider={provider} />}
-        </div>
-        {turns.length > 0 && (
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={clear}
-            disabled={clearing || streaming}
-            className="text-[0.75rem] text-ink-soft"
+    <div
+      ref={rootRef}
+      tabIndex={-1}
+      className={cn('flex min-h-0 flex-col bg-card outline-none', className)}
+    >
+      <header
+        className={cn(
+          'flex h-14 shrink-0 items-center gap-2',
+          sheet ? 'pr-1 pl-4' : 'pr-2 pl-5',
+        )}
+      >
+        <AssistantIcon
+          variant={sheet ? 'mobile' : 'desktop'}
+          className={cn('text-primary-text', sheet ? 'size-6' : 'size-5')}
+        />
+        {sheet ? (
+          // The sheet's own (screen-reader) title already names the dialog.
+          <p
+            aria-hidden="true"
+            className="min-w-0 flex-1 font-display text-heading font-bold"
           >
-            Limpiar
-          </Button>
+            Asistente
+          </p>
+        ) : (
+          <h2 className="min-w-0 flex-1 font-display text-heading font-bold">Asistente</h2>
+        )}
+        {turns.length > 0 && (
+          <ClearConversation
+            variant={variant}
+            disabled={clearing || streaming}
+            onConfirm={clear}
+          />
         )}
         {onClose && (
           <Button
-            variant="ghost"
-            size="icon-sm"
+            variant="plain"
+            size={sheet ? 'icon' : 'icon-bar'}
             onClick={onClose}
-            aria-label="Cerrar el asistente"
-            className="text-ink-faint hover:text-ink"
+            aria-label="Cerrar asistente"
           >
-            <PanelRightCloseIcon className="size-4" aria-hidden="true" />
+            <XIcon aria-hidden="true" className={sheet ? 'size-6' : undefined} />
           </Button>
         )}
       </header>
 
-      {/* The provider owns the scroll behaviour: it keeps the view pinned to the newest
-          turn while an answer streams in, and stops doing so the moment the customer
-          scrolls up to read something. That replaces a hand-written effect that set
-          scrollTop on every state change and therefore yanked the transcript away from
-          anybody trying to reread an earlier reply. */}
+      {note && (
+        <p
+          className={cn(
+            'flex shrink-0 items-start gap-2 pb-2 text-small text-pretty text-muted-foreground',
+            sheet ? 'px-4' : 'px-5',
+          )}
+        >
+          <InfoIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+          {note}
+        </p>
+      )}
+
       <MessageScrollerProvider autoScroll defaultScrollPosition="end">
         <MessageScroller className="flex-1">
-          <MessageScrollerViewport className="px-4 py-4">
+          <MessageScrollerViewport
+            aria-label="Conversación"
+            className={sheet ? 'p-4' : 'p-5'}
+          >
             <MessageScrollerContent className="gap-4">
+              <p className="text-body text-pretty text-muted-foreground">{INTRO}</p>
+
               {loadingHistory ? (
-                <ChatSkeleton />
-              ) : turns.length === 0 ? (
-                <Opening onPick={(text) => send(text)} engine={provider?.engine ?? 'ai'} />
+                <>
+                  <ChatSkeleton />
+                  {orphans}
+                </>
               ) : (
-                turns.map((turn) => (
-                  <MessageScrollerItem key={turn.id} messageId={turn.id}>
-                    <TurnView turn={turn} />
-                  </MessageScrollerItem>
-                ))
+                <>
+                  {turns.length === 0 && (
+                    <SuggestionChips
+                      variant={variant}
+                      items={SUGGESTIONS}
+                      disabled={streaming}
+                      onPick={(text) => send(text)}
+                    />
+                  )}
+
+                  {lastStored < 0 && orphans}
+
+                  {groups.map((group, index) => {
+                    const linked = placed.byGroup.get(group.id) ?? []
+                    // A reply still waiting for its first event has nothing to show
+                    // yet; an empty item would add a second gap above "Pensando…".
+                    const hidden =
+                      group.kind === 'reply' && linked.length === 0 && isEmpty(group)
+                    return (
+                      <Fragment key={group.id}>
+                        {!hidden && (
+                          <MessageScrollerItem
+                            messageId={group.id}
+                            className="flex flex-col gap-4"
+                          >
+                            {group.kind === 'user' ? (
+                              <Question text={group.text} />
+                            ) : (
+                              <>
+                                <Reply group={group} />
+                                <ProposalList
+                                  proposals={linked}
+                                  size={variant}
+                                  onGone={refocus}
+                                />
+                              </>
+                            )}
+                          </MessageScrollerItem>
+                        )}
+                        {index === lastStored && orphans}
+                      </Fragment>
+                    )
+                  })}
+                </>
               )}
 
               {streaming && <Working tool={activeTool} />}
 
-              <PendingProposals />
-
               {failure && (
-                <div
-                  role="alert"
-                  className="flex items-start gap-2 rounded-[5px] border border-danger/40 bg-danger/8 px-3 py-2 text-[0.8125rem] text-danger-text"
-                >
-                  <span className="min-w-0 flex-1">
-                    <span className="block font-medium">El asistente se interrumpió</span>
-                    {failure}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={dismissFailure}
-                    aria-label="Descartar"
-                    className="shrink-0 opacity-60 hover:opacity-100"
-                  >
-                    ✕
-                  </button>
-                </div>
+                <Alert variant="attention">
+                  <CircleAlertIcon aria-hidden="true" />
+                  <AlertTitle>El asistente se interrumpió</AlertTitle>
+                  <AlertDescription>{failure}</AlertDescription>
+                  <AlertAction>
+                    <Button
+                      variant="plain"
+                      size={sheet ? 'icon' : 'icon-bar'}
+                      onClick={dismissFailure}
+                      aria-label="Cerrar aviso"
+                    >
+                      <XIcon aria-hidden="true" />
+                    </Button>
+                  </AlertAction>
+                </Alert>
               )}
+
+              {sheet &&
+                !loadingHistory &&
+                turns.length > 0 &&
+                !streaming &&
+                remaining.length > 0 && (
+                  <SuggestionChips
+                    variant={variant}
+                    items={remaining}
+                    scroll
+                    onPick={(text) => send(text)}
+                  />
+                )}
             </MessageScrollerContent>
           </MessageScrollerViewport>
-          <MessageScrollerButton />
+          <MessageScrollerButton size={sheet ? 'icon' : 'icon-sm'} />
         </MessageScroller>
       </MessageScrollerProvider>
 
@@ -152,41 +304,41 @@ export function AssistantPanel({
           event.preventDefault()
           send()
         }}
-        className="border-t border-rule p-3"
+        className={cn('shrink-0 bg-card', sheet ? 'px-4 py-2' : 'px-4 pt-3 pb-4')}
       >
-        {/* Only when the budget is what ran out, and only above the composer — the
-            moment somebody is about to type is the moment it matters. The header
-            label says the same thing, but a conversation that was fluent a minute ago
-            and is suddenly terse needs the reason where the next message is written,
-            not in a caption. */}
-        {provider?.engine === 'budget_exhausted' && turns.length > 0 && (
-          <p className="mb-2 text-[0.75rem] leading-snug text-hold-text">
-            Se agotó el presupuesto de IA, así que el asistente no puede responder por
-            ahora. El resto de la app funciona con normalidad.
-          </p>
-        )}
-        <label htmlFor="chat-input" className="sr-only">
-          Escribe tu petición
+        <label htmlFor={inputId} className="sr-only">
+          Pregunta al asistente
         </label>
-        <InputGroup>
+        <InputGroup className="md:h-12">
           <InputGroupInput
-            id="chat-input"
+            id={inputId}
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder="¿Cuánto dinero tengo?"
-            disabled={streaming}
+            placeholder="Pregunta sobre tu chenchén…"
             maxLength={2000}
             autoComplete="off"
+            enterKeyHint="send"
           />
-          <InputGroupAddon align="inline-end">
+          <InputGroupAddon
+            align="inline-end"
+            className={sheet ? 'has-[>button]:pr-0.5' : undefined}
+          >
+            {/* aria-disabled, not disabled: sending empties the draft, and a
+                disabled button would drop the focus to <body>, out of the panel
+                and out of reach of its Escape. send() ignores an empty draft. */}
             <InputGroupButton
               type="submit"
-              disabled={streaming || !draft.trim()}
+              variant="default"
+              size={sheet ? 'icon' : 'icon-sm'}
+              aria-disabled={!canSend || undefined}
               aria-label="Enviar"
-              className="bg-ink text-paper hover:bg-ink/90"
-              size="icon-xs"
+              className="aria-disabled:translate-y-0 aria-disabled:cursor-not-allowed aria-disabled:bg-muted aria-disabled:text-muted-foreground aria-disabled:hover:bg-muted"
             >
-              {streaming ? <Spinner /> : <ArrowUpIcon aria-hidden="true" />}
+              {streaming ? (
+                <Loader2Icon aria-hidden="true" className="animate-spin" />
+              ) : (
+                <ArrowUpIcon aria-hidden="true" />
+              )}
             </InputGroupButton>
           </InputGroupAddon>
         </InputGroup>
@@ -196,249 +348,359 @@ export function AssistantPanel({
 }
 
 // ---------------------------------------------------------------------------
-// Turns
+// Header
 // ---------------------------------------------------------------------------
 
-function TurnView({ turn }: { turn: Turn }) {
-  if (turn.role === 'user') {
-    return (
-      <Message align="end">
-        <MessageContent>
-          <Bubble variant="default">
-            <BubbleContent className="text-[0.875rem]">{turn.text}</BubbleContent>
-          </Bubble>
-        </MessageContent>
-      </Message>
-    )
-  }
+/** "Borrar conversación": the conversation cannot come back, so it asks first. */
+function ClearConversation({
+  variant,
+  disabled,
+  onConfirm,
+}: {
+  variant: Variant
+  disabled: boolean
+  onConfirm: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const cancelRef = useRef<HTMLButtonElement>(null)
+  const titleId = useId()
+  const descriptionId = useId()
+  const sheet = variant === 'sheet'
+  const size = sheet ? 'default' : 'bar'
 
   return (
-    <Message align="start">
-      <MessageContent className="gap-2">
-        {turn.tools && turn.tools.length > 0 && (
-          <ul className="flex flex-wrap gap-1.5" aria-label="Operaciones realizadas">
-            {turn.tools.map((tool, index) => (
-              <li key={`${tool.name}-${index}`}>
-                <Badge
-                  variant="outline"
-                  className={cn(
-                    'type-figure text-[0.6875rem]',
-                    tool.failed
-                      ? 'border-danger/30 bg-danger/10 text-danger-text'
-                      : 'border-rule bg-paper-sunken text-ink-soft',
-                  )}
-                >
-                  {tool.failed ? '✕' : '✓'} {TOOL_LABELS[tool.name] ?? tool.name}
-                </Badge>
-              </li>
-            ))}
-          </ul>
-        )}
-
-        {turn.text && (
-          <div className="space-y-2 text-[0.875rem] leading-relaxed">
-            {renderAssistantText(turn.text)}
-          </div>
-        )}
-
-        {turn.error && (
-          <p className="text-[0.8125rem] text-danger-text" role="alert">
-            {turn.error}
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          variant="plain"
+          size={sheet ? 'icon' : 'icon-bar'}
+          disabled={disabled}
+          aria-label="Borrar conversación"
+          className="disabled:bg-transparent"
+        >
+          <Trash2Icon aria-hidden="true" className={sheet ? 'size-6' : undefined} />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent
+        role="alertdialog"
+        aria-labelledby={titleId}
+        aria-describedby={descriptionId}
+        align="end"
+        sideOffset={8}
+        // Focus starts on the safe choice: two quick Enters must not delete.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          cancelRef.current?.focus()
+        }}
+        className="w-76 max-w-[calc(100vw-2rem)]"
+      >
+        <div className="flex flex-col gap-1">
+          <p id={titleId} className="font-semibold">
+            ¿Borrar la conversación?
           </p>
-        )}
+          <p id={descriptionId} className="text-small text-muted-foreground">
+            Se borran las preguntas y las respuestas. Las propuestas pendientes se quedan.
+          </p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <Button
+            variant="destructive"
+            size={size}
+            onClick={() => {
+              onConfirm()
+              setOpen(false)
+            }}
+          >
+            Borrar
+          </Button>
+          <Button
+            ref={cancelRef}
+            variant="secondary"
+            size={size}
+            onClick={() => setOpen(false)}
+          >
+            Cancelar
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+/** The muted line under the header when the model is not the one answering. */
+function engineNote(provider: ChatProvider): string | null {
+  switch (provider.engine) {
+    case 'ai':
+      return null
+    case 'budget_exhausted':
+      // Waiting does not refill a budget, so this does not say "try again later".
+      return 'Se agotó el presupuesto del asistente.'
+    case 'degraded':
+      return 'El asistente no responde. Intenta otra vez en un momento.'
+    case 'unconfigured':
+    default:
+      return 'El asistente no está disponible por ahora.'
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Transcript
+// ---------------------------------------------------------------------------
+
+type Group =
+  | { kind: 'user'; id: string; text: string }
+  | {
+      kind: 'reply'
+      id: string
+      /** Every turn folded into this reply, for finding its proposals. */
+      turnIds: string[]
+      texts: string[]
+      tools: ToolRun[]
+      errors: string[]
+    }
+
+/**
+ * Folds consecutive assistant turns into one reply. A stored exchange comes back
+ * as several assistant messages (one that only ran tools, one that answered);
+ * on screen they are one answer with one trace.
+ */
+function groupTurns(turns: Turn[]): Group[] {
+  const groups: Group[] = []
+  for (const turn of turns) {
+    if (turn.role === 'user') {
+      groups.push({ kind: 'user', id: turn.id, text: turn.text ?? '' })
+      continue
+    }
+    const last = groups.at(-1)
+    const reply =
+      last?.kind === 'reply'
+        ? last
+        : {
+            kind: 'reply' as const,
+            id: turn.id,
+            turnIds: [],
+            texts: [],
+            tools: [],
+            errors: [],
+          }
+    if (reply !== last) groups.push(reply)
+    reply.turnIds.push(turn.id)
+    if (turn.text) reply.texts.push(turn.text)
+    if (turn.tools) reply.tools.push(...turn.tools)
+    if (turn.error) reply.errors.push(turn.error)
+  }
+  return groups
+}
+
+/** The last group that came from the stored history, or -1 when there is none. */
+function lastStoredIndex(groups: Group[]): number {
+  for (let index = groups.length - 1; index >= 0; index--) {
+    if (groups[index]?.id.startsWith(STORED_PREFIX)) return index
+  }
+  return -1
+}
+
+/**
+ * Decides where each proposal is drawn: under the reply whose stream announced
+ * it, or after the stored history when no reply on screen did (after a reload,
+ * or one made in another tab). A proposal shows while it is pending, or applied in this session
+ * (with its chip); one the stream just announced shows from the event until the
+ * proposals query has refreshed past it.
+ */
+function placeProposals(
+  groups: Group[],
+  byTurn: Record<string, AnnouncedProposal[]>,
+  state: {
+    pending: Proposal[]
+    fetchedAt: number
+    applied: Record<string, Proposal>
+    dismissed: Record<string, true>
+    orderOf: (id: string) => number
+  },
+): { byGroup: Map<string, Proposal[]>; unplaced: Proposal[] } {
+  const pendingById = new Map(state.pending.map((proposal) => [proposal.id, proposal]))
+  const resolve = (id: string, announced?: AnnouncedProposal): Proposal | null => {
+    if (state.dismissed[id]) return null
+    const known = state.applied[id] ?? pendingById.get(id)
+    if (known) return known
+    if (announced && announced.at > state.fetchedAt) {
+      return {
+        id,
+        kind: announced.kind,
+        summary: announced.summary,
+        status: 'pending',
+        expires_at: '',
+      }
+    }
+    return null
+  }
+
+  const placedIds = new Set<string>()
+  const byGroup = new Map<string, Proposal[]>()
+  for (const group of groups) {
+    if (group.kind !== 'reply') continue
+    const list: Proposal[] = []
+    for (const turnId of group.turnIds) {
+      for (const announced of byTurn[turnId] ?? []) {
+        if (placedIds.has(announced.id)) continue
+        placedIds.add(announced.id)
+        const proposal = resolve(announced.id, announced)
+        if (proposal) list.push(proposal)
+      }
+    }
+    if (list.length > 0) byGroup.set(group.id, list)
+  }
+
+  // The order each was first seen in (the server lists them oldest first), so a
+  // card that gets applied keeps its place instead of jumping to the end.
+  const unplaced = [...state.pending, ...Object.values(state.applied)]
+    .filter(
+      (proposal, index, all) =>
+        !placedIds.has(proposal.id) &&
+        !state.dismissed[proposal.id] &&
+        all.findIndex((other) => other.id === proposal.id) === index,
+    )
+    .map((proposal) => ({
+      proposal: state.applied[proposal.id] ?? proposal,
+      // Asked in list order, so a proposal seen for the first time is placed
+      // where the server lists it.
+      position: state.orderOf(proposal.id),
+    }))
+    .sort((a, b) => a.position - b.position)
+    .map(({ proposal }) => proposal)
+
+  return { byGroup, unplaced }
+}
+
+function Question({ text }: { text: string }) {
+  return (
+    <Message align="end">
+      <MessageContent>
+        <Bubble variant="default" align="end">
+          <BubbleContent>
+            <span className="sr-only">Tú: </span>
+            {text}
+          </BubbleContent>
+        </Bubble>
       </MessageContent>
     </Message>
   )
 }
 
-/**
- * Renders a reply, deciding line by line rather than block by block.
- *
- * A reply routinely mixes the two: "Tienes $X en total:" followed immediately by a
- * bulleted account list. Deciding per block meant such a paragraph rendered as one run
- * of text with its newlines collapsed.
- */
-function renderAssistantText(text: string): React.ReactNode {
-  const blocks: React.ReactNode[] = []
-  let bullets: string[] = []
+type ReplyGroup = Extract<Group, { kind: 'reply' }>
 
-  const flushBullets = () => {
-    if (bullets.length === 0) return
-    blocks.push(
-      <ul key={`list-${blocks.length}`} className="space-y-0.5">
-        {bullets.map((line, index) => (
-          <li key={index} className="type-figure text-[0.8125rem]">
-            {emphasise(line)}
-          </li>
-        ))}
-      </ul>,
-    )
-    bullets = []
-  }
-
-  for (const line of text.split('\n')) {
-    const trimmed = line.trim()
-    if (!trimmed) {
-      flushBullets()
-      continue
-    }
-    if (trimmed.startsWith('•')) {
-      bullets.push(trimmed.replace(/^•\s*/, '· '))
-      continue
-    }
-    flushBullets()
-    blocks.push(<p key={`p-${blocks.length}`}>{emphasise(trimmed)}</p>)
-  }
-  flushBullets()
-
-  return blocks
+function isEmpty(group: ReplyGroup): boolean {
+  return group.tools.length === 0 && group.texts.length === 0 && group.errors.length === 0
 }
 
-/** Renders **bold** runs and leaves everything else as text. */
-function emphasise(text: string): React.ReactNode {
-  const parts = text.split(/(\*\*[^*]+\*\*)/g)
-  return parts.map((part, index) =>
-    part.startsWith('**') && part.endsWith('**') ? (
-      <strong key={index} className="font-semibold">
-        {part.slice(2, -2)}
-      </strong>
-    ) : (
-      part
-    ),
+function Reply({ group }: { group: ReplyGroup }) {
+  if (isEmpty(group)) return null
+  const trace = traceOf(group.tools)
+
+  return (
+    <Message align="start">
+      <MessageContent className="gap-2">
+        <span className="sr-only">Asistente:</span>
+        {trace.length > 0 && (
+          <p className="text-small text-muted-foreground">
+            <span className="sr-only">Lo que revisó: </span>
+            {trace.join(' · ')}
+          </p>
+        )}
+        {group.texts.length > 0 && (
+          <div className="flex flex-col gap-3 text-body text-pretty text-foreground">
+            {renderReply(group.texts.join('\n\n'))}
+          </div>
+        )}
+        {group.errors.map((error, index) => (
+          <p key={index} className="flex gap-2 text-small text-attention">
+            <CircleAlertIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
+            {error}
+          </p>
+        ))}
+      </MessageContent>
+    </Message>
   )
+}
+
+/** What the assistant ran, in the customer's words, each named once. */
+function traceOf(tools: ToolRun[]): string[] {
+  const labels: string[] = []
+  for (const tool of tools) {
+    const label = `${TOOL_LABELS[tool.name] ?? 'Consultó tus datos'}${tool.failed ? ' (no funcionó)' : ''}`
+    if (!labels.includes(label)) labels.push(label)
+  }
+  return labels
 }
 
 function Working({ tool }: { tool: string | null }) {
   return (
-    <p className="flex items-center gap-2 text-[0.8125rem] text-ink-faint" role="status">
+    <p role="status" className="flex items-center gap-2 text-small text-muted-foreground">
       <span aria-hidden="true" className="flex gap-1">
         {[0, 1, 2].map((index) => (
           <span
             key={index}
-            className="size-1.5 animate-pulse rounded-full bg-ink-faint"
+            className="size-1.5 animate-pulse rounded-full bg-muted-foreground"
             style={{ animationDelay: `${index * 160}ms` }}
           />
         ))}
       </span>
-      {tool ? `${TOOL_LABELS[tool] ?? tool}…` : 'Pensando…'}
+      {tool ? `${TOOL_LABELS[tool] ?? 'Revisando tus datos'}…` : 'Pensando…'}
     </p>
   )
 }
 
-/**
- * Says which engine is answering, and when it is not the model, why.
- *
- * Four states rather than two. `is_ai` alone collapses three different situations
- * into one "no AI" that explains nothing: a project running without credentials,
- * a demo whose shared budget has been spent, and a model that is briefly
- * unreachable. The first is the normal way this repository runs on a fresh clone;
- * the second means somebody's money is gone and no amount of retrying will bring the
- * assistant back; the third clears by itself. Telling them apart is the difference
- * between a label and an excuse.
- */
-function EngineLabel({ provider }: { provider: ChatProvider }) {
-  const { tone, text } = describeEngine(provider)
-
-  return (
-    <p className="mt-0.5 flex items-center gap-1.5 text-[0.6875rem] text-ink-faint">
-      <span aria-hidden="true" className={cn('size-1.5 shrink-0 rounded-full', tone)} />
-      <span className="truncate" title={text}>
-        {text}
-      </span>
-    </p>
-  )
-}
-
-function describeEngine(provider: ChatProvider): { tone: string; text: string } {
-  switch (provider.engine) {
-    case 'ai':
-      return { tone: 'bg-credit', text: `Modelo ${provider.name}` }
-
-    case 'budget_exhausted':
-      // The honest version. "Unavailable, try again in a moment" would be a lie:
-      // waiting does not refill a budget.
-      return {
-        tone: 'bg-hold',
-        text: 'Presupuesto de IA agotado · asistente no disponible',
-      }
-
-    case 'degraded':
-      return { tone: 'bg-hold', text: 'IA no disponible ahora' }
-
-    case 'unconfigured':
-    default:
-      return { tone: 'bg-hold', text: 'Sin IA configurada · asistente no disponible' }
-  }
-}
-
-/**
- * The first thing in an empty conversation.
- *
- * The previous version reused the generic empty state, whose illustration is a ruled
- * page with nothing on it — an icon that means "there is nothing here", which is the
- * wrong thing to say about a conversation that has not started yet. The suggestions
- * are the point of this screen, so they are the primary action rather than a footnote
- * under an apology, and tapping one sends it instead of merely typing it for you.
- */
-function Opening({
+/** The three suggestions, styled as filter chips. Tapping one asks it. */
+function SuggestionChips({
+  variant,
+  items,
+  disabled,
+  scroll,
   onPick,
-  engine,
 }: {
+  variant: Variant
+  items: string[]
+  disabled?: boolean
+  /** One row that scrolls sideways, bleeding to the sheet's edges. */
+  scroll?: boolean
   onPick: (text: string) => void
-  engine: ChatEngine
 }) {
-  const suggestions = [
-    '¿Cuánto dinero tengo?',
-    'Muéstrame mis últimos 5 movimientos',
-    '¿Cuánto tengo en cada cuenta?',
-  ]
-
   return (
-    <Empty className="border-0 bg-transparent py-2">
-      <EmptyHeader>
-        <EmptyMedia variant="icon" className="bg-copper/10 text-copper">
-          <SparklesIcon />
-        </EmptyMedia>
-        <EmptyTitle className="type-display text-[1rem]">
-          Pídeme lo que necesites
-        </EmptyTitle>
-        <EmptyDescription className="text-[0.8125rem]">
-          Consulto tus saldos y movimientos.
-          {engine !== 'ai' && ' Ahora mismo no estoy disponible.'}
-        </EmptyDescription>
-      </EmptyHeader>
-      <EmptyContent>
-        <ul className="flex w-full flex-col gap-1.5">
-          {suggestions.map((suggestion) => (
-            <li key={suggestion}>
-              <button
-                type="button"
-                onClick={() => onPick(suggestion)}
-                className={cn(
-                  'w-full rounded-[5px] border border-rule bg-paper-raised px-3 py-2 text-left',
-                  'text-[0.8125rem] text-ink-soft transition-colors',
-                  'hover:border-copper hover:text-copper',
-                )}
-              >
-                {suggestion}
-              </button>
-            </li>
-          ))}
-        </ul>
-      </EmptyContent>
-    </Empty>
+    <ul
+      aria-label="Sugerencias"
+      className={cn(
+        'flex gap-2',
+        scroll ? 'no-scrollbar -mx-4 overflow-x-auto px-4' : 'flex-wrap',
+      )}
+    >
+      {items.map((item) => (
+        <li key={item} className="shrink-0">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => onPick(item)}
+            className={cn(
+              'inline-flex items-center rounded-full bg-muted px-4 text-small font-semibold whitespace-nowrap text-foreground',
+              'transition-colors duration-180 ease-out hover:bg-line',
+              'disabled:cursor-not-allowed disabled:text-muted-foreground disabled:hover:bg-muted',
+              variant === 'sheet' ? 'h-11' : 'h-9',
+            )}
+          >
+            {item}
+          </button>
+        </li>
+      ))}
+    </ul>
   )
 }
 
 function ChatSkeleton() {
   return (
-    <div className="space-y-4" aria-hidden="true">
-      <div className="flex justify-end">
-        <Skeleton className="h-8 w-40 rounded-[5px]" />
-      </div>
-      <div className="space-y-1.5">
-        <Skeleton className="h-3 w-3/4" />
-        <Skeleton className="h-3 w-1/2" />
+    <div className="flex flex-col gap-4" aria-hidden="true">
+      <Skeleton className="h-11 w-56 self-end" />
+      <div className="flex flex-col gap-2">
+        <Skeleton className="h-4 w-3/4" />
+        <Skeleton className="h-4 w-1/2" />
       </div>
     </div>
   )

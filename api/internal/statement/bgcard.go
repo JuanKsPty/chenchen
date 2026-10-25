@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 var bgCardColumns = []string{

@@ -5,18 +5,18 @@
 
 ## Contexto
 
-corebank guardaba los saldos en TigerBeetle, un ledger de doble entrada, y el resto en
+chenchén guardaba los saldos en TigerBeetle, un ledger de doble entrada, y el resto en
 PostgreSQL. Las cuentas se creaban con `debits_must_not_exceed_credits`, y cada depósito
 tenía como contrapartida una cuenta de patrimonio `world`.
 
-Ese diseño sirve para un sistema que **origina** movimientos de dinero. corebank no
+Ese diseño sirve para un sistema que **origina** movimientos de dinero. chenchén no
 origina ninguno: todo movimiento sale de un estado de cuenta o de IBKR. Su trabajo es
 **reflejar** saldos cuya verdad está en otro lado y decir dónde dejan de cuadrar. Con
 el ledger:
 
 - La regla de no sobregiro obligaba a **inventar un saldo inicial**: lo mínimo para que
-  la primera línea no dejara la cuenta en negativo. Un estado de Banco General que
-  termina en $107.50 quedaba en $20.00.
+  la primera línea no dejara la cuenta en negativo. Un estado de cuenta que terminaba
+  en $107.50 quedaba en $20.00.
 - Una línea que el ledger rechazaba ya estaba registrada como importada, así que **se
   perdía para siempre** y el siguiente import la contaba como duplicada.
 - Una tarjeta es un pasivo. En un ledger de activos o su saldo tenía el signo al revés,
@@ -57,4 +57,4 @@ descuadre.
 - La API compila estática, corre con el perfil de seguridad por defecto y cabe en
   160 MiB.
 - Se pierde la garantía de no sobregiro del ledger, que aquí no protegía nada: el
-  banco ya decidió si hubo sobregiro, y corebank solo lo refleja.
+  banco ya decidió si hubo sobregiro, y chenchén solo lo refleja.

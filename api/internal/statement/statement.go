@@ -23,8 +23,8 @@ import (
 	"time"
 	"unicode"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // Source names the file format.

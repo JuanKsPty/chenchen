@@ -42,7 +42,7 @@ func Open(ctx context.Context, deps Deps, userID uuid.UUID) (*Session, error) {
 		return nil, fmt.Errorf("mcpserver: connecting the server: %w", err)
 	}
 
-	client := mcp.NewClient(&mcp.Implementation{Name: "corebank-chat", Version: "1.0.0"}, nil)
+	client := mcp.NewClient(&mcp.Implementation{Name: "chenchen-chat", Version: "1.0.0"}, nil)
 	clientSession, err := client.Connect(ctx, clientTransport, nil)
 	if err != nil {
 		_ = serverSession.Close()

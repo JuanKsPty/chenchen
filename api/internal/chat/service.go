@@ -17,10 +17,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/mcpserver"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // historyTurns is how much of the conversation is replayed to the model.
@@ -191,8 +191,8 @@ func (s *Service) Reply(ctx context.Context, userID uuid.UUID, customerName, mes
 				"limit", s.maxTurns, "pending_calls", len(reply.ToolCalls))
 			emit(Event{
 				Kind: EventError, Code: "too_many_steps",
-				Message: "No pude completar la consulta en los pasos disponibles. " +
-					"Prueba a pedírmelo de forma más concreta.",
+				Message: "No pude terminar la respuesta en los pasos que tengo. " +
+					"Pídemelo de forma más concreta.",
 			})
 			return nil
 		}

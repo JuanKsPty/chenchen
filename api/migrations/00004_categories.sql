@@ -1,7 +1,7 @@
 -- Categories: how a customer groups their own transactions for spend tracking.
 --
 -- Two levels only (a category and, optionally, its parent) rather than
--- unbounded nesting: every category corebank ships as a default is a flat
+-- unbounded nesting: every category chenchén ships as a default is a flat
 -- list, and a deeper tree would buy nothing a customer actually uses while
 -- making "which bucket does this fall under" a recursive question instead of
 -- a one-hop lookup.

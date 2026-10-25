@@ -1,130 +1,185 @@
-import { LandmarkIcon, UploadIcon } from 'lucide-react'
-
-import type { Account, NetWorth } from '@/api/types'
-import { AccountCard } from '@/components/AccountCard'
-import { DryRunDialog } from '@/components/DryRunDialog'
-import { ImportStatementDialog } from '@/components/ImportStatementDialog'
-import { LinkIBKRDialog } from '@/components/LinkIBKRDialog'
-import { Figure } from '@/components/primitives'
-import { Button } from '@/components/ui/button'
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from '@/components/ui/empty'
-import { Skeleton } from '@/components/ui/skeleton'
-import { useAccounts } from '@/lib/queries'
-
-const SECTIONS: { title: string; match: (a: Account) => boolean }[] = [
-  { title: 'Cuentas', match: (a) => a.type === 'checking' || a.type === 'savings' },
-  { title: 'Tarjetas', match: (a) => a.type === 'credit_card' },
-  { title: 'Inversiones', match: (a) => a.type === 'brokerage' },
-]
-
 /**
- * Every account the owner's files and IBKR link have brought in, grouped the way
- * a person thinks of them: what they have, what they owe, what they invest.
+ * Cuentas: every account the owner's files and the IBKR link brought in, grouped
+ * the way a person thinks of them (what they have, what they owe, what they
+ * invest), each group with its total.
+ *
+ * No artboard; built from spec accountRow (rows, group header and total) and
+ * statusChip. Importing lives in the bars: the desktop bar's "Importar estado" and
+ * the mobile bar's compact "Importar" (the route's default). "Conectar Interactive
+ * Brokers" is the last row of Inversiones, which shows even with no investments.
+ *
+ * Layout: one column; where the page itself is at least 56rem wide (desktop
+ * without the assistant pushing it), two columns balanced by row count, in
+ * reading order. The empty state is the whole page and takes over the mobile bar's
+ * Importar, so there is one primary in view.
  */
+import { FileUpIcon, ScaleIcon } from 'lucide-react'
+
+import type { AccountList } from '@/api/types'
+import { ConnectIBKRRow } from '@/components/accounts/ConnectIBKRRow'
+import { useImport } from '@/components/import/ImportProvider'
+import { AccountGroup, EmptyState, Notice, PageHeader } from '@/components/kit'
+import { LinkIBKRDialog } from '@/components/LinkIBKRDialog'
+import { useTopBar } from '@/components/shell/TopBar'
+import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
+import { amountOf, groupAccounts, type AccountGroup as Group } from '@/lib/account'
+import { useAccounts } from '@/lib/queries'
+import { useDocumentTitle } from '@/lib/title'
+
 export function AccountsPage() {
+  useDocumentTitle('Cuentas')
   const accounts = useAccounts()
+  const { openImport } = useImport()
   const list = accounts.data?.accounts ?? []
+  // A failed background refresh keeps what was already loaded on screen.
+  const empty = accounts.data !== undefined && list.length === 0
+
+  // The empty state's "Importar estado de cuenta" is the one primary; the bar's
+  // compact Importar steps aside for it.
+  useTopBar(empty ? { action: null } : {})
 
   return (
-    <div className="space-y-6">
-      <header className="flex flex-wrap items-end justify-between gap-4">
-        <div className="hidden md:block">
-          <p className="type-eyebrow">Cuentas</p>
-          <h1 className="type-display mt-1.5 text-[1.75rem]">Tus cuentas</h1>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          <DryRunDialog />
-          <LinkIBKRDialog trigger={<Button variant="outline">Vincular IBKR</Button>} />
-          <ImportStatementDialog
+    <div className="flex flex-col gap-4 lg:gap-6">
+      <PageHeader title="Cuentas" />
+      {accounts.isPending ? (
+        <AccountsSkeleton />
+      ) : !accounts.data ? (
+        <Notice
+          title="No pudimos cargar tus cuentas"
+          description="Algo falló de nuestro lado. Tus datos están bien; intenta otra vez en un momento."
+          action={{ label: 'Reintentar', onClick: () => void accounts.refetch() }}
+        />
+      ) : empty ? (
+        <EmptyState
+          framed
+          illustration="import"
+          title="Importa tu primer estado de cuenta"
+          description="Sube el archivo que te da tu banco y aquí te lo dejamos ordenadito."
+          action={{
+            label: 'Importar estado de cuenta',
+            icon: FileUpIcon,
+            onClick: () => openImport(),
+          }}
+        >
+          <LinkIBKRDialog
             trigger={
-              <Button className="bg-copper text-primary-foreground hover:bg-copper/90">
-                <UploadIcon aria-hidden="true" />
-                Importar estado de cuenta
+              <Button variant="ghost" className="-mt-1 w-full md:w-auto">
+                Conectar Interactive Brokers
               </Button>
             }
           />
-        </div>
-      </header>
-
-      {accounts.isLoading ? (
-        <ul className="grid gap-3 sm:grid-cols-2">
-          {[0, 1].map((i) => (
-            <li key={i} className="card space-y-3 p-5">
-              <Skeleton className="h-3 w-24" />
-              <Skeleton className="h-7 w-40" />
-            </li>
-          ))}
-        </ul>
-      ) : list.length === 0 ? (
-        <Empty className="card">
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <LandmarkIcon />
-            </EmptyMedia>
-            <EmptyTitle className="type-display text-[1.0625rem]">
-              Todavía no hay cuentas
-            </EmptyTitle>
-            <EmptyDescription>
-              Importa un estado de cuenta de tu banco o vincula tu cuenta de IBKR. La cuenta
-              aparece sola, con el nombre y el número que trae el archivo.
-            </EmptyDescription>
-          </EmptyHeader>
-          <EmptyContent>
-            <ImportStatementDialog
-              trigger={<Button variant="outline">Importar estado de cuenta</Button>}
-            />
-          </EmptyContent>
-        </Empty>
+        </EmptyState>
       ) : (
-        <>
-          {SECTIONS.map((section) => {
-            const items = list.filter(section.match)
-            if (items.length === 0) return null
-            return (
-              <section key={section.title} className="space-y-3">
-                <h2 className="type-eyebrow">{section.title}</h2>
-                <ul className="grid gap-3 sm:grid-cols-2">
-                  {items.map((a) => (
-                    <li key={a.id}>
-                      <AccountCard account={a} />
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )
-          })}
-          {accounts.data && <NetWorthSummary worth={accounts.data.net_worth} />}
-        </>
+        <AccountGroups data={accounts.data} />
       )}
     </div>
   )
 }
 
-export function NetWorthSummary({ worth }: { worth: NetWorth }) {
+function AccountGroups({ data }: { data: AccountList }) {
+  const groups = groupAccounts(data.accounts)
+  const columns = balance(withInvestments(groups))
+  const unanchored = data.accounts.filter((a) => !a.anchored && a.movements > 0).length
+
   return (
-    <div className="space-y-1 border-t border-rule pt-4 text-[0.875rem] text-ink-soft">
-      <p className="flex items-baseline gap-2">
-        <span>Patrimonio neto</span>
-        <Figure amount={worth.total} size="sm" tone="copper" />
-        {worth.incomplete && (
-          <span className="text-[0.75rem] text-hold-text">
-            (incompleto: {worth.unanchored} cuenta{worth.unanchored === 1 ? '' : 's'} sin
-            saldo inicial)
-          </span>
-        )}
-      </p>
-      <p className="text-[0.8125rem] text-ink-faint">
-        Tienes <Figure amount={worth.assets} size="sm" tone="faint" /> · debes{' '}
-        <Figure amount={worth.owed} size="sm" tone="faint" /> · inversiones{' '}
-        <Figure amount={worth.holdings} size="sm" tone="faint" />
-      </p>
+    <>
+      {unanchored > 0 && (
+        <Notice
+          tone="pending"
+          icon={ScaleIcon}
+          title={
+            unanchored === 1
+              ? '1 cuenta sin saldo inicial'
+              : `${unanchored} cuentas sin saldo inicial`
+          }
+          description={`${unanchored === 1 ? 'Ábrela' : 'Ábrelas'} y anota el saldo según tu banco para saber si cuadra.`}
+        />
+      )}
+      <div className="@container">
+        <div className="grid items-start gap-4 lg:gap-6 @4xl:grid-cols-2">
+          {columns.map((column, index) => (
+            <div key={index} className="flex min-w-0 flex-col gap-4 lg:gap-6">
+              {column.map((group) => (
+                <AccountGroup
+                  key={group.key}
+                  title={group.title}
+                  total={group.accounts.length > 0 ? group.total : undefined}
+                  accounts={group.accounts}
+                >
+                  {group.key === 'inversiones' && (
+                    <ConnectIBKRRow another={group.accounts.length > 0} />
+                  )}
+                </AccountGroup>
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    </>
+  )
+}
+
+/** Inversiones always shows, so connecting IBKR has a place to live. */
+function withInvestments(groups: Group[]): Group[] {
+  if (groups.some((g) => g.key === 'inversiones')) return groups
+  const none: Group = {
+    key: 'inversiones',
+    title: 'Inversiones',
+    accounts: [],
+    total: amountOf(0),
+  }
+  return [...groups, none]
+}
+
+/**
+ * Two columns for the wide layout, in reading order: each group goes to the
+ * shorter column so far (a group weighs its rows plus its heading; Inversiones
+ * also carries the connect row). Narrow, the columns simply stack.
+ */
+function balance(groups: Group[]): Group[][] {
+  const columns: Group[][] = [[], []]
+  const weight = [0, 0]
+  for (const group of groups) {
+    const side = weight[1]! < weight[0]! ? 1 : 0
+    // Keep reading order: once something went right, the rest follows it.
+    const target = columns[1]!.length > 0 ? 1 : side
+    columns[target]!.push(group)
+    weight[target]! += group.accounts.length + 1 + (group.key === 'inversiones' ? 1 : 0)
+  }
+  return columns.filter((column) => column.length > 0)
+}
+
+/** Shaped like the page it stands in for: two groups side by side when wide. */
+function AccountsSkeleton() {
+  return (
+    <div role="status" aria-label="Cargando tus cuentas" className="@container">
+      <div className="grid items-start gap-4 lg:gap-6 @4xl:grid-cols-2">
+        {[2, 1].map((rows, index) => (
+          <div
+            key={index}
+            className="flex flex-col gap-1 rounded-2xl bg-card p-1 shadow-card"
+          >
+            <div className="flex items-center justify-between px-4 pt-3 pb-1">
+              <Skeleton className="h-5 w-20 rounded-full" />
+              <Skeleton className="h-5 w-24 rounded-full" />
+            </div>
+            {Array.from({ length: rows }, (_, row) => (
+              <div
+                key={row}
+                className="grid grid-cols-[2.75rem_minmax(0,1fr)_auto] items-center gap-3 px-4 py-3 md:min-h-18"
+              >
+                <Skeleton className="size-11 rounded-full" />
+                <div className="flex flex-col gap-2">
+                  <Skeleton className="h-4 w-32 max-w-full rounded-full" />
+                  <Skeleton className="h-3.5 w-44 max-w-full rounded-full" />
+                </div>
+                <Skeleton className="h-4 w-20 rounded-full" />
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }

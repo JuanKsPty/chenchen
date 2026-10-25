@@ -16,7 +16,7 @@ import (
 	"github.com/jackc/pgx/v5/stdlib"
 	"github.com/pressly/goose/v3"
 
-	"github.com/JuanKsPty/corebank/api/migrations"
+	"github.com/JuanKsPty/chenchen/api/migrations"
 )
 
 // scratchDB creates an empty database for one test. It lives here rather than

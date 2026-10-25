@@ -1,5 +1,21 @@
 import { clsx, type ClassValue } from 'clsx'
-import { twMerge } from 'tailwind-merge'
+import { extendTailwindMerge } from 'tailwind-merge'
+
+/**
+ * tailwind-merge only knows Tailwind's stock scales. Without this it reads the
+ * custom type sizes (`text-body`, `text-small`…) as text colours, so
+ * `cn('text-body', 'text-muted-foreground')` silently drops the size, and it
+ * reads `shadow-card` as a shadow colour. The names here must match the
+ * `--text-*` and `--shadow-*` tokens in styles.css.
+ */
+const twMerge = extendTailwindMerge({
+  extend: {
+    theme: {
+      text: ['display', 'title', 'heading', 'body', 'small', 'micro'],
+      shadow: ['card', 'raised', 'bar'],
+    },
+  },
+})
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs))

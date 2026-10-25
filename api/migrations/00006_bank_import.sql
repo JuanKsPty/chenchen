@@ -1,4 +1,4 @@
--- Bank statement import: a bank account corebank has never verified on its
+-- Bank statement import: a bank account chenchén has never verified on its
 -- own. A card statement stays exactly that — external_accounts.
 -- linked_account_id (added by 00008_bank_import_linked_accounts.sql) is
 -- null for it, and its "balance" is only ever a sum over
@@ -50,8 +50,8 @@ CREATE INDEX category_rules_user_id_idx ON category_rules (user_id);
 
 -- dedup_key is a SHA-256 hex digest combining every signal a row has,
 -- including the bank's own reference when there is one but never trusting
--- it alone — see bankimport.dedupKey's doc for the real Banco General
--- statement that showed why. raw keeps the original row exactly as the bank
+-- it alone — see bankimport.dedupKey's doc for the real bank statement that
+-- showed why. raw keeps the original row exactly as the bank
 -- sent it, independent of how this schema chose to interpret it.
 CREATE TABLE external_transactions (
     id                  UUID        PRIMARY KEY,

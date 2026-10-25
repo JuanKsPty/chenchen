@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // Statement is one Flex Query report, translated out of IBKR's XML into
-// corebank-native types. Nothing downstream of this package ever sees IBKR's
+// chenchén-native types. Nothing downstream of this package ever sees IBKR's
 // own attribute strings.
 type Statement struct {
 	AccountID string
@@ -57,7 +57,7 @@ type CashTransaction struct {
 	ExternalRef string
 	// Type is IBKR's own label ("Dividends", "Deposits/Withdrawals", "Broker
 	// Interest Paid", ...), kept verbatim for the movement's description
-	// rather than mapped onto a closed set corebank would have to keep in
+	// rather than mapped onto a closed set chenchén would have to keep in
 	// sync with IBKR's.
 	Type   string
 	Symbol string
@@ -127,7 +127,7 @@ type Position struct {
 //
 // A statement with more than one <FlexStatement> block is refused rather
 // than merged: a Flex Query configured for one account produces exactly one,
-// and corebank's investments.Service.Sync takes a single account number to
+// and chenchén's investments.Service.Sync takes a single account number to
 // apply the result to. Seeing more than one here means the query is
 // configured differently than expected, which is worth failing loudly on
 // rather than guessing which block corresponds to the linked account.
@@ -307,7 +307,7 @@ func zeroIfEmpty(s string) string {
 // rounded — but none of Trade's or Position's fields are ledger amounts
 // (see internal/investments' package doc: only a CashTransaction's own
 // Amount is), so rounding here trades a false sense of sub-cent precision
-// for a value corebank stores and displays in cents everywhere else.
+// for a value chenchén stores and displays in cents everywhere else.
 func parseApproxCents(s string) (money.Cents, error) {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
@@ -353,7 +353,7 @@ func filterCashTransactions(items []cashTransactionXML) []cashTransactionXML {
 //
 // Verified against a real account: several symbols each appeared twice, once
 // levelOfDetail="SUMMARY" (the whole position) and once "LOT" (one tax lot).
-// corebank tracks aggregate holdings, not individual lots, so the LOT rows
+// chenchén tracks aggregate holdings, not individual lots, so the LOT rows
 // would otherwise violate investment_positions' one-row-per-instrument
 // constraint. Falls back to keeping everything if no row is SUMMARY, on the
 // same reasoning as filterCashTransactions.

@@ -15,12 +15,13 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 var (
@@ -59,6 +60,20 @@ type Account struct {
 	Drift     *Drift
 	Movements int
 	LastDay   civil.Date
+	// Statement is a card's latest statement, as the owner entered it with its
+	// due date. Nil for anything but a card, or a card with no due date yet.
+	Statement *CardStatement
+	// LastSyncedAt is when a brokerage account last synced with IBKR
+	// successfully. Nil when it never has, or for any other account.
+	LastSyncedAt *time.Time
+}
+
+// CardStatement is what a card's statement says the owner must do: when it
+// closed, when payment is due and the least they can pay.
+type CardStatement struct {
+	ClosingOn      civil.Date
+	DueOn          *civil.Date
+	MinimumPayment *money.Cents
 }
 
 // Drift is how far a stated balance is from the computed one.
@@ -94,6 +109,10 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 	for _, c := range checkpoints {
 		byAccount[c.AccountID] = append(byAccount[c.AccountID], c)
 	}
+	synced, err := s.db.Q().LastSyncsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]Account, 0, len(rows))
 	for _, row := range rows {
@@ -101,6 +120,7 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 		if err != nil {
 			return nil, err
 		}
+		a.LastSyncedAt = lastSynced(row, synced)
 		out = append(out, a)
 	}
 	return out, nil
@@ -124,12 +144,48 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (Account, error
 	if err != nil {
 		return Account{}, err
 	}
-	return s.position(ctx, row, sums[id], holdings[id], cps)
+	a, err := s.position(ctx, row, sums[id], holdings[id], cps)
+	if err != nil {
+		return Account{}, err
+	}
+	if row.Type == "brokerage" {
+		synced, err := s.db.Q().LastSyncsByUser(ctx, userID)
+		if err != nil {
+			return Account{}, err
+		}
+		a.LastSyncedAt = lastSynced(row, synced)
+	}
+	return a, nil
+}
+
+// lastSynced is a brokerage account's last successful sync, if it has one.
+func lastSynced(row store.Account, synced map[uuid.UUID]time.Time) *time.Time {
+	at, ok := synced[row.ID]
+	if row.Type != "brokerage" || !ok {
+		return nil
+	}
+	return &at
+}
+
+// latestStatement is a card's most recent statement: the latest checkpoint the
+// owner gave a due date, its as_of being the day the statement closed. cps must
+// be ordered by as_of, as the store returns them.
+func latestStatement(row store.Account, cps []store.Checkpoint) *CardStatement {
+	if row.Type != "credit_card" {
+		return nil
+	}
+	for i := len(cps) - 1; i >= 0; i-- {
+		if c := cps[i]; c.DueOn != nil {
+			return &CardStatement{ClosingOn: c.AsOf, DueOn: c.DueOn, MinimumPayment: c.MinimumPayment}
+		}
+	}
+	return nil
 }
 
 func (s *Service) position(ctx context.Context, row store.Account, sums store.AccountSums,
 	holdings money.Cents, cps []store.Checkpoint) (Account, error) {
-	a := Account{Account: row, Balance: sums.Total, Holdings: holdings, Movements: sums.Count, LastDay: sums.LastBooking}
+	a := Account{Account: row, Balance: sums.Total, Holdings: holdings, Movements: sums.Count, LastDay: sums.LastBooking,
+		Statement: latestStatement(row, cps)}
 
 	anchor, ok := Anchor(cps)
 	if !ok {

@@ -10,11 +10,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Handler serves /api/investments.
@@ -48,13 +48,13 @@ type linkRequest struct {
 func (r linkRequest) problems(needAccount bool) map[string]string {
 	p := map[string]string{}
 	if needAccount && strings.TrimSpace(r.IBKRAccountID) == "" {
-		p["ibkr_account_id"] = "El identificador de cuenta de IBKR es obligatorio."
+		p["ibkr_account_id"] = "Escribe el número de tu cuenta de IBKR."
 	}
 	if strings.TrimSpace(r.FlexQueryID) == "" {
-		p["flex_query_id"] = "El identificador de la Flex Query es obligatorio."
+		p["flex_query_id"] = "Escribe el número de la Flex Query."
 	}
 	if strings.TrimSpace(r.FlexToken) == "" {
-		p["flex_token"] = "El token de Flex Web Service es obligatorio."
+		p["flex_token"] = "Pega el token de Flex Web Service."
 	}
 	return p
 }
@@ -186,7 +186,7 @@ func (h *Handler) trades(w http.ResponseWriter, r *http.Request) {
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
 		if err != nil || n < 1 {
-			httpx.Fail(w, r, httpx.BadRequest("invalid_limit", "El parámetro limit debe ser un entero positivo."))
+			httpx.Fail(w, r, httpx.BadRequest("invalid_limit", "No pudimos cargar las operaciones. Intenta otra vez."))
 			return
 		}
 		limit = n
@@ -217,15 +217,15 @@ func translate(err error) error {
 	case errors.Is(err, ErrAccountNotFound):
 		return httpx.NotFound("account_not_found", "La cuenta no existe.").WithCause(err)
 	case errors.Is(err, ErrNotBrokerage):
-		return httpx.BadRequest("not_brokerage_account", "Esta operación solo aplica a cuentas de inversión.").WithCause(err)
+		return httpx.BadRequest("not_brokerage_account", "Esto solo aplica a cuentas de inversión.").WithCause(err)
 	case errors.Is(err, ErrNotLinked):
-		return httpx.NotFound("ibkr_not_linked", "Esta cuenta todavía no tiene una Flex Query de IBKR configurada.").WithCause(err)
+		return httpx.NotFound("ibkr_not_linked", "Esta cuenta todavía no está conectada a Interactive Brokers.").WithCause(err)
 	case errors.Is(err, ErrAccountMismatch):
 		return httpx.Unprocessable("ibkr_account_mismatch",
-			"La Flex Query devolvió el reporte de otra cuenta de IBKR. Revisa que el ID de la cuenta vinculada y la Flex Query correspondan a la misma cuenta.").WithCause(err)
+			ibkrMismatchMessage).WithCause(err)
 	case errors.Is(err, ErrEncryptionUnavailable):
 		return httpx.Unprocessable("ibkr_unavailable",
-			"La vinculación con IBKR no está habilitada en este servidor.").WithCause(err)
+			"La conexión con Interactive Brokers no está disponible por ahora.").WithCause(err)
 	default:
 		return err
 	}

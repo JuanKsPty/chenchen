@@ -17,12 +17,12 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/ibkr"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
-	"github.com/JuanKsPty/corebank/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/ibkr"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/transfers"
 )
 
 var (
@@ -37,6 +37,30 @@ var (
 	// different IBKR account than the linked one.
 	ErrAccountMismatch = errors.New("investments: statement belongs to a different IBKR account")
 )
+
+// ibkrMismatchMessage is what the person reads when the Flex Query reports on
+// a different IBKR account than the linked one.
+const ibkrMismatchMessage = "La Flex Query trae el reporte de otra cuenta de Interactive Brokers. " +
+	"Revisa que sea la de esta cuenta."
+
+// syncFailureMessage is the failure the account page shows beside the last
+// sync. The cause itself is technical and in English (IBKR's own wording, or
+// a parse error), so it stays in the log and on the failed import run.
+func syncFailureMessage(err error) string {
+	switch {
+	case errors.Is(err, ErrAccountMismatch):
+		return ibkrMismatchMessage
+	case errors.Is(err, ibkr.ErrStatementNotReady):
+		return "Interactive Brokers todavía está preparando el reporte. Intenta otra vez en unos minutos."
+	case errors.Is(err, ibkr.ErrRequestFailed):
+		// IBKR's own refusal. An HTTP error (ibkr.ErrUnavailable: an outage, a
+		// rate limit) says nothing about the token, so it reads as the default.
+		return "Interactive Brokers rechazó la consulta. Revisa que el token no haya vencido " +
+			"y que el número de la Flex Query sea el correcto."
+	default:
+		return "No pudimos traer el reporte de Interactive Brokers. Intenta otra vez en un rato."
+	}
+}
 
 // Fetcher downloads a Flex report. The real one is an *ibkr.Client; tests pass
 // a canned statement.
@@ -420,7 +444,7 @@ func (s *Service) brokerage(ctx context.Context, userID, accountID uuid.UUID) (s
 func (s *Service) recordOutcome(ctx context.Context, accountID uuid.UUID, cause error) {
 	status, message := "ok", ""
 	if cause != nil {
-		status, message = "error", cause.Error()
+		status, message = "error", syncFailureMessage(cause)
 	}
 	if err := s.db.Q().RecordSyncOutcome(ctx, accountID, status, message, s.now().UTC()); err != nil {
 		logging.FromContext(ctx).Error("could not record an ibkr sync outcome", "account_id", accountID, "error", err)

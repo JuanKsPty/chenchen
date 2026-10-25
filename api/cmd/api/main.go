@@ -1,4 +1,4 @@
-// Command api is the corebank backend.
+// Command api is the chenchén backend.
 //
 // Startup order is deliberate and fails loudly: configuration, then the
 // database, then the schema, and only then the HTTP listener. Nothing accepts traffic until everything it depends on is
@@ -15,24 +15,24 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/auth"
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/chat"
-	"github.com/JuanKsPty/corebank/api/internal/config"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/imports"
-	"github.com/JuanKsPty/corebank/api/internal/investments"
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/mcpserver"
-	"github.com/JuanKsPty/corebank/api/internal/movements"
-	"github.com/JuanKsPty/corebank/api/internal/proposals"
-	"github.com/JuanKsPty/corebank/api/internal/reports"
-	"github.com/JuanKsPty/corebank/api/internal/rules"
-	"github.com/JuanKsPty/corebank/api/internal/server"
-	"github.com/JuanKsPty/corebank/api/internal/store"
-	"github.com/JuanKsPty/corebank/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/auth"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/chat"
+	"github.com/JuanKsPty/chenchen/api/internal/config"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/imports"
+	"github.com/JuanKsPty/chenchen/api/internal/investments"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
+	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/proposals"
+	"github.com/JuanKsPty/chenchen/api/internal/reports"
+	"github.com/JuanKsPty/chenchen/api/internal/rules"
+	"github.com/JuanKsPty/chenchen/api/internal/server"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/transfers"
 )
 
 func main() {
@@ -53,7 +53,7 @@ func run() error {
 	logger := logging.New(cfg.Log.Level, cfg.Log.Format)
 	slog.SetDefault(logger)
 
-	logger.Info("starting corebank api",
+	logger.Info("starting chenchen api",
 		"version", server.Version(), "env", cfg.Env, "addr", cfg.HTTP.Addr)
 
 	if cfg.Auth.JWTSecretRandom {

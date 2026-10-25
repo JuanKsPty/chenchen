@@ -13,7 +13,7 @@
 
 -- +goose Up
 
--- One IBKR account linked per corebank account. The token is the Flex Web
+-- One IBKR account linked per chenchén account. The token is the Flex Web
 -- Service token, encrypted with the key in IBKR_TOKEN_ENCRYPTION_KEY before
 -- it ever reaches this column — see internal/investments/crypto.go. Losing
 -- that key makes every stored token unusable, not merely unreadable; there is

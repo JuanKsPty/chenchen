@@ -76,6 +76,31 @@ func (q *Queries) AccountsByUser(ctx context.Context, userID uuid.UUID) ([]Accou
 	return out, wrap("store.AccountsByUser", rows.Err())
 }
 
+// LastSyncsByUser returns when each of the user's linked brokerage accounts
+// last synced with IBKR, in one query for the whole account list. Only a sync
+// that succeeded counts: ibkr_links stamps last_synced_at on a failed attempt
+// too, and "synced two hours ago" must not describe a sync that failed. Only
+// these two columns are read; the list never needs the token.
+func (q *Queries) LastSyncsByUser(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]time.Time, error) {
+	const query = `SELECT account_id, last_synced_at FROM ibkr_links
+		WHERE user_id = $1 AND last_sync_status = 'ok' AND last_synced_at IS NOT NULL`
+	rows, err := q.q.Query(ctx, query, userID)
+	if err != nil {
+		return nil, wrap("store.LastSyncsByUser", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]time.Time{}
+	for rows.Next() {
+		var id uuid.UUID
+		var at time.Time
+		if err := rows.Scan(&id, &at); err != nil {
+			return nil, wrap("store.LastSyncsByUser", err)
+		}
+		out[id] = at
+	}
+	return out, wrap("store.LastSyncsByUser", rows.Err())
+}
+
 // AccountByID returns one of the user's accounts. An account that exists but
 // belongs to someone else is ErrNotFound, like one that does not exist.
 func (q *Queries) AccountByID(ctx context.Context, userID, id uuid.UUID) (Account, error) {

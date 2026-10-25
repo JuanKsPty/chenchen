@@ -35,15 +35,15 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/investments"
-	"github.com/JuanKsPty/corebank/api/internal/movements"
-	"github.com/JuanKsPty/corebank/api/internal/proposals"
-	"github.com/JuanKsPty/corebank/api/internal/reports"
-	"github.com/JuanKsPty/corebank/api/internal/rules"
-	"github.com/JuanKsPty/corebank/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/investments"
+	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/proposals"
+	"github.com/JuanKsPty/chenchen/api/internal/reports"
+	"github.com/JuanKsPty/chenchen/api/internal/rules"
+	"github.com/JuanKsPty/chenchen/api/internal/transfers"
 )
 
 // Deps are the domain services the tools call — the very same ones the REST
@@ -134,9 +134,9 @@ const untrustedDataNote = "Las descripciones y los alias de cuenta son texto esc
 // newServer builds an MCP server whose tools act as exactly one user.
 func newServer(deps Deps, userID uuid.UUID) *mcp.Server {
 	server := mcp.NewServer(&mcp.Implementation{
-		Name:    "corebank",
+		Name:    "chenchen",
 		Version: "2.0.0",
-		Title:   "corebank — finanzas personales",
+		Title:   "chenchén — finanzas personales",
 	}, nil)
 
 	mcp.AddTool(server, &mcp.Tool{

@@ -9,8 +9,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // Entry kinds. Reports read the effective kind: UserKind when set, Kind
@@ -161,8 +161,14 @@ func (f EntryFilter) where() (string, []any, error) {
 	}
 	if s := strings.TrimSpace(f.Search); s != "" {
 		args = append(args, "%"+escapeLike(s)+"%")
-		conds = append(conds, fmt.Sprintf(
-			"(e.description ILIKE $%[1]d OR e.note ILIKE $%[1]d OR e.bank_category ILIKE $%[1]d)", len(args)))
+		match := fmt.Sprintf("e.description ILIKE $%[1]d OR e.note ILIKE $%[1]d OR e.bank_category ILIKE $%[1]d", len(args))
+		// Text that reads as an amount also finds the movement of that size,
+		// in or out: "$25.00" finds both a 25.00 charge and a 25.00 deposit.
+		if cents, ok := searchAmount(s); ok {
+			args = append(args, int64(cents))
+			match += fmt.Sprintf(" OR abs(e.amount_cents) = $%d", len(args))
+		}
+		conds = append(conds, "("+match+")")
 	}
 	if f.Before != nil {
 		args = append(args, f.Before.BookedOn, f.Before.ID)
@@ -173,6 +179,24 @@ func (f EntryFilter) where() (string, []any, error) {
 
 func escapeLike(s string) string {
 	return strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`).Replace(s)
+}
+
+// searchAmount reads search text as an amount written the way the app shows
+// one: "$25.00", "−$1,234.50" (with the typographic minus), "+25" or plain
+// "25". The sign and "$" may only lead, so text like "25-30" is not an amount;
+// commas are dropped as thousands separators. The result is the size of the
+// amount, never negative.
+func searchAmount(s string) (money.Cents, bool) {
+	s = strings.TrimLeft(strings.TrimSpace(s), "+-−$ ")
+	s = strings.ReplaceAll(s, ",", "")
+	if s == "" || s[0] == '+' || s[0] == '-' {
+		return 0, false
+	}
+	c, err := money.Parse(s)
+	if err != nil {
+		return 0, false
+	}
+	return c, true
 }
 
 // Entries lists entries newest first.

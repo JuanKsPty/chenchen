@@ -2,12 +2,13 @@ package investments
 
 import (
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/JuanKsPty/corebank/api/internal/ibkr"
+	"github.com/JuanKsPty/chenchen/api/internal/ibkr"
 )
 
 func TestCheckStatementAccount(t *testing.T) {
@@ -95,6 +96,21 @@ func TestDescribeStatementReportsMissingSections(t *testing.T) {
 	for _, want := range []string{"Cash Transactions, Open Positions, Cash Report", "Se conservaron las posiciones"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("warnings %q do not mention %q", result.Warnings, want)
+		}
+	}
+}
+
+// During an IBKR outage the account page must not send the owner off to replace
+// a token that still works.
+func TestSyncFailureMessageBlamesTheTokenOnlyForIBKRsOwnRefusal(t *testing.T) {
+	refused := fmt.Errorf("%w: %s (code %s)", ibkr.ErrRequestFailed, "Token is invalid.", "1015")
+	if got := syncFailureMessage(refused); !strings.Contains(got, "token") {
+		t.Errorf("IBKR refusal: %q, want it to point at the token", got)
+	}
+	for _, status := range []int{401, 429, 500, 503} {
+		down := fmt.Errorf("%w: http %d", ibkr.ErrUnavailable, status)
+		if got := syncFailureMessage(down); strings.Contains(got, "token") || !strings.Contains(got, "Intenta otra vez") {
+			t.Errorf("HTTP %d: %q, want the try-again message", status, got)
 		}
 	}
 }

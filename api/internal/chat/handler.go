@@ -12,11 +12,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // maxMessageRunes caps one customer message. Long enough for any banking request,
@@ -153,11 +153,11 @@ func errorEvent(err error) Event {
 	switch {
 	case errors.Is(err, llm.ErrUnavailable):
 		return Event{Kind: EventError, Code: "assistant_unavailable",
-			Message: "El asistente no está disponible ahora mismo. Vuelve a intentarlo en un momento."}
+			Message: "El asistente no está disponible ahora. Intenta otra vez en un momento."}
 
 	case errors.Is(err, context.DeadlineExceeded):
 		return Event{Kind: EventError, Code: "assistant_timeout",
-			Message: "El asistente tardó demasiado en responder. Inténtalo de nuevo."}
+			Message: "El asistente tardó demasiado en responder. Intenta otra vez."}
 
 	case errors.Is(err, context.Canceled):
 		// The customer navigated away. Nothing to report to a browser that is gone,
@@ -166,7 +166,7 @@ func errorEvent(err error) Event {
 
 	default:
 		return Event{Kind: EventError, Code: "assistant_error",
-			Message: "No he podido completar la consulta. Inténtalo de nuevo."}
+			Message: "No pude terminar la respuesta. Intenta otra vez."}
 	}
 }
 
@@ -225,7 +225,7 @@ type providerView struct {
 	Name string `json:"name"`
 	IsAI bool   `json:"is_ai"`
 	// Engine says *why* a rule-based reply is rule-based, which the interface needs
-	// in order to be truthful. "No AI configured" and "the demo's AI budget ran out"
+	// in order to be truthful. "No AI configured" and "the AI budget ran out"
 	// look identical from is_ai alone, and they are not the same message: the first
 	// is how the project runs without credentials, the second means the money is
 	// gone. One of them is worth telling somebody about.

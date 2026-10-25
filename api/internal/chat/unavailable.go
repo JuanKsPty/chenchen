@@ -3,7 +3,7 @@ package chat
 import (
 	"context"
 
-	"github.com/JuanKsPty/corebank/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
 )
 
 // Unavailable answers when no language model can: no API key is configured, a

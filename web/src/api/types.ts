@@ -54,6 +54,23 @@ export interface Account {
   drift?: Drift
   movements: number
   last_day: string | null
+  /**
+   * A card's latest statement: from the newest checkpoint that has a due date.
+   * Optional: older APIs do not send it, and every screen must render without it.
+   */
+  statement?: CardStatement
+  /**
+   * When a brokerage account last synced with IBKR. Optional for the same
+   * reason; absent or null means unknown or never.
+   */
+  last_synced_at?: string | null
+}
+
+/** What a card's statement says is due. Dates are civil (YYYY-MM-DD). */
+export interface CardStatement {
+  closing_on: string
+  due_on: string | null
+  minimum_payment: Amount | null
 }
 
 /** How far a stated balance is from what the movements add up to. */

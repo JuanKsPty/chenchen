@@ -1,24 +1,62 @@
-import { Navigate, Route, Routes, useLocation } from 'react-router-dom'
+import { lazy, Suspense, useEffect } from 'react'
+import { matchPath, Navigate, Route, Routes, useLocation } from 'react-router-dom'
 
-import { AppShell } from '@/components/shell/AppShell'
-import { Wordmark } from '@/components/Wordmark'
-import { Button } from '@/components/ui/button'
+import { Isotipo } from '@/components/brand'
+import { Toaster } from '@/components/ui/sonner'
+import {
+  ACCOUNTS_PATH,
+  HOME_PATH,
+  MOVEMENTS_PATH,
+  RULES_PATH,
+  SETTINGS_PATH,
+  SPENDING_PATH,
+} from '@/lib/nav'
 import { useSession } from '@/lib/session'
-import { AccountPage } from '@/pages/AccountPage'
-import { AccountsPage } from '@/pages/AccountsPage'
-import { DashboardPage } from '@/pages/DashboardPage'
-import { HistoryPage } from '@/pages/HistoryPage'
 import { LandingPage } from '@/pages/LandingPage'
-import { RulesPage } from '@/pages/RulesPage'
-import { SecurityPage } from '@/pages/SecurityPage'
+import { loadSignedInApp, preloadSignedInApp } from '@/pages/lazy'
+import { NotFoundPage } from '@/pages/NotFoundPage'
 import { SignInPage } from '@/pages/SignInPage'
 import { SignUpPage } from '@/pages/SignUpPage'
 
+/**
+ * The shell and its pages, in their own chunks (pages/lazy). Fetched together with
+ * the page at the address the app opened on, so the first signed-in screen arrives
+ * whole.
+ */
+const SignedInApp = lazy(() => loadSignedInApp(window.location.pathname))
+
+/**
+ * Every signed-in path. Signed out, each of them (and every old one below) goes to
+ * the sign-in form, which returns there afterwards.
+ */
+const PROTECTED_PATHS = [
+  HOME_PATH,
+  ACCOUNTS_PATH,
+  `${ACCOUNTS_PATH}/:id`,
+  MOVEMENTS_PATH,
+  SPENDING_PATH,
+  RULES_PATH,
+  SETTINGS_PATH,
+]
+
+/** Addresses from before the redesign, kept working. */
+const OLD_PATHS = ['/panel', '/historial', '/reglas', '/seguridad']
+
+const isAppAddress = (pathname: string) =>
+  [...PROTECTED_PATHS, ...OLD_PATHS].some((path) => matchPath(path, pathname))
+
 export function App() {
   const { status } = useSession()
+  const { pathname } = useLocation()
+
+  // A visit that opens on a signed-in address most likely has a session to
+  // restore: fetch the shell while the refresh cookie is exchanged, not after.
+  useEffect(() => {
+    if (status === 'restoring' && isAppAddress(pathname)) preloadSignedInApp(pathname)
+  }, [status, pathname])
 
   // While the refresh cookie is being exchanged the app does not yet know whether it
-  // is signed in. Rendering either the login form or the dashboard now would flash the
+  // is signed in. Rendering either the sign-in form or Inicio now would flash the
   // wrong screen, so it renders neither.
   if (status === 'restoring') {
     return <RestoringSession />
@@ -26,87 +64,61 @@ export function App() {
 
   if (status === 'signed-out') {
     return (
-      <Routes>
-        {/* Three distinct public routes. The landing is a page in its own right, not
-            the login wearing a headline, and each of the two forms has its own URL so
-            either can be linked to or bookmarked. */}
-        <Route path="/" element={<LandingPage />} />
-        <Route path="/entrar" element={<SignInPage />} />
-        <Route path="/registro" element={<SignUpPage />} />
-        {/* A protected address reached without a session goes to the login, which then
-            returns you to it. Anything else was never a page. */}
-        <Route path="/panel" element={<RedirectToSignIn />} />
-        <Route path="/cuentas" element={<RedirectToSignIn />} />
-        <Route path="/historial" element={<RedirectToSignIn />} />
-        <Route path="/cuentas/:id" element={<RedirectToSignIn />} />
-        <Route path="/seguridad" element={<RedirectToSignIn />} />
-        <Route path="/reglas" element={<RedirectToSignIn />} />
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+      <>
+        <Routes>
+          {/* Three public routes. The portada is a page in its own right, and each
+              form has its own URL so either can be linked to or bookmarked. */}
+          <Route path="/" element={<LandingPage />} />
+          <Route path="/entrar" element={<SignInPage />} />
+          <Route path="/registro" element={<SignUpPage />} />
+          {/* A signed-in address reached without a session goes to the sign-in form,
+              which then returns you to it. */}
+          {[...PROTECTED_PATHS, ...OLD_PATHS].map((path) => (
+            <Route key={path} path={path} element={<RedirectToSignIn />} />
+          ))}
+          <Route path="*" element={<NotFoundPage public />} />
+        </Routes>
+        <Toaster />
+      </>
     )
   }
 
+  // Until the chunk is in, the screen stays the one the session restore showed: no
+  // bars without a page, no flash.
   return (
-    <AppShell>
-      <Routes>
-        {/* The summary lives at /panel rather than at /, leaving the root free for a
-            public page. A route that meant "the marketing site" or "your accounts"
-            depending on a cookie could not be linked to. */}
-        <Route path="/panel" element={<DashboardPage />} />
-        <Route path="/cuentas" element={<AccountsPage />} />
-        <Route path="/historial" element={<HistoryPage />} />
-        <Route path="/cuentas/:id" element={<AccountPage />} />
-        <Route path="/seguridad" element={<SecurityPage />} />
-        <Route path="/reglas" element={<RulesPage />} />
-        <Route path="/" element={<Navigate to="/panel" replace />} />
-        {/* Somebody who signed in from the login page lands on their accounts rather
-            than on a form they no longer need. */}
-        <Route path="/entrar" element={<Navigate to="/panel" replace />} />
-        <Route path="/registro" element={<Navigate to="/panel" replace />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
-    </AppShell>
+    <Suspense fallback={<RestoringSession />}>
+      <SignedInApp />
+    </Suspense>
   )
 }
 
 /**
- * RedirectToSignIn sends an unauthenticated visitor to the login, remembering where
- * they were headed so a session that expires mid-navigation returns them there instead
- * of dumping them on the dashboard.
+ * Sends a visitor without a session to the sign-in form, remembering where they were
+ * headed so a session that expires mid-navigation returns them there instead of to
+ * Inicio.
  */
 function RedirectToSignIn() {
   const location = useLocation()
   return (
-    <Navigate to="/entrar" replace state={{ from: location.pathname + location.search }} />
+    <Navigate
+      to="/entrar"
+      replace
+      state={{ from: location.pathname + location.search + location.hash }}
+    />
   )
 }
 
 function RestoringSession() {
   return (
-    <div className="flex min-h-dvh items-center justify-center bg-paper">
-      <div className="flex flex-col items-center gap-3">
-        <Wordmark className="h-4 text-ink" />
+    <div className="flex min-h-dvh items-center justify-center bg-background px-4">
+      <div className="flex flex-col items-center gap-4">
+        <Isotipo size={56} title={null} />
         {/* Announced rather than only drawn, so the wait is not silent to a screen
             reader. */}
-        <p className="type-eyebrow" role="status">
-          Restaurando sesión
+        <p role="status" className="text-small font-medium text-muted-foreground">
+          Abriendo tu chenchén…
         </p>
       </div>
-    </div>
-  )
-}
-
-function NotFound() {
-  return (
-    <div className="mx-auto max-w-lg py-20 text-center">
-      <p className="type-eyebrow">Error 404</p>
-      <h1 className="type-display mt-2 text-2xl">Esta página no existe</h1>
-      <p className="mt-2 text-ink-soft">
-        Revisa la dirección, o vuelve al resumen de tus cuentas.
-      </p>
-      <Button asChild variant="outline" className="mt-5">
-        <a href="/panel">Ir al resumen</a>
-      </Button>
     </div>
   )
 }

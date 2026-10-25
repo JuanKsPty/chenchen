@@ -4,15 +4,16 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Handler serves the account endpoints, all scoped to the authenticated user.
@@ -297,6 +298,19 @@ type View struct {
 	Drift     *DriftView    `json:"drift,omitempty"`
 	Movements int           `json:"movements"`
 	LastDay   civil.Date    `json:"last_day"`
+	// Statement is a card's latest statement, when the owner has entered one
+	// with its due date.
+	Statement *CardStatementView `json:"statement,omitempty"`
+	// LastSyncedAt is a brokerage account's last successful IBKR sync.
+	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+}
+
+// CardStatementView is a CardStatement on the wire. DueOn and MinimumPayment
+// are always present, null when unknown.
+type CardStatementView struct {
+	ClosingOn      civil.Date    `json:"closing_on"`
+	DueOn          *civil.Date   `json:"due_on"`
+	MinimumPayment *money.Amount `json:"minimum_payment"`
 }
 
 // DriftView is a Drift on the wire.
@@ -313,7 +327,14 @@ func NewView(a Account) View {
 	v := View{
 		ID: a.ID, Class: a.Class, Type: a.Type, Institution: a.Institution, ExternalNumber: a.ExternalNumber,
 		DisplayName: a.DisplayName, Alias: a.Alias, Currency: a.Currency, Balance: a.Balance.Amount(),
-		Anchored: a.Anchored, Movements: a.Movements, LastDay: a.LastDay,
+		Anchored: a.Anchored, Movements: a.Movements, LastDay: a.LastDay, LastSyncedAt: a.LastSyncedAt,
+	}
+	if st := a.Statement; st != nil {
+		v.Statement = &CardStatementView{ClosingOn: st.ClosingOn, DueOn: st.DueOn}
+		if st.MinimumPayment != nil {
+			m := st.MinimumPayment.Amount()
+			v.Statement.MinimumPayment = &m
+		}
 	}
 	if a.Class == "liability" {
 		owed := (-a.Balance).Amount()

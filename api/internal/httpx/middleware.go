@@ -13,7 +13,7 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
 )
 
 type requestIDKey struct{}
@@ -128,7 +128,7 @@ func Recoverer(next http.Handler) http.Handler {
 // mapper something to wrap.
 var errPanic = &Error{
 	Status: http.StatusInternalServerError, Code: "internal_error",
-	Message: "Ocurrió un error inesperado. Inténtalo de nuevo.",
+	Message: "Algo falló de nuestro lado. Tus datos están bien; intenta otra vez en un momento.",
 }
 
 // SecurityHeaders sets the headers that are cheap and unconditionally correct

@@ -1,15 +1,20 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react'
 
 /**
- * The appearance preference, owned above the layout the same way the
- * assistant's docking preference is (`AssistantProvider.tsx`) — a durable
- * choice about how somebody wants to read their own statement, not view
- * state that resets on navigation.
+ * The appearance preference (Claro, Oscuro or Sistema), owned above the router
+ * so the landing page and the sign-in form follow it too. It is a durable
+ * choice, set in Ajustes, not view state that resets on navigation.
  *
- * The inline script in `index.html` already applied `.dark` (or not) before
- * React ever mounted, so the first render here never has to guess — this
- * provider's job is to keep that class correct as the choice or the OS
- * preference changes afterward, not to set it for the first time.
+ * The inline script in `index.html` already applied `.dark` (or not) and the
+ * matching `<meta name="theme-color">` before React mounted, so the first
+ * render never has to guess. This provider keeps both correct as the choice or
+ * the OS preference changes afterwards. The storage key must stay identical
+ * to that script's.
+ *
+ *   const { theme, setTheme, resolvedTheme } = useTheme()
+ *   theme          'light' | 'dark' | 'system' (Claro, Oscuro, Sistema; THEME_LABEL)
+ *   setTheme(t)    stores it under `chenchen.theme` and applies it at once
+ *   resolvedTheme  'light' | 'dark', what is painted right now
  */
 
 export type Theme = 'light' | 'dark' | 'system'
@@ -20,8 +25,8 @@ const THEME_CYCLE: Record<Theme, Theme> = {
   system: 'light',
 }
 
-/** Claro → Oscuro → Sistema → Claro, for the single button that replaced the
- * old three-option Ajustes page — one click, one step forward. */
+/** Claro, then Oscuro, then Sistema, then Claro again: one click, one step
+ * forward, for a single toggle button. Ajustes uses `setTheme` directly. */
 export function nextTheme(theme: Theme): Theme {
   return THEME_CYCLE[theme]
 }
@@ -41,7 +46,7 @@ interface ThemeContextValue {
   resolvedTheme: 'light' | 'dark'
 }
 
-const THEME_KEY = 'corebank.theme'
+const THEME_KEY = 'chenchen.theme'
 
 /** Reads the stored preference, defaulting to following the OS. */
 function readTheme(): Theme {
@@ -57,8 +62,8 @@ function readTheme(): Theme {
   }
 }
 
-/** Tracks the OS preference live, for "Sistema" — switching your whole
- * machine to dark at dusk should not need a second toggle inside corebank. */
+/** Tracks the OS preference live, for "Sistema": switching the whole machine
+ * to dark at dusk should not need a second toggle inside the app. */
 function useSystemPrefersDark(): boolean {
   const [prefersDark, setPrefersDark] = useState(
     () => window.matchMedia('(prefers-color-scheme: dark)').matches,
@@ -90,7 +95,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     theme === 'system' ? (systemPrefersDark ? 'dark' : 'light') : theme
 
   useEffect(() => {
-    document.documentElement.classList.toggle('dark', resolvedTheme === 'dark')
+    const root = document.documentElement
+    root.classList.toggle('dark', resolvedTheme === 'dark')
+    // The browser chrome follows the page background of the mode in use, read
+    // from the token so the colour lives in styles.css only.
+    const background = getComputedStyle(root).getPropertyValue('--background').trim()
+    if (background) {
+      document
+        .querySelector('meta[name="theme-color"]')
+        ?.setAttribute('content', background)
+    }
   }, [resolvedTheme])
 
   const setTheme = useCallback((value: Theme) => {

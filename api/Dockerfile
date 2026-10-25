@@ -1,5 +1,5 @@
 # =============================================================================
-# corebank API
+# chenchén API
 #
 # A static Go binary: nothing in the API needs cgo, so it builds with
 # CGO_ENABLED=0 and runs on any base. The race detector in CI is the only thing
@@ -33,7 +33,7 @@ FROM alpine:3.22
 # `curl --fail http://127.0.0.1:8080/healthz`; it stays so the image and that
 # file can change independently.
 RUN apk add --no-cache ca-certificates curl \
- && adduser -S -u 10001 -H corebank
+ && adduser -S -u 10001 -H chenchen
 
 WORKDIR /app
 
@@ -41,7 +41,7 @@ COPY --from=build /out/api      /usr/local/bin/api
 COPY --from=build /out/ibkrsync /usr/local/bin/ibkrsync
 COPY --from=build /out/import   /usr/local/bin/import
 
-USER corebank
+USER chenchen
 
 EXPOSE 8080
 

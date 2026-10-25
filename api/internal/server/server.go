@@ -18,19 +18,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/auth"
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/chat"
-	"github.com/JuanKsPty/corebank/api/internal/config"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/imports"
-	"github.com/JuanKsPty/corebank/api/internal/investments"
-	"github.com/JuanKsPty/corebank/api/internal/movements"
-	"github.com/JuanKsPty/corebank/api/internal/proposals"
-	"github.com/JuanKsPty/corebank/api/internal/reports"
-	"github.com/JuanKsPty/corebank/api/internal/rules"
-	"github.com/JuanKsPty/corebank/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/auth"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/chat"
+	"github.com/JuanKsPty/chenchen/api/internal/config"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/imports"
+	"github.com/JuanKsPty/chenchen/api/internal/investments"
+	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/proposals"
+	"github.com/JuanKsPty/chenchen/api/internal/reports"
+	"github.com/JuanKsPty/chenchen/api/internal/rules"
+	"github.com/JuanKsPty/chenchen/api/internal/transfers"
 )
 
 // Deps are the collaborators the routing table needs. It grows as features land;
@@ -100,13 +100,13 @@ func NewRouter(d Deps) http.Handler {
 		})
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-			httpx.Fail(w, r, httpx.NotFound("not_found", "El recurso solicitado no existe."))
+			httpx.Fail(w, r, httpx.NotFound("not_found", "No encontramos lo que buscas."))
 		})
 		r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, r, &httpx.Error{
 				Status:  http.StatusMethodNotAllowed,
 				Code:    "method_not_allowed",
-				Message: "El método no está permitido en este recurso.",
+				Message: "Eso no se puede hacer aquí.",
 			})
 		})
 	})

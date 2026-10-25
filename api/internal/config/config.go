@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // Config is the whole configuration of the API process.
@@ -137,7 +137,7 @@ func Load() (Config, error) {
 			CORSOrigins:     list("CORS_ORIGINS", "http://localhost:5173"),
 		},
 		DB: DBConfig{
-			URL:         str("DATABASE_URL", "postgres://corebank:corebank@localhost:5432/corebank?sslmode=disable"),
+			URL:         str("DATABASE_URL", "postgres://chenchen:chenchen@localhost:5432/chenchen?sslmode=disable"),
 			MaxConns:    int32(number("DB_MAX_CONNS", 10, fail)),
 			ConnectWait: duration("DB_CONNECT_WAIT", 30*time.Second, fail),
 		},
@@ -209,8 +209,8 @@ func Load() (Config, error) {
 	}
 
 	// Optional, like the AI key: an empty value leaves the IBKR link feature
-	// disabled rather than failing the boot, since most deployments of this
-	// codebase (the public demo included) will never set it.
+	// disabled rather than failing the boot, since a deployment that never links
+	// a brokerage account has no reason to set it.
 	if raw := strings.TrimSpace(os.Getenv("IBKR_TOKEN_ENCRYPTION_KEY")); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {

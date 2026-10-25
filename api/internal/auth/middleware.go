@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
 )
 
 // Require rejects any request without a valid access token, and puts the verified
@@ -50,12 +50,12 @@ func Require(tokens *TokenIssuer) func(http.Handler) http.Handler {
 func bearerToken(r *http.Request) (string, error) {
 	header := r.Header.Get("Authorization")
 	if header == "" {
-		return "", httpx.Unauthorized("Falta el token de autenticación.")
+		return "", httpx.Unauthorized("Inicia sesión para continuar.")
 	}
 
 	scheme, token, found := strings.Cut(header, " ")
 	if !found || !strings.EqualFold(scheme, "Bearer") || strings.TrimSpace(token) == "" {
-		return "", httpx.Unauthorized("El encabezado Authorization debe ser «Bearer <token>».")
+		return "", httpx.Unauthorized("Tu sesión no es válida. Inicia sesión de nuevo.")
 	}
 	return strings.TrimSpace(token), nil
 }

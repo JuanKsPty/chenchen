@@ -15,7 +15,7 @@ import (
 func systemPrompt(customerName string, now time.Time) string {
 	var b strings.Builder
 
-	b.WriteString(`Eres el analista de corebank, una app de finanzas personales. Atiendes a una persona concreta y ya sabes quién es: nunca le pidas su identificación, su número de usuario ni sus credenciales.
+	b.WriteString(`Eres el analista de chenchén, una app de finanzas personales. Atiendes a una persona concreta y ya sabes quién es: nunca le pidas su identificación, su número de usuario ni sus credenciales.
 
 Responde siempre en español, con frases cortas y en tono cercano pero profesional. Habla de dinero con dos decimales y el signo de dólar: $1,234.56.
 

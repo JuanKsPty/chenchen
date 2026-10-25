@@ -2,18 +2,21 @@ package statement
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
+	"regexp"
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/JuanKsPty/corebank/api/internal/civil"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // maxUploadSize bounds a statement upload. A year of movements from one bank
-// is a few hundred KB.
+// is a few hundred KB. UploadTooLarge names this limit to the person.
 const maxUploadSize = 20 << 20
 
 // Handler serves the statement endpoints that need no database.
@@ -36,33 +39,80 @@ func (h *Handler) Routes() http.Handler {
 func (h *Handler) DryRun(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
 	if err := r.ParseMultipartForm(maxUploadSize); err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("upload_too_large_or_malformed",
-			"El archivo es demasiado grande o la petición no es un formulario multipart válido."))
+		httpx.Fail(w, r, UploadTooLarge().WithCause(err))
 		return
 	}
 	file, header, err := r.FormFile("file")
 	if err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("missing_file", "Falta el campo \"file\" con el archivo a revisar."))
+		httpx.Fail(w, r, MissingFile().WithCause(err))
 		return
 	}
 	defer file.Close()
 	data, err := io.ReadAll(file)
 	if err != nil {
-		httpx.Fail(w, r, httpx.BadRequest("upload_unreadable", "No se pudo leer el archivo."))
+		httpx.Fail(w, r, UploadUnreadable().WithCause(err))
 		return
 	}
 
 	parsed, err := Parse(header.Filename, data)
 	if err != nil {
-		if errors.Is(err, ErrUnrecognised) {
-			httpx.Fail(w, r, httpx.Unprocessable("unrecognised_format",
-				"El archivo no corresponde a ningún formato soportado (Banco General cuenta o tarjeta, BAC)."))
-			return
-		}
-		httpx.Fail(w, r, httpx.Unprocessable("unreadable_statement", err.Error()).WithCause(err))
+		LogParseProblem(r, err)
+		httpx.Fail(w, r, ParseProblem(err))
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, NewFileView(parsed))
+}
+
+// The problems an upload can run into, shared by the dry run and the import so
+// both say the same thing. The codes are what the interface branches on; the
+// messages are for the person, so they name no format, field or bank. What
+// actually went wrong is kept as the cause, for the log.
+
+// UploadTooLarge is a body that is over the limit or not a form at all.
+func UploadTooLarge() *httpx.Error {
+	return httpx.BadRequest("upload_too_large_or_malformed",
+		"No pudimos recibir el archivo. Revisa que pese menos de 20 MB y súbelo otra vez.")
+}
+
+// MissingFile is a form with no file in it.
+func MissingFile() *httpx.Error {
+	return httpx.BadRequest("missing_file", "Elige el archivo de tu estado de cuenta.")
+}
+
+// UploadUnreadable is a file that arrived but could not be read.
+func UploadUnreadable() *httpx.Error {
+	return httpx.BadRequest("upload_unreadable", "No pudimos leer el archivo. Elígelo otra vez.")
+}
+
+// lineNo finds the line a parser error points at. Every parser names it the
+// same way ("line 8"), and it is the one part of a parser's message worth
+// passing on.
+var lineNo = regexp.MustCompile(`\bline (\d+)\b`)
+
+// ParseProblem turns a Parse failure into what the person reads. The parser's
+// own message is technical and in English, so it stays in the log
+// (LogParseProblem); the person is told which line, when there is one, and what
+// to do about it.
+func ParseProblem(err error) *httpx.Error {
+	if errors.Is(err, ErrUnrecognised) {
+		return httpx.Unprocessable("unrecognised_format",
+			"No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt o .xlsx).").
+			WithCause(err)
+	}
+	msg := "El archivo tiene un formato que no reconocemos. Descárgalo otra vez de tu banco y súbelo sin abrirlo ni editarlo."
+	if m := lineNo.FindStringSubmatch(err.Error()); m != nil {
+		msg = fmt.Sprintf("La línea %s del archivo tiene un formato que no reconocemos. "+
+			"Descárgalo otra vez de tu banco y súbelo sin abrirlo ni editarlo.", m[1])
+	}
+	return httpx.Unprocessable("unreadable_statement", msg).WithCause(err)
+}
+
+// LogParseProblem records the parser's own message at warn. httpx.Fail logs a
+// 4xx's cause only at debug, which the default LOG_LEVEL drops, and this message
+// is what it takes to fix a parser against a real statement: nothing else keeps
+// it, since a file that cannot be read records no import run.
+func LogParseProblem(r *http.Request, err error) {
+	logging.FromContext(r.Context()).Warn("statement unreadable", "error", err)
 }
 
 // FileView is a parsed file as the API reports it.

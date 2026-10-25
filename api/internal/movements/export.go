@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // kindNames are the kinds as a Spanish reader of the file expects them.
@@ -32,7 +32,7 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	for _, raw := range r.URL.Query()["account_id"] {
 		id, err := uuid.Parse(raw)
 		if err != nil {
-			httpx.Fail(w, r, httpx.BadRequest("invalid_account", "account_id no es válido."))
+			httpx.Fail(w, r, httpx.BadRequest("invalid_account", "Esa cuenta no existe."))
 			return
 		}
 		q.AccountIDs = append(q.AccountIDs, id)

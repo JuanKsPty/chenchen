@@ -15,6 +15,35 @@ import type { CheckpointInput, EntryPatch, EntryQuery, RuleInput } from '@/api/e
  * — an import, a sync, a stated balance, a movement relabelled as a transfer —
  * invalidates everything that shows money. A total still showing the previous
  * figure is not a stale cache, it is a wrong number about somebody's money.
+ *
+ * Hooks (frozen at the F gate; a page that needs another one defines it locally
+ * with useQuery, an api/endpoints function and one of these key prefixes):
+ *
+ *   accounts      useMe · useAccounts · useAccount(id) · useUpdateAccount(id)
+ *                 ({alias?, type?: 'checking'|'savings'}) · useDeleteAccount()(id)
+ *   checkpoints   useCheckpoints(accountId) · useAddCheckpoint(accountId) ·
+ *                 useDeleteCheckpoint(accountId)(checkpointId) ·
+ *                 usePinCheckpoint(accountId)(checkpointId | null) ·
+ *                 useReconciliation(accountId, {enabled?})
+ *   movements     useEntries(query): one page · useEntryPages(query without cursor):
+ *                 infinite, "Ver más" = fetchNextPage, a new query resets the pages ·
+ *                 useUpdateEntry()({id, patch})
+ *   imports       useImportStatement()({file, accountId?}) · useDryRunStatement()(file) ·
+ *                 useImportRuns(accountId)
+ *   investments   useInvestmentLink(accountId, {enabled?}) · useLinkIBKR ·
+ *                 useRelinkIBKR(accountId) · useSyncInvestmentAccount(accountId) ·
+ *                 usePortfolio(accountId, {enabled?}) · useInvestmentTrades(accountId,
+ *                 {enabled?}) (the last 20)
+ *   reports       useCategoryTotals({from?, to?, kind?: 'spend'|'income'}) ·
+ *                 useFlow({from?, to?, granularity?: 'day'|'month'})
+ *   transfers     useTransferSuggestions · useDecideTransfer
+ *   rules         useRules · useSaveRule()({id?, input}) · useDeleteRule()(id)
+ *   assistant     useProposals · useDecideProposal()({id, apply}) · useChatHistory ·
+ *                 useClearChat
+ *   PIN           useSecurityStatus · useSetPin · useRemovePin · useEnableDeviceForPin ·
+ *                 useDisableDeviceForPin
+ *   categories    useCategories (the tree: data.categories)
+ *   any           useMoneyInvalidation(): refreshes every money key below
  */
 
 export const keys = {
@@ -36,21 +65,33 @@ export const keys = {
   transfers: ['transfer-suggestions'] as const,
 }
 
-/** Invalidates everything that displays money. */
-function useMoneyInvalidation() {
+/**
+ * Every query-key prefix that shows money or what it means: balances, movements,
+ * the spending and flow reports, an account's reconciliation, and the transfers
+ * waiting for a yes or no. Recategorizing a movement shrinks "Sin categoría";
+ * confirming a transfer takes it off the list; an import changes all of them.
+ */
+const MONEY_KEYS = [
+  'me',
+  'accounts',
+  'account',
+  'checkpoints',
+  'entries',
+  'import-runs',
+  'portfolio',
+  'reports',
+  'reconciliation',
+  keys.transfers[0],
+] as const
+
+/**
+ * Invalidates everything that displays money. Every mutation that changes money
+ * already calls it; use it directly only for a change made outside these hooks.
+ */
+export function useMoneyInvalidation() {
   const queryClient = useQueryClient()
   return () =>
-    Promise.all(
-      [
-        'me',
-        'accounts',
-        'account',
-        'checkpoints',
-        'entries',
-        'import-runs',
-        'portfolio',
-      ].map((key) => queryClient.invalidateQueries({ queryKey: [key] })),
-    )
+    Promise.all(MONEY_KEYS.map((key) => queryClient.invalidateQueries({ queryKey: [key] })))
 }
 
 // --- accounts ---------------------------------------------------------------
@@ -76,11 +117,33 @@ export function useUpdateAccount(id: string) {
   })
 }
 
+/**
+ * Deletes an account. The caller leaves the account's page in its own onSuccess
+ * (`mutate(id, { onSuccess: () => navigate(…) })`), which runs right after this
+ * one: the deleted account's own queries are dropped first, and the refresh of
+ * everything else is not awaited. Awaiting it would refetch the account the page
+ * is still showing, and its 404 would replace the page (and unmount the dialog)
+ * before the caller's navigation and toast ever ran.
+ */
 export function useDeleteAccount() {
+  const queryClient = useQueryClient()
   const invalidate = useMoneyInvalidation()
   return useMutation({
     mutationFn: (id: string) => api.deleteAccount(id),
-    onSuccess: invalidate,
+    onSuccess: (_data, id) => {
+      for (const key of [
+        keys.account(id),
+        keys.checkpoints(id),
+        keys.reconciliation(id),
+        keys.importRuns(id),
+        keys.investmentLink(id),
+        keys.portfolio(id),
+        keys.investmentTrades(id),
+      ]) {
+        queryClient.removeQueries({ queryKey: key, exact: true })
+      }
+      void invalidate()
+    },
   })
 }
 
@@ -267,9 +330,20 @@ export function useTransferSuggestions() {
   return useQuery({ queryKey: keys.transfers, queryFn: api.fetchTransferSuggestions })
 }
 
+/**
+ * Confirms or rejects a suggested transfer. Either way the suggestion leaves the
+ * list, and a confirmed one changes spending, so both refresh.
+ */
 export function useDecideTransfer() {
+  const queryClient = useQueryClient()
   const invalidate = useMoneyInvalidation()
-  return useMutation({ mutationFn: api.decideTransfer, onSuccess: invalidate })
+  return useMutation({
+    mutationFn: api.decideTransfer,
+    onSuccess: () => {
+      void queryClient.invalidateQueries({ queryKey: keys.transfers })
+      void invalidate()
+    },
+  })
 }
 
 // --- rules ---------------------------------------------------------------------

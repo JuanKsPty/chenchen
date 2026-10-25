@@ -2,178 +2,339 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
-/* The `dark` variant is bound to a `.dark` ancestor rather than left on Tailwind's
-   default of `prefers-color-scheme`, because the choice is the customer's — set from
-   the theme toggle in the account menu, or "Sistema" tracking their OS — not the
-   browser's alone. See `src/lib/theme.tsx` for where `.dark` actually gets applied
-   to `<html>`. */
+/* The `dark` variant follows a `.dark` class on <html>, not the browser's
+   `prefers-color-scheme` alone: the choice is the person's (Claro, Oscuro or
+   Sistema in Ajustes). `src/lib/theme.tsx` and the inline script in index.html
+   are what put the class there. */
 @custom-variant dark (&:is(.dark *));
 
 /* ===========================================================================
    Typefaces, served from the app itself.
    ---------------------------------------------------------------------------
-   Self-hosted rather than loaded from a font CDN, because the whole stack has to
-   come up from a clean clone with `docker compose up` — including on a machine
-   with no internet, where a CDN would silently drop the design to system fonts.
-   225 KB for both families, subset to latin and latin-ext.
+   Self-hosted so the stack still comes up with no internet. Both are variable
+   fonts, one file per subset, about 77 KB for all four files.
 
-   Archivo is variable on two axes and both are used: the width axis carries the
-   display hierarchy, so large amounts are set expanded — the proportions of
-   engraved banknote lettering — while body text stays at normal width.
+   Gabarito (700, 800) is the display face: wordmark, page and section titles,
+   sheet and panel titles, the big figures and the PIN digits. It is never used
+   below 22px or for running text. Figtree (400 to 600) is everything else.
+
+   The file names are new on purpose. nginx serves /fonts as immutable for a
+   year and the names carry no hash, so a file is never replaced in place.
    =========================================================================== */
 
 @font-face {
-  font-family: 'Archivo';
+  font-family: 'Figtree';
   font-style: normal;
-  font-weight: 400 700;
-  font-stretch: 62% 125%;
+  font-weight: 400 600;
   font-display: swap;
-  src: url('/fonts/archivo-latin.woff2') format('woff2');
+  src: url('/fonts/figtree-latin.woff2') format('woff2');
   unicode-range:
     U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
     U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-  font-family: 'Archivo';
+  font-family: 'Figtree';
   font-style: normal;
-  font-weight: 400 700;
-  font-stretch: 62% 125%;
+  font-weight: 400 600;
   font-display: swap;
-  src: url('/fonts/archivo-latin-ext.woff2') format('woff2');
+  src: url('/fonts/figtree-latin-ext.woff2') format('woff2');
   unicode-range:
     U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
-    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113,
     U+2C60-2C7F, U+A720-A7FF;
 }
-
 @font-face {
-  font-family: 'Spline Sans Mono';
+  font-family: 'Gabarito';
   font-style: normal;
-  font-weight: 400 600;
+  font-weight: 700 800;
   font-display: swap;
-  src: url('/fonts/spline-mono-latin.woff2') format('woff2');
+  src: url('/fonts/gabarito-latin.woff2') format('woff2');
   unicode-range:
     U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308,
     U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
 }
 @font-face {
-  font-family: 'Spline Sans Mono';
+  font-family: 'Gabarito';
   font-style: normal;
-  font-weight: 400 600;
+  font-weight: 700 800;
   font-display: swap;
-  src: url('/fonts/spline-mono-latin-ext.woff2') format('woff2');
+  src: url('/fonts/gabarito-latin-ext.woff2') format('woff2');
   unicode-range:
     U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329,
-    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113,
+    U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C4, U+2113,
     U+2C60-2C7F, U+A720-A7FF;
 }
 
 /* ===========================================================================
-   Tokens.
+   Colour tokens, raw values per mode.
    ---------------------------------------------------------------------------
-   The palette comes from ledger paper and ink rather than from fintech
-   convention: a deep teal-black for chrome and headings, warm paper for
-   surfaces, and a ruling colour that draws the column rules a paper ledger has.
+   The shadcn names keep their shadcn meaning, so every ui/* component reads
+   them unchanged. Note that `--accent` is shadcn's hover surface, not the brand
+   colour: the brand (veranera) lives under `--primary-*`.
 
-   Two semantic colours carry meaning nothing else may use. `hold` is reserved
-   funds — money that has left the available balance but not arrived anywhere,
-   which is a state this ledger has and most banking interfaces cannot express.
-   `credit` is money coming in. An outflow is deliberately NOT red: on your own
-   statement, spending is not an error.
+   - primary            veranera fill, the same in both modes, always with white
+   - primary-hover      the primary button on hover
+   - primary-text       veranera for text, links, ghost buttons and the focus
+                        colour's partner (primary on primary-soft is below 4.5)
+   - primary-soft       user bubble, tonal Asistente, active tab pill, filter
+                        chip with a value
+   - muted / secondary / input   surface2: inputs, chips, secondary buttons,
+                        PIN keys, proposal cards
+   - positive(-soft)    money in, "Cuadra", "Aplicado"
+   - attention(-soft)   only "No cuadra" and real errors. Never an outflow and
+                        never a destructive action. `--destructive` points here
+                        for invalid fields and error text.
+   - inverse            toast, open Asistente, the destructive button
+   - raised             a popover's surface: the card colour in light; in dark one
+                        surface step up (surface2), since a popover often opens over
+                        a card or sheet of the card colour and only a step shows.
+                        Controls inside it step up once more (raised-control), so a
+                        field or a secondary button keeps its shape.
+   - line               the 1px divider inside menus and the secondary hover;
+                        nothing else draws a line
+   - scrim              behind sheets, dialogs and the overlay panel
+   - chart-1 entradas, chart-2 (chart-out) salidas, chart-3 category bars,
+     chart-5 the bar track
 
-   Every one of these is overridden for `.dark` below, at the same relative
-   contrast against its background the light values hold today — this is a
-   second edition of the same ledger, not a different palette. `--color-chrome`
-   and `--color-chrome-foreground` are the one exception: the sidebar is "the
-   product's mark, not a theme" (see Sidebar.tsx), so it stays the same ink-on-
-   paper pairing in both modes rather than inverting with everything else.
+   Inline SVG and style attributes should read these raw names
+   (`var(--primary)`), not `--color-*`: the `@theme inline` block below only
+   inlines them into utilities.
+   =========================================================================== */
+
+:root {
+  color-scheme: light;
+
+  --background: #fcf8f8;
+  --foreground: #1f171a;
+  --card: #ffffff;
+  --card-foreground: #1f171a;
+  --popover: #ffffff;
+  --popover-foreground: #1f171a;
+
+  --primary: #cd2484;
+  --primary-foreground: #ffffff;
+  --primary-hover: #b11270;
+  --primary-text: #ac136d;
+  --primary-soft: #ffe2ee;
+
+  --secondary: #f4eef1;
+  --secondary-foreground: #1f171a;
+  --muted: #f4eef1;
+  --muted-foreground: #63575c;
+  --accent: #f4eef1;
+  --accent-foreground: #1f171a;
+  --input: #f4eef1;
+
+  --positive: #0b7643;
+  --positive-soft: #dff8e6;
+  --attention: #ae4900;
+  --attention-foreground: #ffffff;
+  --attention-soft: #ffecd8;
+  --destructive: var(--attention);
+
+  --inverse: #1f171a;
+  --inverse-foreground: #ffffff;
+
+  --raised: #ffffff;
+  --raised-control: #f4eef1;
+
+  --line: #e7e1e4;
+  --border: var(--line);
+  --ring: #cd2484;
+  --scrim: rgb(31 23 26 / 0.48);
+
+  --chart-1: var(--positive);
+  --chart-2: #1f171a;
+  --chart-3: var(--primary);
+  --chart-4: var(--muted-foreground);
+  --chart-5: var(--muted);
+
+  /* The one container radius. Everything touchable is a pill (rounded-full). */
+  --radius: 1rem;
+
+  --elev-card: 0 1px 2px rgb(31 23 26 / 0.06), 0 8px 24px -12px rgb(31 23 26 / 0.16);
+  --elev-raised: 0 2px 6px rgb(31 23 26 / 0.08), 0 24px 48px -16px rgb(31 23 26 / 0.24);
+  --elev-bar: 0 0 24px -8px rgb(31 23 26 / 0.18);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #150e11;
+  --foreground: #f7f2f4;
+  --card: #1f171a;
+  --card-foreground: #f7f2f4;
+  --popover: #1f171a;
+  --popover-foreground: #f7f2f4;
+
+  --primary: #cd2484;
+  --primary-foreground: #ffffff;
+  --primary-hover: #b11270;
+  --primary-text: #ff96c7;
+  --primary-soft: #4c1e34;
+
+  --secondary: #2c2226;
+  --secondary-foreground: #f7f2f4;
+  --muted: #2c2226;
+  --muted-foreground: #a89ca1;
+  --accent: #2c2226;
+  --accent-foreground: #f7f2f4;
+  --input: #2c2226;
+
+  --positive: #66d592;
+  --positive-soft: #143320;
+  --attention: #f99f55;
+  --attention-foreground: #241005;
+  --attention-soft: #44250c;
+
+  --inverse: #f7f2f4;
+  --inverse-foreground: #1f171a;
+
+  --raised: #2c2226;
+  --raised-control: #362e31;
+
+  --line: #362e31;
+  --ring: #ff96c7;
+  --scrim: rgb(0 0 0 / 0.6);
+
+  --chart-2: #73686d;
+
+  --elev-card: inset 0 1px 0 rgb(255 255 255 / 0.04), 0 8px 24px -12px rgb(0 0 0 / 0.6);
+  --elev-raised: inset 0 1px 0 rgb(255 255 255 / 0.06), 0 24px 48px -12px rgb(0 0 0 / 0.7);
+  --elev-bar: 0 0 24px -8px rgb(0 0 0 / 0.6);
+}
+
+/* ===========================================================================
+   Theme: fonts, type scale and motion.
+   ---------------------------------------------------------------------------
+   Six sizes and no others: text-display, text-title, text-heading, text-body,
+   text-small, text-micro. Each carries its line height (and tracking where the
+   spec sets one). Pair the top three with `font-display`:
+     display  48/52  Gabarito 800  patrimonio, landing headline
+     title    32/36  Gabarito 700  desktop h1, account balance (800 for figures)
+     heading  22/28  Gabarito 700  section, card, sheet and panel titles
+     body     16/24  Figtree 400 text, 500 rows, 600 buttons, tabs and amounts
+     small    14/20  Figtree 500 metadata, 600 chips, filters and day headings
+     micro    12/16  Figtree 600 tab bar labels, chart axes, proposal type only
    =========================================================================== */
 
 @theme {
-  --color-ink: #0e2a26;
-  --color-paper: #fbf9f5;
-  --color-rule: #dad5c9;
-  --color-copper: #a8531f;
-  --color-hold: #b98a1f;
-  --color-credit: #2c6a5b;
+  --font-sans: 'Figtree', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-display:
+    'Gabarito', ui-rounded, 'SF Pro Rounded', system-ui, -apple-system, sans-serif;
 
-  /* Surfaces derived from the two grounds, so everything stays in one family. */
-  --color-paper-raised: #ffffff;
-  --color-paper-sunken: #f4f1ea;
-  --color-ink-soft: #3d5f59;
-  --color-ink-faint: #7e938f;
+  --text-display: 3rem;
+  --text-display--line-height: 3.25rem;
+  --text-display--letter-spacing: -0.02em;
+  --text-display--font-weight: 800;
+  --text-title: 2rem;
+  --text-title--line-height: 2.25rem;
+  --text-title--letter-spacing: -0.01em;
+  --text-heading: 1.375rem;
+  --text-heading--line-height: 1.75rem;
+  --text-body: 1rem;
+  --text-body--line-height: 1.5rem;
+  --text-small: 0.875rem;
+  --text-small--line-height: 1.25rem;
+  --text-micro: 0.75rem;
+  --text-micro--line-height: 1rem;
+  --text-micro--letter-spacing: 0.01em;
 
-  /* The one place the interface does use alarm colour: a rejected movement, an
-     invalid field. Tokenised here because it was previously the same three hex
-     values copied across five files, which is how a palette drifts. */
-  --color-danger: #a4342a;
-  --color-danger-text: #8f2d24;
-  /* A darkened `hold`, for text that has to meet contrast on a pale amber band. */
-  --color-hold-text: #8a6516;
+  /* Sheets and the assistant panel: 280ms on this curve. Hovers and pills use
+     180ms ease-out (`duration-180 ease-out`). */
+  --ease-sheet: cubic-bezier(0.2, 0.8, 0.2, 1);
 
-  /* Fixed, not themed: the sidebar's ink-on-paper never inverts. See the note
-     above. */
-  --color-chrome: #0e2a26;
-  --color-chrome-foreground: #fbf9f5;
+  /* The PIN pad's wrong-PIN shake, 300ms. Under reduced motion the base layer
+     cuts it to nothing, and its `!important` also beats any `motion-reduce:`
+     utility (an earlier layer wins for important declarations), so a fallback
+     fade has to run from script: PinPad uses element.animate(). */
+  --animate-shake: shake 300ms cubic-bezier(0.36, 0.07, 0.19, 0.97) both;
 
-  --font-sans: 'Archivo', ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'Spline Sans Mono', ui-monospace, 'SF Mono', Menlo, monospace;
-
-  --radius-card: 6px;
-
-  --ease-out-soft: cubic-bezier(0.22, 0.61, 0.36, 1);
-
-  /* Tailwind's scale stops at 2xl (1536px), which left every viewport from a
-     laptop to a 27-inch display being treated identically. A statement is a wide
-     document and the people who read one all day are on the big screens, so the
-     ladder gets one more rung. */
-  --breakpoint-3xl: 120rem;
+  @keyframes shake {
+    10%,
+    90% {
+      transform: translateX(-1px);
+    }
+    20%,
+    80% {
+      transform: translateX(2px);
+    }
+    30%,
+    50%,
+    70% {
+      transform: translateX(-4px);
+    }
+    40%,
+    60% {
+      transform: translateX(4px);
+    }
+  }
 }
 
-/* The dark edition. Ink and paper swap roles — light text on a deep ground,
-   the same teal-and-parchment family read by lamplight rather than daylight —
-   rather than either flattening to neutral grey or simply inverting lightness.
-   Copper, hold, credit and danger are each lifted a little so they keep the
-   same contrast against the new ground that they held against the old one;
-   see the git history for the contrast ratios checked against each pairing.
+/* Utilities read the raw variables above through these, so they follow
+   `.dark` wherever it is applied. */
+@theme inline {
+  --font-heading: var(--font-display);
 
-   Surfaces and `ink-faint` were tuned again for more separation: the first
-   pass mirrored light mode's own subtle paper/card/well steps too literally
-   — light mode gets a depth cue from shadows that a dark ground can't use,
-   so the same ratio reads as flatter here. `ink-faint` also fell below its
-   own light-mode reference (2.69:1 against a card, when light mode holds
-   3.25:1) — computed with the same WCAG relative-luminance script used
-   elsewhere in this file's history; every text pairing below now clears
-   4.5:1 against both `paper` and `paper-raised` except `copper`, which
-   holds 4.0:1 against a card — still comfortably above the 3:1 floor for
-   an accent/icon colour. */
-.dark {
-  --color-ink: #ede6d9;
-  --color-paper: #0e1b18;
-  --color-rule: #527a6d;
-  --color-copper: #d17a3f;
-  --color-hold: #d9a53a;
-  --color-credit: #4f9484;
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary-hover: var(--primary-hover);
+  --color-primary-text: var(--primary-text);
+  --color-primary-soft: var(--primary-soft);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-input: var(--input);
+  --color-positive: var(--positive);
+  --color-positive-soft: var(--positive-soft);
+  --color-attention: var(--attention);
+  --color-attention-foreground: var(--attention-foreground);
+  --color-attention-soft: var(--attention-soft);
+  --color-destructive: var(--destructive);
+  --color-inverse: var(--inverse);
+  --color-inverse-foreground: var(--inverse-foreground);
+  --color-raised: var(--raised);
+  --color-line: var(--line);
+  --color-border: var(--border);
+  --color-ring: var(--ring);
+  --color-scrim: var(--scrim);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-chart-out: var(--chart-2);
 
-  --color-paper-raised: #213630;
-  --color-paper-sunken: #070e0c;
-  --color-ink-soft: #a8998a;
-  --color-ink-faint: #ab9a8c;
+  /* One radius. Every step of the scale is 16px, so nothing smaller can creep
+     back in through a shadcn default. Pills are `rounded-full`. */
+  --radius-sm: var(--radius);
+  --radius-md: var(--radius);
+  --radius-lg: var(--radius);
+  --radius-xl: var(--radius);
+  --radius-2xl: var(--radius);
+  --radius-3xl: var(--radius);
+  --radius-4xl: var(--radius);
 
-  --color-danger: #e2685a;
-  --color-danger-text: #f2a99e;
-  --color-hold-text: #f0cf8a;
+  --shadow-card: var(--elev-card);
+  --shadow-raised: var(--elev-raised);
+  --shadow-bar: var(--elev-bar);
 }
 
 @layer base {
   * {
-    /* Only where an amount is involved do figures need to line up; setting it
-       globally means a table cannot accidentally opt out. */
+    /* Both faces have proportional digits by default. Every amount, date,
+       account number and PIN digit must line up, so figures are tabular
+       everywhere and nothing can opt out by accident. */
     font-variant-numeric: tabular-nums;
-    /* shadcn's default border colour. Its companion `outline-ring/50` is
-       deliberately NOT applied: the focus ring below is a solid copper outline with
-       an offset, and letting a half-transparent ring win over it would make the
-       keyboard path harder to see on a banking form. */
     @apply border-border;
   }
 
@@ -182,29 +343,25 @@
   }
 
   body {
-    background-color: var(--color-paper);
-    color: var(--color-ink);
-    font-family: var(--font-sans);
-    font-size: 15px;
-    line-height: 1.55;
+    @apply bg-background font-sans text-body text-foreground;
     -webkit-font-smoothing: antialiased;
     text-rendering: optimizeLegibility;
   }
 
-  /* Focus is visible everywhere and never removed. A banking form is exactly
-     where somebody navigates by keyboard. */
+  /* Focus is a solid 2px outline with a 2px gap, everywhere, and follows the
+     element's own shape. Components must not replace it with a ring. */
   :focus-visible {
-    outline: 2px solid var(--color-copper);
+    outline: 2px solid var(--ring);
     outline-offset: 2px;
-    border-radius: 2px;
   }
 
   ::selection {
-    background-color: color-mix(in oklab, var(--color-copper) 22%, transparent);
+    background-color: var(--primary-soft);
+    color: var(--foreground);
   }
 
-  /* Every transition in the interface respects this. Nothing here is decorative
-     enough to be worth overriding somebody's stated preference. */
+  /* Reduced motion: nothing travels, scales or spins. Sheets, dialogs and
+     menus keep a 120ms fade so their arrival is still perceptible. */
   @media (prefers-reduced-motion: reduce) {
     *,
     *::before,
@@ -214,216 +371,32 @@
       transition-duration: 0.01ms !important;
       scroll-behavior: auto !important;
     }
+    [data-state='open'],
+    [data-state='closed'] {
+      --tw-enter-translate-x: 0 !important;
+      --tw-enter-translate-y: 0 !important;
+      --tw-enter-scale: 1 !important;
+      --tw-enter-rotate: 0 !important;
+      --tw-exit-translate-x: 0 !important;
+      --tw-exit-translate-y: 0 !important;
+      --tw-exit-scale: 1 !important;
+      --tw-exit-rotate: 0 !important;
+      animation-duration: 120ms !important;
+    }
   }
+
   button:not(:disabled),
   [role='button']:not(:disabled) {
     cursor: pointer;
   }
-}
 
-@layer components {
-  /* --- type roles --------------------------------------------------------- */
-
-  /* Display: the width axis is what makes this distinct from a heading in any
-     other sans. Used on the greeting and the headline balance only. */
-  .type-display {
-    font-family: var(--font-sans);
-    font-stretch: 116%;
-    font-weight: 600;
-    letter-spacing: -0.02em;
-    line-height: 1.05;
+  /* Inside a popover (bg-raised), whatever is drawn in surface2 (a field, a
+     secondary button, a hover) steps up once more, so it still reads against the
+     raised surface in dark mode. In light both values are surface2 already. */
+  [data-slot='popover-content'] {
+    --input: var(--raised-control);
+    --secondary: var(--raised-control);
+    --muted: var(--raised-control);
+    --accent: var(--raised-control);
   }
-
-  /* The eyebrow above a section. Its job is to name the section quietly, so it
-     is small, spaced and in the faint ink — never competing with the content. */
-  .type-eyebrow {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    font-weight: 500;
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-    color: var(--color-ink-faint);
-  }
-
-  /* Figures: account numbers, dates, and every amount. */
-  .type-figure {
-    font-family: var(--font-mono);
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.01em;
-  }
-
-  /* --- surfaces ---------------------------------------------------------- */
-
-  .card {
-    background-color: var(--color-paper-raised);
-    border: 1px solid var(--color-rule);
-    border-radius: var(--radius-card);
-  }
-
-  /* --- the ledger table -------------------------------------------------- */
-
-  /* Reduced, deliberately, to the two rules that are the product's identity.
-     Everything that used to live here — cell padding, alignment, row borders,
-     the hover — now comes from utilities on the shadcn Table primitives, because
-     Tailwind's utility layer outranks this component layer and having both
-     declare padding meant the winner depended on which file you were reading.
-     What stays is what no generic table component can express: a statement is
-     ruled like the paper ledger it descends from, and the debit and credit sides
-     are divided by a real rule. Every movement has two sides, and only one of
-     them is yours. */
-  .ledger thead th {
-    border-bottom: 1px solid var(--color-ink);
-  }
-  /* The rule that divides the two sides of the account. */
-  .ledger .col-debit {
-    border-left: 1px solid var(--color-rule);
-  }
-
-  /* Nothing else lives in this layer.
-     .btn, .field-label, .field-input, .field-error and .skeleton were here and are
-     gone: button, field, input and skeleton do the same work as components, and they
-     carry the disabled, invalid and focus states plus the aria wiring that the classes
-     left to each call site. What stays is what no component library has an opinion
-     about — the type roles, the paper surface, and the ledger's rules. */
-}
-
-@keyframes pulse {
-  0%,
-  100% {
-    opacity: 1;
-  }
-  50% {
-    opacity: 0.45;
-  }
-}
-
-/* The signature moment: the held segment of the balance bar growing in when the
-   assistant reserves funds. It is the only thing on the page that animates on
-   its own, because it is the only thing that changes without the customer
-   touching it. */
-@keyframes hold-grow {
-  from {
-    transform: scaleX(0);
-  }
-  to {
-    transform: scaleX(1);
-  }
-}
-
-/* ===========================================================================
-   The shadcn layer.
-   ---------------------------------------------------------------------------
-   Everything below is what `shadcn init` generates, with two deliberate
-   departures from its defaults.
-
-   First, its `--font-sans: 'Geist Variable'` is removed. This block is emitted
-   after the `@theme` above, so leaving it would have silently replaced Archivo
-   with Geist everywhere — and the width axis of Archivo is what sets the display
-   type here. `--font-heading` stays and resolves to Archivo, because custom
-   properties are resolved where they are used, not where they are written.
-
-   Second, its neutral OKLCH palette is replaced by a bridge to the tokens above.
-   Tailwind v4 merges `@theme` blocks additively and none of these names collide
-   with `--color-*`, so the two systems coexist: shadcn components read
-   `--primary`/`--border`/`--muted`, those point at copper/rule/sunken, and every
-   component adopts this palette without a single edit to its own file.
-   =========================================================================== */
-
-@theme inline {
-  --font-heading: var(--font-sans);
-  --color-sidebar-ring: var(--sidebar-ring);
-  --color-sidebar-border: var(--sidebar-border);
-  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
-  --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
-  --color-sidebar-foreground: var(--sidebar-foreground);
-  --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
-  --color-ring: var(--ring);
-  --color-input: var(--input);
-  --color-border: var(--border);
-  --color-destructive: var(--destructive);
-  --color-accent-foreground: var(--accent-foreground);
-  --color-accent: var(--accent);
-  --color-muted-foreground: var(--muted-foreground);
-  --color-muted: var(--muted);
-  --color-secondary-foreground: var(--secondary-foreground);
-  --color-secondary: var(--secondary);
-  --color-primary-foreground: var(--primary-foreground);
-  --color-primary: var(--primary);
-  --color-popover-foreground: var(--popover-foreground);
-  --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
-  --color-card: var(--card);
-  --color-foreground: var(--foreground);
-  --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
-  --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
-}
-
-/* The bridge. Each shadcn token points at a corebank one, so `bg-primary`
-   inside a shadcn Button paints copper and `border-border` paints the ruling
-   colour, with no edit to any component file. */
-:root {
-  --background: var(--color-paper);
-  --foreground: var(--color-ink);
-  --card: var(--color-paper-raised);
-  --card-foreground: var(--color-ink);
-  --popover: var(--color-paper-raised);
-  --popover-foreground: var(--color-ink);
-  --primary: var(--color-copper);
-  /* Not a hardcoded white: copper gets brighter in `.dark` to hold its contrast
-     against a dark page, and white text on a brighter copper falls below AA. The
-     page's own ground colour is the pairing that was already verified to work
-     against copper in both editions. */
-  --primary-foreground: var(--color-paper);
-  --secondary: var(--color-paper-sunken);
-  --secondary-foreground: var(--color-ink);
-  --muted: var(--color-paper-sunken);
-  --muted-foreground: var(--color-ink-faint);
-  --accent: var(--color-paper-sunken);
-  --accent-foreground: var(--color-ink);
-  --destructive: var(--color-danger);
-  --border: var(--color-rule);
-  --input: var(--color-rule);
-  --ring: var(--color-copper);
-
-  /* Matches --radius-card, so the `rounded-*` scale shadcn derives from this
-     lands on the 4-6px the hand-written controls already used and nothing jumps. */
-  --radius: 6px;
-
-  /* The sidebar is the one dark surface in the interface, inheriting the role
-     the top band used to play: the ink reads as the product's mark, not as a
-     theme — which is why this points at the fixed `--color-chrome` pair rather
-     than `--color-ink`/`--color-paper`. Those two invert under `.dark`; the
-     sidebar deliberately does not, the same ink-on-paper in both editions. Its
-     accents are mixed from the same fixed foreground so they stay in one
-     family instead of introducing a grey, and instead of drifting toward the
-     page's own (now dark) paper tone. */
-  --sidebar: var(--color-chrome);
-  --sidebar-foreground: var(--color-chrome-foreground);
-  --sidebar-primary: var(--color-copper);
-  --sidebar-primary-foreground: var(--color-chrome-foreground);
-  --sidebar-accent: color-mix(in oklab, var(--color-chrome-foreground) 12%, transparent);
-  --sidebar-accent-foreground: var(--color-chrome-foreground);
-  --sidebar-border: color-mix(in oklab, var(--color-chrome-foreground) 14%, transparent);
-  --sidebar-ring: var(--color-copper);
-
-  /* Ordered so the first series a chart reaches for is the one that means money
-     coming in. */
-  --chart-1: var(--color-credit);
-  --chart-2: var(--color-copper);
-  --chart-3: var(--color-hold);
-  --chart-4: var(--color-ink-soft);
-  --chart-5: var(--color-ink-faint);
 }

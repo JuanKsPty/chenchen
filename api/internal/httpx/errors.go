@@ -12,8 +12,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Error is a failure already shaped for the client.
@@ -83,7 +83,7 @@ func Internal(err error) *Error {
 	return &Error{
 		Status:  http.StatusInternalServerError,
 		Code:    "internal_error",
-		Message: "Ocurrió un error inesperado. Inténtalo de nuevo.",
+		Message: "Algo falló de nuestro lado. Tus datos están bien; intenta otra vez en un momento.",
 		cause:   err,
 	}
 }
@@ -93,7 +93,7 @@ func Invalid(fields map[string]string) *Error {
 	return &Error{
 		Status:  http.StatusUnprocessableEntity,
 		Code:    "validation_failed",
-		Message: "Revisa los datos enviados.",
+		Message: "Revisa los datos marcados.",
 		Fields:  fields,
 	}
 }
@@ -116,10 +116,10 @@ func asAPIError(err error) *Error {
 	// A repository reporting "no rows" that no handler chose to interpret is
 	// still a missing resource, not a server fault.
 	case errors.Is(err, store.ErrNotFound):
-		return NotFound("not_found", "El recurso solicitado no existe.").WithCause(err)
+		return NotFound("not_found", "No encontramos lo que buscas.").WithCause(err)
 
 	case errors.Is(err, store.ErrConflict):
-		return Conflict("conflict", "El recurso ya existe o entra en conflicto con otro.").WithCause(err)
+		return Conflict("conflict", "Eso ya existe.").WithCause(err)
 
 	case errors.Is(err, money.ErrNotPositive):
 		return BadRequest("amount_not_positive", "El monto debe ser mayor que cero.").WithCause(err)

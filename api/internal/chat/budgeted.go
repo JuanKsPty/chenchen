@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Engine names which implementation answered, so the interface can say so instead
@@ -58,7 +58,7 @@ type Caps struct {
 // An interface rather than *store.DB so the decisions made here — when to latch,
 // which engine answers, what clears a degradation — can be tested without a
 // database. That decision logic is the part worth testing hard: it is what stands
-// between a public demo and somebody else's exhausted API key. The SQL underneath
+// between a public deployment and an exhausted API key. The SQL underneath
 // has its own reasons to be right and its own place to be checked.
 type Keeper interface {
 	// Reserve holds micros against every scope, or returns a

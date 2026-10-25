@@ -15,9 +15,9 @@ import (
 const (
 	// tokenIssuer identifies this API in the `iss` claim, so a token minted by a
 	// different service with the same secret is still rejected.
-	tokenIssuer = "corebank"
+	tokenIssuer = "chenchen"
 	// tokenAudience narrows a token to this API's own endpoints.
-	tokenAudience = "corebank-api"
+	tokenAudience = "chenchen-api"
 )
 
 var (

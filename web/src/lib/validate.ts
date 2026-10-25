@@ -34,7 +34,7 @@ export function passwordProblem(value: string): string | undefined {
   if (!value) return 'La contraseña es obligatoria.'
   if ([...value].length < 8) return 'Usa al menos 8 caracteres.'
   if (new TextEncoder().encode(value).length > 72) {
-    return 'La contraseña es demasiado larga (máximo 72 bytes).'
+    return 'La contraseña es demasiado larga. Usa 72 caracteres o menos.'
   }
   if (!/\p{L}/u.test(value) || !/\p{Nd}/u.test(value)) {
     return 'Incluye al menos una letra y un número.'
@@ -61,7 +61,7 @@ export function fullNameProblem(value: string): string | undefined {
  *
  * The text is what gets sent, so the check has to be on the text: a value with
  * three decimals must be refused rather than silently rounded, because a rounded
- * amount in a ledger is a bug.
+ * amount in somebody's books is a bug.
  */
 export function amountProblem(value: string, availableCents?: number): string | undefined {
   const raw = value.trim()

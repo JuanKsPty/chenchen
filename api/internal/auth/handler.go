@@ -8,10 +8,10 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // refreshCookieName is the cookie holding the refresh token.
@@ -20,7 +20,7 @@ import (
 // JavaScript, and from there in whatever storage the page chooses. An HttpOnly
 // cookie is unreachable from script, so an injected script cannot steal the
 // long-lived credential — the access token it *can* reach expires in minutes.
-const refreshCookieName = "corebank_refresh"
+const refreshCookieName = "chenchen_refresh"
 
 // refreshCookiePath scopes the cookie to the endpoints that consume it, so it is
 // not attached to every API call.
@@ -31,7 +31,7 @@ const refreshCookiePath = "/api/auth"
 // different in kind: a refresh token means "this browser has a live
 // session", a device token means only "this browser may try a PIN" — nothing
 // that reads one should ever be able to mistake it for the other.
-const deviceCookieName = "corebank_device"
+const deviceCookieName = "chenchen_device"
 
 // deviceCookiePath scopes the device cookie the same way the refresh cookie
 // is scoped, and for the same reason: every endpoint that reads it lives
@@ -68,7 +68,7 @@ func (h *Handler) Routes() http.Handler {
 	// guessing or mass-creating pays off, so both are rate limited per address.
 	r.Group(func(r chi.Router) {
 		r.Use(httpx.RateLimit(h.loginLimiter,
-			"Demasiados intentos. Espera un momento antes de volver a intentarlo."))
+			"Demasiados intentos. Espera un momento y vuelve a intentarlo."))
 		r.Post("/register", h.register)
 		r.Post("/login", h.login)
 	})
@@ -77,7 +77,7 @@ func (h *Handler) Routes() http.Handler {
 	// than a password, even though a device token is also required to try one.
 	r.Group(func(r chi.Router) {
 		r.Use(httpx.RateLimit(h.pinLoginLimiter,
-			"Demasiados intentos. Espera un momento antes de volver a intentarlo."))
+			"Demasiados intentos. Espera un momento y vuelve a intentarlo."))
 		r.Post("/login-pin", h.loginPin)
 	})
 
@@ -168,7 +168,7 @@ func (req registerRequest) validate() (RegisterInput, map[string]string) {
 		case errors.Is(err, ErrPasswordTooShort):
 			problems["password"] = "La contraseña debe tener al menos 8 caracteres."
 		case errors.Is(err, ErrPasswordTooLong):
-			problems["password"] = "La contraseña es demasiado larga (máximo 72 bytes)."
+			problems["password"] = "La contraseña es demasiado larga."
 		default:
 			problems["password"] = "La contraseña debe incluir al menos una letra y un número."
 		}
@@ -310,7 +310,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) refresh(w http.ResponseWriter, r *http.Request) {
 	cookie, err := r.Cookie(refreshCookieName)
 	if err != nil {
-		httpx.Fail(w, r, httpx.Unauthorized("No hay una sesión que renovar.").WithCause(err))
+		httpx.Fail(w, r, httpx.Unauthorized("Inicia sesión para continuar.").WithCause(err))
 		return
 	}
 
@@ -371,7 +371,7 @@ func (h *Handler) loginPin(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, r, (&httpx.Error{
 				Status:  http.StatusUnauthorized,
 				Code:    "pin_incorrect",
-				Message: "El PIN no es correcto.",
+				Message: "Ese PIN no es. Intenta otra vez.",
 			}).WithCause(err))
 		default:
 			httpx.Fail(w, r, err)
@@ -457,7 +457,7 @@ func (h *Handler) enableDevice(w http.ResponseWriter, r *http.Request) {
 	token, expiresAt, err := h.svc.EnableDeviceForPin(r.Context(), userID)
 	if err != nil {
 		if errors.Is(err, ErrPinNotSet) {
-			httpx.Fail(w, r, httpx.Conflict("pin_not_set", "Primero configura un PIN.").WithCause(err))
+			httpx.Fail(w, r, httpx.Conflict("pin_not_set", "Primero crea un PIN.").WithCause(err))
 			return
 		}
 		httpx.Fail(w, r, err)

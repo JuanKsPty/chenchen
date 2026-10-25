@@ -7,8 +7,8 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
 )
 
 // Handler serves the category endpoints. Everything it exposes is scoped to
@@ -56,7 +56,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	kind, err := ParseKind(req.Kind)
 	if err != nil {
 		httpx.Fail(w, r, httpx.Invalid(map[string]string{
-			"kind": "El tipo debe ser income o expense.",
+			"kind": "Elige si es un ingreso o un gasto.",
 		}))
 		return
 	}
@@ -66,7 +66,7 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 		id, err := uuid.Parse(*req.ParentID)
 		if err != nil {
 			httpx.Fail(w, r, httpx.Invalid(map[string]string{
-				"parent_id": "El identificador de la categoría padre no es válido.",
+				"parent_id": "La categoría padre no existe.",
 			}))
 			return
 		}
