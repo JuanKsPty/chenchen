@@ -303,6 +303,22 @@ type View struct {
 	Statement *CardStatementView `json:"statement,omitempty"`
 	// LastSyncedAt is a brokerage account's last successful IBKR sync.
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	// Pending is what purchases noted but not yet printed come to; absent
+	// when there are none. They are not in Balance.
+	Pending *PendingView `json:"pending,omitempty"`
+	// EstimatedBalance is Balance with the pending purchases in it: only for
+	// an anchored account that has some, since an unanchored balance is not
+	// the bank's to begin with.
+	EstimatedBalance *money.Amount `json:"estimated_balance,omitempty"`
+	// ToReview counts the noted purchases the owner should look at.
+	ToReview int `json:"to_review,omitempty"`
+}
+
+// PendingView is an account's pending purchases on the wire. Amount is signed
+// like the balance: negative.
+type PendingView struct {
+	Amount money.Amount `json:"amount"`
+	Count  int          `json:"count"`
 }
 
 // CardStatementView is a CardStatement on the wire. DueOn and MinimumPayment
@@ -328,6 +344,14 @@ func NewView(a Account) View {
 		ID: a.ID, Class: a.Class, Type: a.Type, Institution: a.Institution, ExternalNumber: a.ExternalNumber,
 		DisplayName: a.DisplayName, Alias: a.Alias, Currency: a.Currency, Balance: a.Balance.Amount(),
 		Anchored: a.Anchored, Movements: a.Movements, LastDay: a.LastDay, LastSyncedAt: a.LastSyncedAt,
+		ToReview: a.ToReview,
+	}
+	if a.PendingCount > 0 {
+		v.Pending = &PendingView{Amount: a.Pending.Amount(), Count: a.PendingCount}
+		if a.Anchored {
+			estimated := (a.Balance + a.Pending).Amount()
+			v.EstimatedBalance = &estimated
+		}
 	}
 	if st := a.Statement; st != nil {
 		v.Statement = &CardStatementView{ClosingOn: st.ClosingOn, DueOn: st.DueOn}

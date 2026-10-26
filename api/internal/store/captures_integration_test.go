@@ -535,6 +535,192 @@ func TestBalancesNeverSeeCaptures(t *testing.T) {
 	}
 }
 
+// An open capture reads as a movement through CaptureAsEntry, and a pending
+// one is listed by Entries in exactly the same shape.
+func TestAnOpenCaptureReadsAsAMovement(t *testing.T) {
+	db := storetest.New(t)
+	ctx := context.Background()
+	u := newUser(t, db, "c@example.com")
+	card := newCard(t, db, u.ID)
+	addStatement(t, db, card, day)
+	key := newKey(t, db, card)
+
+	received := time.Date(2026, time.October, 15, 12, 41, 0, 0, civil.Panama)
+	tapped := store.Capture{ID: uuid.New(), UserID: u.ID, AccountID: card.ID, Source: store.CaptureSourceShortcut,
+		KeyID: &key, ReceivedAt: received, BookedOn: day, Amount: -450, Merchant: "Café Unido", Note: "con Ana",
+		Raw: map[string]string{"amount": "$4.50"}}
+	if err := db.Q().InsertCapture(ctx, tapped); err != nil {
+		t.Fatal(err)
+	}
+	typed := addCapture(t, db, card, day, -1200)
+	line := addLine(t, db, card, day.AddDays(1), -999, store.KindExpense, nil)
+	printed := addCapture(t, db, card, day, -999)
+	missing := addCapture(t, db, card, day.AddDays(-3), -333)
+	linked := addCapture(t, db, card, day, -777)
+	if err := link(t, db, linked, addLine(t, db, card, day, -777, store.KindExpense, nil)); err != nil {
+		t.Fatal(err)
+	}
+	discarded := addCapture(t, db, card, day, -555)
+	if err := discard(t, db, discarded); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := db.Q().CaptureAsEntry(ctx, u.ID, tapped.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Origin != store.OriginCapture || got.CaptureSource != store.CaptureSourceShortcut ||
+		got.Kind != store.KindExpense || got.UserKind != nil || got.Amount != -450 || got.Description != "Café Unido" ||
+		got.Note != "con Ana" || got.BookedOn != day || got.BalanceOn != day || got.AccountID != card.ID {
+		t.Errorf("capture as a movement = %+v", got)
+	}
+	if got.BookedAt == nil || !got.BookedAt.Equal(received) {
+		t.Errorf("BookedAt = %v, want the moment the shortcut sent it, %s", got.BookedAt, received)
+	}
+	if got.StatementID != nil || got.RunID != nil || got.PostedOn != nil || got.BankBalance != nil ||
+		got.BankRef != "" || got.BankCategory != "" || got.DedupKey != "" || got.Raw["amount"] != "$4.50" {
+		t.Errorf("a capture carries printed fields: %+v", got)
+	}
+	if m, err := db.Q().CaptureAsEntry(ctx, u.ID, typed); err != nil || m.BookedAt != nil || m.CaptureSource != store.CaptureSourceManual {
+		t.Errorf("a capture typed by hand = %+v, %v; want no time of day", m, err)
+	}
+	// Printed and missing captures are still open: an id handed out while
+	// they were pending still finds them.
+	for _, id := range []uuid.UUID{printed, missing} {
+		if _, err := db.Q().CaptureAsEntry(ctx, u.ID, id); err != nil {
+			t.Errorf("CaptureAsEntry(open capture) = %v", err)
+		}
+	}
+	other := newUser(t, db, "other@example.com")
+	for name, c := range map[string]struct {
+		user, id uuid.UUID
+	}{
+		"linked": {u.ID, linked}, "discarded": {u.ID, discarded}, "a printed line": {u.ID, line},
+		"someone else's": {other.ID, tapped.ID},
+	} {
+		if _, err := db.Q().CaptureAsEntry(ctx, c.user, c.id); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("CaptureAsEntry(%s) = %v, want ErrNotFound", name, err)
+		}
+	}
+
+	// The list holds the printed lines and the pending captures, nothing else,
+	// and a pending capture reads the same either way.
+	list, err := db.Q().Entries(ctx, store.EntryFilter{UserID: u.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[uuid.UUID]store.Entry{}
+	for _, e := range list {
+		byID[e.ID] = e
+		if want := store.OriginStatement; e.ID != tapped.ID && e.ID != typed && e.Origin != want {
+			t.Errorf("line %s has origin %q, want %q", e.Description, e.Origin, want)
+		}
+	}
+	if len(list) != 4 {
+		t.Errorf("Entries = %d movements, want 2 lines and 2 pending captures", len(list))
+	}
+	if !reflect.DeepEqual(byID[tapped.ID], got) {
+		t.Errorf("listed capture = %+v\nwant %+v", byID[tapped.ID], got)
+	}
+	for _, id := range []uuid.UUID{printed, missing, linked, discarded} {
+		if _, listed := byID[id]; listed {
+			t.Errorf("Entries lists a capture that is not pending: %s", stateOf(t, db, u.ID, id))
+		}
+	}
+	if line, err := db.Q().EntryByID(ctx, u.ID, line); err != nil || line.Origin != store.OriginStatement {
+		t.Errorf("EntryByID = %+v, %v; want a line of origin statement", line, err)
+	}
+}
+
+func TestOnlyAnOpenCaptureTakesACategoryOrANote(t *testing.T) {
+	db := storetest.New(t)
+	ctx := context.Background()
+	u := newUser(t, db, "c@example.com")
+	card := newCard(t, db, u.ID)
+	cat, err := db.Q().CreateCategory(ctx, store.Category{ID: uuid.New(), UserID: u.ID, Name: "Comida", Kind: "expense"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	open := addCapture(t, db, card, day, -450)
+	if err := db.Q().SetCaptureCategory(ctx, u.ID, open, &cat.ID, "assistant"); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Q().SetCaptureNote(ctx, u.ID, open, "con Ana"); err != nil {
+		t.Fatal(err)
+	}
+	c, err := db.Q().CaptureByID(ctx, u.ID, open)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.CategoryID == nil || *c.CategoryID != cat.ID || c.CategorySource == nil || *c.CategorySource != "assistant" ||
+		c.Note != "con Ana" || !c.UpdatedAt.After(c.CreatedAt) {
+		t.Errorf("capture = %+v", c)
+	}
+	if err := db.Q().SetCaptureCategory(ctx, u.ID, open, nil, "user"); err != nil {
+		t.Fatal(err)
+	}
+	if c, _ = db.Q().CaptureByID(ctx, u.ID, open); c.CategoryID != nil || c.CategorySource != nil {
+		t.Errorf("a cleared category left %v by %v", c.CategoryID, c.CategorySource)
+	}
+
+	linked := addCapture(t, db, card, day, -777)
+	if err := link(t, db, linked, addLine(t, db, card, day, -777, store.KindExpense, nil)); err != nil {
+		t.Fatal(err)
+	}
+	discarded := addCapture(t, db, card, day, -555)
+	if err := discard(t, db, discarded); err != nil {
+		t.Fatal(err)
+	}
+	other := newUser(t, db, "other@example.com")
+	for name, c := range map[string]struct {
+		user, id uuid.UUID
+	}{"linked": {u.ID, linked}, "discarded": {u.ID, discarded}, "someone else's": {other.ID, open}} {
+		if err := db.Q().SetCaptureCategory(ctx, c.user, c.id, &cat.ID, "user"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetCaptureCategory(%s) = %v, want ErrNotFound", name, err)
+		}
+		if err := db.Q().SetCaptureNote(ctx, c.user, c.id, "x"); !errors.Is(err, store.ErrNotFound) {
+			t.Errorf("SetCaptureNote(%s) = %v, want ErrNotFound", name, err)
+		}
+	}
+}
+
+func TestCaptureSummariesCountWhatIsOpen(t *testing.T) {
+	db := storetest.New(t)
+	ctx := context.Background()
+	u := newUser(t, db, "c@example.com")
+	card, checking, quiet := newCard(t, db, u.ID), newChecking(t, db, u.ID), newCard(t, db, u.ID)
+	addStatement(t, db, card, day)
+
+	addCapture(t, db, card, day, -100)             // pending: the statement ends that day
+	addCapture(t, db, card, day.AddDays(1), -250)  // pending
+	addCapture(t, db, card, day.AddDays(-3), -333) // missing: settled, and not on it
+	addLine(t, db, card, day, -999, store.KindExpense, nil)
+	addCapture(t, db, card, day, -999)            // printed
+	addCapture(t, db, checking, day, -50)         // pending
+	linked := addCapture(t, db, quiet, day, -777) // linked
+	if err := link(t, db, linked, addLine(t, db, quiet, day, -777, store.KindExpense, nil)); err != nil {
+		t.Fatal(err)
+	}
+	if err := discard(t, db, addCapture(t, db, quiet, day, -555)); err != nil {
+		t.Fatal(err)
+	}
+	other := newUser(t, db, "other@example.com")
+	addCapture(t, db, newCard(t, db, other.ID), day, -4200)
+
+	got, err := db.Q().CaptureSummaries(ctx, u.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[uuid.UUID]store.CaptureSummary{
+		card.ID:     {PendingTotal: -350, PendingCount: 2, ToReview: 2},
+		checking.ID: {PendingTotal: -50, PendingCount: 1},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("CaptureSummaries = %+v, want %+v", got, want)
+	}
+}
+
 // --- fixtures ----------------------------------------------------------------
 
 func newCard(t *testing.T, db *store.DB, userID uuid.UUID) store.Account {

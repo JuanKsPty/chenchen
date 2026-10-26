@@ -62,8 +62,10 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 	// A byte-order mark so a spreadsheet reads the accents as UTF-8.
 	_, _ = w.Write([]byte("\xef\xbb\xbf"))
 	out := csv.NewWriter(w)
+	// estado comes last so that every column a spreadsheet already reads by
+	// position stays where it was.
 	_ = out.Write([]string{"fecha", "cuenta", "institucion", "tipo", "categoria", "monto", "moneda",
-		"descripcion", "nota", "referencia_banco", "saldo_banco", "id"})
+		"descripcion", "nota", "referencia_banco", "saldo_banco", "id", "estado"})
 
 	err = h.svc.Each(ctx, userID, q, func(e store.Entry) error {
 		a := byID[e.AccountID]
@@ -79,8 +81,14 @@ func (h *Handler) Export(w http.ResponseWriter, r *http.Request) {
 		if e.BankBalance != nil {
 			balance = e.BankBalance.String()
 		}
+		// A noted purchase no statement has printed yet; a printed line has no
+		// state to tell.
+		state := ""
+		if e.Origin == store.OriginCapture {
+			state = "pendiente"
+		}
 		return out.Write([]string{e.BookedOn.String(), name, a.Institution, kindNames[e.EffectiveKind()],
-			category, e.Amount.String(), "USD", e.Description, e.Note, e.BankRef, balance, e.ID.String()})
+			category, e.Amount.String(), "USD", e.Description, e.Note, e.BankRef, balance, e.ID.String(), state})
 	})
 	out.Flush()
 	if err != nil {

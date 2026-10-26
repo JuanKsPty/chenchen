@@ -160,6 +160,12 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, r, translate(err))
 		return
 	}
+	// Refused before anything is written, so a request that also sets a
+	// category does not half apply.
+	if body.Transfer != nil && e.Origin == store.OriginCapture {
+		httpx.Fail(w, r, translate(ErrCaptureNotTransfer))
+		return
+	}
 	if len(body.CategoryID) > 0 {
 		var raw *string
 		if err := json.Unmarshal(body.CategoryID, &raw); err != nil {
@@ -201,6 +207,9 @@ func translate(err error) error {
 		return httpx.NotFound("entry_not_found", "El movimiento no existe.").WithCause(err)
 	case errors.Is(err, ErrNoteTooLong):
 		return httpx.Invalid(map[string]string{"note": "La nota admite como máximo 500 caracteres."}).WithCause(err)
+	case errors.Is(err, ErrCaptureNotTransfer):
+		return httpx.Unprocessable("capture_not_transfer",
+			"Una compra anotada no puede ser una transferencia.").WithCause(err)
 	default:
 		return categories.TranslateError(err)
 	}
@@ -256,6 +265,12 @@ type View struct {
 	CategoryID     *uuid.UUID    `json:"category_id,omitempty"`
 	CategorySource *string       `json:"category_source,omitempty"`
 	Note           string        `json:"note,omitempty"`
+	// Origin is "statement" for a printed line and "capture" for a purchase
+	// the owner noted that no statement has printed yet: it counts as
+	// spending but is not in the balance. CaptureSource says how it was
+	// noted, "shortcut" or "manual".
+	Origin        string `json:"origin,omitempty"`
+	CaptureSource string `json:"capture_source,omitempty"`
 }
 
 // NewView builds a movement's wire shape.
@@ -264,7 +279,7 @@ func NewView(e store.Entry) View {
 		ID: e.ID, AccountID: e.AccountID, BookedOn: e.BookedOn, PostedOn: e.PostedOn, BookedAt: e.BookedAt,
 		Amount: e.Amount.Amount(), Kind: e.EffectiveKind(), ImportedKind: e.Kind, Description: e.Description,
 		BankRef: e.BankRef, BankCategory: e.BankCategory, CategoryID: e.CategoryID,
-		CategorySource: e.CategorySource, Note: e.Note,
+		CategorySource: e.CategorySource, Note: e.Note, Origin: e.Origin, CaptureSource: e.CaptureSource,
 	}
 	if e.BankBalance != nil {
 		b := e.BankBalance.Amount()

@@ -211,7 +211,8 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: ToolSpending,
 		Description: "Suma el gasto (o el ingreso) de la persona por categoría en un período, en todas sus cuentas. " +
-			"Las transferencias entre sus cuentas, los pagos de tarjeta y la compraventa de valores no cuentan.",
+			"Las transferencias entre sus cuentas, los pagos de tarjeta y la compraventa de valores no cuentan. " +
+			"Incluye las compras que la persona anotó y que su estado de cuenta todavía no trae.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args spendingArgs) (*mcp.CallToolResult, spendingResult, error) {
 		from, to, err := period(args.periodArgs)
 		if err != nil {
@@ -246,8 +247,9 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	})
 
 	mcp.AddTool(server, &mcp.Tool{
-		Name:        ToolCashFlow,
-		Description: "Ingresos y gastos de la persona por mes en un período. Sin transferencias entre sus cuentas.",
+		Name: ToolCashFlow,
+		Description: "Ingresos y gastos de la persona por mes en un período. Sin transferencias entre sus cuentas. " +
+			"El gasto incluye las compras que la persona anotó y que su estado de cuenta todavía no trae.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args periodArgs) (*mcp.CallToolResult, flowResult, error) {
 		if args.From == "" {
 			today := civil.Of(time.Now().In(civil.Panama))

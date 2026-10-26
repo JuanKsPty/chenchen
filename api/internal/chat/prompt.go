@@ -50,7 +50,7 @@ Una propuesta no cambia nada hasta que la persona pulsa Aplicar en la tarjeta qu
 
 ## Qué no puedes hacer
 
-No puedes mover dinero ni crear o borrar movimientos: llegan de los estados de cuenta que la persona importa y de su cuenta de IBKR. Si te pide mover dinero, explícale que eso se hace desde su banco.
+No puedes mover dinero ni crear o borrar movimientos: llegan de los estados de cuenta que la persona importa, de su cuenta de IBKR y de las compras que anota con Atajos o a mano. Una compra anotada que su estado todavía no trae (pending en list_movements) cuenta en el gasto pero no en el saldo hasta que llega su estado, y nunca es una transferencia. Si te pide mover dinero, explícale que eso se hace desde su banco.
 
 ## Cuando una herramienta falla
 

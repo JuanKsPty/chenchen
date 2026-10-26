@@ -11,6 +11,11 @@
 // Nothing a proposal can do changes a balance: a category, a note, a rule, a
 // transfer match or a stated balance, which only checks the imported
 // movements against the bank.
+//
+// A movement is a line a statement printed or a purchase the owner noted that
+// no statement has printed yet (ADR-0002). A noted purchase can be filed and
+// annotated, but it is spending by definition: a proposal that makes it a
+// transfer, or pairs it as one, is invalid.
 package proposals
 
 import (
@@ -262,6 +267,9 @@ func (s *Service) check(ctx context.Context, userID uuid.UUID, payload any) (str
 		if v.CategoryID == nil && v.Transfer == nil {
 			return "", "", invalid("indica una categoría o si es una transferencia")
 		}
+		if v.Transfer != nil && e.Origin == store.OriginCapture {
+			return "", "", invalid("una compra anotada no es una transferencia: propón solo su categoría")
+		}
 		if e.CategorySource != nil && *e.CategorySource == "user" && v.CategoryID != nil {
 			return "", "", invalid("la persona eligió la categoría de este movimiento a mano; no la cambies")
 		}
@@ -326,6 +334,9 @@ func (s *Service) check(ctx context.Context, userID uuid.UUID, payload any) (str
 		in, err := s.entry(ctx, userID, v.InEntryID)
 		if err != nil {
 			return "", "", err
+		}
+		if out.Origin == store.OriginCapture || in.Origin == store.OriginCapture {
+			return "", "", invalid("una compra anotada no es una transferencia: usa un par de list_transfer_suggestions")
 		}
 		if out.AccountID == in.AccountID || out.Amount >= 0 || out.Amount != -in.Amount {
 			return "", "", invalid("esos dos movimientos no pueden ser una transferencia: deben ser de cuentas distintas y de montos opuestos, el primero negativo")

@@ -8,6 +8,10 @@
 // bank or card statement). Every other stated balance is an assertion, and its
 // drift — stated minus computed — is how a mismatch is found rather than hidden
 // under a correcting entry.
+//
+// Purchases the owner noted that no statement has printed yet are shown beside
+// the balance, never in it (ADR-0002): nothing here that derives a balance, an
+// opening or a drift reads them.
 package accounts
 
 import (
@@ -66,6 +70,21 @@ type Account struct {
 	// LastSyncedAt is when a brokerage account last synced with IBKR
 	// successfully. Nil when it never has, or for any other account.
 	LastSyncedAt *time.Time
+	// Pending is what the account's pending captures add up to, signed like
+	// Balance, and PendingCount how many there are: purchases noted that no
+	// statement has printed yet. They count as spending but are not in
+	// Balance until their line arrives.
+	Pending      money.Cents
+	PendingCount int
+	// ToReview counts the noted purchases the owner should look at: a printed
+	// line could be them, or a statement passed their day without one.
+	ToReview int
+}
+
+// withCaptures sets what an account's noted purchases come to, beside its
+// balance.
+func withCaptures(a *Account, c store.CaptureSummary) {
+	a.Pending, a.PendingCount, a.ToReview = c.PendingTotal, c.PendingCount, c.ToReview
 }
 
 // CardStatement is what a card's statement says the owner must do: when it
@@ -113,6 +132,10 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 	if err != nil {
 		return nil, err
 	}
+	captures, err := s.db.Q().CaptureSummaries(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]Account, 0, len(rows))
 	for _, row := range rows {
@@ -121,6 +144,7 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 			return nil, err
 		}
 		a.LastSyncedAt = lastSynced(row, synced)
+		withCaptures(&a, captures[row.ID])
 		out = append(out, a)
 	}
 	return out, nil
@@ -155,6 +179,11 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (Account, error
 		}
 		a.LastSyncedAt = lastSynced(row, synced)
 	}
+	captures, err := s.db.Q().CaptureSummaries(ctx, userID)
+	if err != nil {
+		return Account{}, err
+	}
+	withCaptures(&a, captures[id])
 	return a, nil
 }
 

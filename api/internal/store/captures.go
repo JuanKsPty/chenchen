@@ -151,3 +151,68 @@ func scanCapture(s scanner) (Capture, error) {
 	}
 	return c, nil
 }
+
+// SetCaptureCategory files an open capture under a category, or clears it with
+// nil, as SetEntryCategory does for a line. A capture linked to its line or
+// discarded is ErrNotFound: the line carries the category now, or nothing
+// counts.
+func (q *Queries) SetCaptureCategory(ctx context.Context, userID, id uuid.UUID, categoryID *uuid.UUID, source string) error {
+	var src *string
+	if categoryID != nil {
+		src = &source
+	}
+	return q.execOne(ctx, "store.SetCaptureCategory",
+		`UPDATE captures SET category_id = $3, category_source = $4, updated_at = now()
+		WHERE id = $1 AND user_id = $2 AND entry_id IS NULL AND discarded_at IS NULL`,
+		id, userID, categoryID, src)
+}
+
+// SetCaptureNote sets an open capture's note, as SetEntryNote does for a
+// line; a linked or discarded capture is ErrNotFound.
+func (q *Queries) SetCaptureNote(ctx context.Context, userID, id uuid.UUID, note string) error {
+	return q.execOne(ctx, "store.SetCaptureNote",
+		`UPDATE captures SET note = $3, updated_at = now()
+		WHERE id = $1 AND user_id = $2 AND entry_id IS NULL AND discarded_at IS NULL`, id, userID, note)
+}
+
+// CaptureSummary is what one account's open captures come to now.
+type CaptureSummary struct {
+	// PendingTotal is what the pending captures add up to, signed like their
+	// amounts (negative), and PendingCount how many there are. They count as
+	// spending and never reach the balance.
+	PendingTotal money.Cents
+	PendingCount int
+	// ToReview counts the captures the owner should look at: a printed line
+	// could be them but none is linked, or a statement passed their day
+	// without one.
+	ToReview int
+}
+
+// CaptureSummaries sums each of the user's accounts' open captures by state.
+// An account with none is absent.
+func (q *Queries) CaptureSummaries(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]CaptureSummary, error) {
+	rows, err := q.q.Query(ctx, `
+		SELECT account_id,
+		       COALESCE(SUM(amount_cents) FILTER (WHERE state = 'pending'), 0),
+		       count(*) FILTER (WHERE state = 'pending'),
+		       count(*) FILTER (WHERE state IN ('printed', 'missing'))
+		FROM capture_states
+		WHERE user_id = $1 AND entry_id IS NULL AND discarded_at IS NULL
+		GROUP BY account_id`, userID)
+	if err != nil {
+		return nil, wrap("store.CaptureSummaries", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID]CaptureSummary{}
+	for rows.Next() {
+		var id uuid.UUID
+		var s CaptureSummary
+		var total int64
+		if err := rows.Scan(&id, &total, &s.PendingCount, &s.ToReview); err != nil {
+			return nil, wrap("store.CaptureSummaries", err)
+		}
+		s.PendingTotal = money.Cents(total)
+		out[id] = s
+	}
+	return out, wrap("store.CaptureSummaries", rows.Err())
+}
