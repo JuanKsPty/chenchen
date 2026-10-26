@@ -2,6 +2,7 @@ import { request, requestFile, requestUpload } from './client'
 import type {
   AccountList,
   Account,
+  Capture,
   CategoryNode,
   CategoryRule,
   CategoryTotal,
@@ -184,6 +185,59 @@ export function exportEntriesCSV(query: EntryQuery = {}) {
   const qs = entryParams({ ...query, limit: undefined, cursor: undefined }).toString()
   return requestFile(`/api/entries/export.csv${qs ? `?${qs}` : ''}`)
 }
+
+// --- noted purchases --------------------------------------------------------
+
+export interface CaptureInput {
+  /**
+   * Chosen by the form, the same on every try: sending it again returns the purchase
+   * the first try noted instead of noting it twice.
+   */
+  id?: string
+  account_id: string
+  /** What was paid, positive and as typed: "12.50". */
+  amount: string
+  /** Where: "Super 99". */
+  merchant: string
+  /** The purchase's day (YYYY-MM-DD); today in Panama when left out. */
+  day?: string
+  /** Left out, the owner's rules file it by merchant. */
+  category_id?: string
+  note?: string
+}
+
+/**
+ * Notes a purchase by hand. It comes back with its state: `linked` or `printed` when
+ * its line was already imported, so it does not count twice.
+ */
+export const addCapture = (input: CaptureInput) =>
+  request<Capture>('/api/captures', { method: 'POST', body: input })
+
+/** Corrects a noted purchase; a field left out stays as it is. */
+export interface CapturePatch {
+  /** Positive, as in CaptureInput. */
+  amount?: string
+  merchant?: string
+  day?: string
+}
+
+export const editCapture = (id: string, patch: CapturePatch) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: patch,
+  })
+
+/** Discards a noted purchase that never happened, so it stops counting. */
+export const discardCapture = (id: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/discard`, { method: 'PUT' })
+
+/** Takes a discarded purchase back. */
+export const restoreCapture = (id: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/discard`, { method: 'DELETE' })
+
+/** Unlinks a noted purchase from its line, which is remembered as not being it. */
+export const unlinkCapture = (id: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/link`, { method: 'DELETE' })
 
 // --- reports -------------------------------------------------------------------
 

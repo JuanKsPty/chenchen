@@ -32,18 +32,44 @@
  * with the rule, "Listo: regla creada, N movimientos" with "Ver regla". A rule that
  * has already filed other movements cannot be taken back cleanly, so that toast has
  * no undo.
+ *
+ * A purchase the owner noted that no statement has printed yet (origin 'capture') is
+ * what they wrote, not what the bank printed, so it can change. Under its facts it
+ * says how it was noted ("Anotada con Atajos el 26 oct a las 12:41", or "Anotada a
+ * mano") and "Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado." It has
+ * no transfer option (a purchase is spending) and two ghost buttons:
+ *   - "Corregir" swaps in a form for its Monto, ¿Dónde? and Día, whose "Cancelar"
+ *     comes back here;
+ *   - "Descartar compra", for one that never happened: "Listo: compra descartada"
+ *     with "Deshacer", which takes it back.
  */
 import { CircleAlertIcon } from 'lucide-react'
-import { useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
-import { updateEntry, type EntryPatch } from '@/api/endpoints'
+import {
+  restoreCapture,
+  updateEntry,
+  type CapturePatch,
+  type EntryPatch,
+} from '@/api/endpoints'
 import type { Account, CategoryNode, Entry } from '@/api/types'
+import {
+  PurchaseFields,
+  purchaseAmount,
+  purchaseProblems,
+  purchaseToast,
+  serverProblems,
+  type PurchaseField,
+  type PurchaseValues,
+} from '@/components/account/AddPurchaseDialog'
 import { Amount } from '@/components/kit'
+import { focusWhenReady } from '@/components/settings/focus'
+import { problemMessage } from '@/components/settings/problem'
 import { DESKTOP_QUERY, useMediaQuery } from '@/components/shell/media'
-import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -62,6 +88,7 @@ import {
   entryKindLabel,
   formatCivilDate,
   formatCivilDayMonth,
+  formatDayAndTime,
   todayCivil,
 } from '@/lib/format'
 import { useReturnFocus } from '@/lib/focus'
@@ -69,12 +96,15 @@ import { RULES_PATH } from '@/lib/nav'
 import {
   useAccounts,
   useCategories,
+  useDiscardCapture,
+  useEditCapture,
   useMoneyInvalidation,
   useRules,
   useSaveRule,
   useUpdateEntry,
 } from '@/lib/queries'
 import { cn } from '@/lib/utils'
+import { amountToCents, isClean, type Errors } from '@/lib/validate'
 import { SheetHandle } from './PickerSheet'
 import { useSwipeDown } from './useSwipeDown'
 
@@ -113,7 +143,12 @@ export function CategorizeSheet({
             className="flex max-h-[min(46rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 sm:max-w-xl"
             {...focusProps}
           >
-            <CategorizeForm key={shown.id} entry={shown} layout="dialog" onDone={close} />
+            <CategorizeContent
+              key={shown.id}
+              entry={shown}
+              layout="dialog"
+              onDone={close}
+            />
           </DialogContent>
         )}
       </Dialog>
@@ -124,7 +159,7 @@ export function CategorizeSheet({
     <Sheet open={visible} onOpenChange={onOpenChange}>
       {shown && (
         <SheetContent side="bottom" className="gap-0" {...focusProps}>
-          <CategorizeForm key={shown.id} entry={shown} layout="sheet" onDone={close} />
+          <CategorizeContent key={shown.id} entry={shown} layout="sheet" onDone={close} />
         </SheetContent>
       )}
     </Sheet>
@@ -201,7 +236,11 @@ function choicesFor(entry: Entry, tree: CategoryNode[]): CategoryChoice[] {
   return fits.map(({ id, name }) => ({ id, name, icon: categoryIcon(name) }))
 }
 
-function CategorizeForm({
+/**
+ * Categorizar, or for a noted purchase its "Corregir" form in the same dialog or
+ * sheet. Coming back from Corregir, focus goes back to its button.
+ */
+function CategorizeContent({
   entry,
   layout,
   onDone,
@@ -210,16 +249,62 @@ function CategorizeForm({
   layout: 'sheet' | 'dialog'
   onDone: () => void
 }) {
+  const [correcting, setCorrecting] = useState(false)
+  const [cameBack, setCameBack] = useState(false)
+
+  if (correcting) {
+    return (
+      <CorrectForm
+        entry={entry}
+        layout={layout}
+        onCancel={() => {
+          setCorrecting(false)
+          setCameBack(true)
+        }}
+        onDone={onDone}
+      />
+    )
+  }
+  return (
+    <CategorizeForm
+      entry={entry}
+      layout={layout}
+      onDone={onDone}
+      onCorrect={() => setCorrecting(true)}
+      focusCorrect={cameBack}
+    />
+  )
+}
+
+function CategorizeForm({
+  entry,
+  layout,
+  onDone,
+  onCorrect,
+  focusCorrect,
+}: {
+  entry: Entry
+  layout: 'sheet' | 'dialog'
+  onDone: () => void
+  /** Opens "Corregir"; only a noted purchase has it. */
+  onCorrect: () => void
+  /** Focus "Corregir" on mount: the owner is back from it. */
+  focusCorrect: boolean
+}) {
   const sheet = layout === 'sheet'
+  // A noted purchase still pending: what the owner wrote, not what the bank printed.
+  const capture = entry.origin === 'capture'
   const accounts = useAccounts()
   const categories = useCategories()
   const rules = useRules()
   const update = useUpdateEntry()
   const saveRule = useSaveRule()
+  const discard = useDiscardCapture()
   const invalidate = useMoneyInvalidation()
   const navigate = useNavigate()
   const swipe = useSwipeDown(onDone)
   const groupLabel = useId()
+  const correctRef = useRef<HTMLButtonElement>(null)
 
   const wasTransfer = entry.kind === 'transfer'
   const [category, setCategory] = useState(entry.category_id ?? '')
@@ -227,7 +312,12 @@ function CategorizeForm({
   const [note, setNote] = useState(entry.note ?? '')
   const [withRule, setWithRule] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [discarding, setDiscarding] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (focusCorrect) correctRef.current?.focus()
+  }, [focusCorrect])
 
   const account = accounts.data?.accounts.find((a) => a.id === entry.account_id)
   const choices = useMemo(
@@ -242,7 +332,7 @@ function CategorizeForm({
   const ruleChecked = withRule && canRule
 
   const save = async () => {
-    if (saving) return
+    if (saving || discarding) return
     const patch: EntryPatch = {}
     const nextCategory = transfer ? '' : category
     if ((entry.category_id ?? '') !== nextCategory) patch.category_id = nextCategory || null
@@ -304,6 +394,33 @@ function CategorizeForm({
     }
   }
 
+  // A purchase that never happened (a declined tap, one noted twice) stops counting.
+  const discardPurchase = async () => {
+    if (saving || discarding) return
+    setDiscarding(true)
+    setError(null)
+    try {
+      await discard.mutateAsync(entry.id)
+      toast('Listo: compra descartada', {
+        action: {
+          label: 'Deshacer',
+          // The sheet is gone by now, so this goes straight to the server.
+          onClick: () => {
+            restoreCapture(entry.id).then(
+              () => invalidate(),
+              () => toast('No se pudo deshacer. Intenta otra vez.'),
+            )
+          },
+        },
+      })
+      onDone()
+    } catch (failure) {
+      setError(failure instanceof ApiError ? failure.message : GENERIC_ERROR)
+    } finally {
+      setDiscarding(false)
+    }
+  }
+
   return (
     <>
       <div
@@ -319,7 +436,30 @@ function CategorizeForm({
         </DialogTitle>
         <DialogDescription className="pr-10 text-small font-medium text-pretty break-words text-muted-foreground">
           <Facts entry={entry} account={account} />
+          {capture && (
+            <>
+              <span className="block pt-1">{notedHow(entry)}</span>
+              <span className="block">
+                Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado.
+              </span>
+            </>
+          )}
         </DialogDescription>
+        {capture && (
+          <div className="-ml-3 flex flex-wrap gap-1 pt-1">
+            <Button ref={correctRef} variant="ghost" onClick={onCorrect}>
+              Corregir
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => void discardPurchase()}
+              aria-disabled={discarding || undefined}
+            >
+              {discarding && <Spinner />}
+              Descartar compra
+            </Button>
+          </div>
+        )}
       </div>
 
       <div
@@ -364,20 +504,23 @@ function CategorizeForm({
         </div>
 
         <div className="flex flex-col gap-4 px-3">
-          <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-full py-1">
-            <Checkbox
-              checked={transfer}
-              onCheckedChange={(checked) => setTransfer(checked === true)}
-            />
-            <span className="flex flex-col">
-              <span className="text-body font-medium">
-                Es una transferencia entre tus cuentas
+          {/* A noted purchase is spending, never money moving between accounts. */}
+          {!capture && (
+            <label className="flex min-h-11 cursor-pointer items-center gap-3 rounded-full py-1">
+              <Checkbox
+                checked={transfer}
+                onCheckedChange={(checked) => setTransfer(checked === true)}
+              />
+              <span className="flex flex-col">
+                <span className="text-body font-medium">
+                  Es una transferencia entre tus cuentas
+                </span>
+                <span className="text-small font-medium text-muted-foreground">
+                  No cuenta como gasto ni como entrada, como el pago de la tarjeta.
+                </span>
               </span>
-              <span className="text-small font-medium text-muted-foreground">
-                No cuenta como gasto ni como entrada, como el pago de la tarjeta.
-              </span>
-            </span>
-          </label>
+            </label>
+          )}
 
           <NoteField value={note} onChange={setNote} />
         </div>
@@ -474,6 +617,179 @@ function ChoiceRow({
       <Icon aria-hidden="true" className="size-5 shrink-0 text-muted-foreground" />
       <span className="min-w-0 truncate text-body font-medium">{children}</span>
     </label>
+  )
+}
+
+/** How a noted purchase was noted: "Anotada con Atajos el 26 oct a las 12:41". */
+function notedHow(entry: Entry): string {
+  if (entry.capture_source !== 'shortcut') return 'Anotada a mano'
+  return entry.booked_at
+    ? `Anotada con Atajos el ${formatDayAndTime(entry.booked_at)}`
+    : 'Anotada con Atajos'
+}
+
+/** An amount as the owner would type it: "12.50" for −$12.50, built from the cents. */
+function typedAmount(cents: number): string {
+  const whole = Math.abs(cents)
+  return `${Math.floor(whole / 100)}.${String(whole % 100).padStart(2, '0')}`
+}
+
+/**
+ * "Corregir": a noted purchase's Monto, ¿Dónde? and Día, in Categorizar's place. Only
+ * what changed is sent. The server works out again whether it counts and links it if
+ * its line is now plain, so the toast is the same as when it was noted. "Cancelar"
+ * goes back to Categorizar; a swipe down, the scrim, Escape or "Cerrar" close both.
+ */
+function CorrectForm({
+  entry,
+  layout,
+  onCancel,
+  onDone,
+}: {
+  entry: Entry
+  layout: 'sheet' | 'dialog'
+  onCancel: () => void
+  onDone: () => void
+}) {
+  const sheet = layout === 'sheet'
+  const swipe = useSwipeDown(onDone)
+  const edit = useEditCapture()
+  const formId = useId()
+  const formRef = useRef<HTMLFormElement>(null)
+  const submitRef = useRef<HTMLButtonElement>(null)
+
+  const [values, setValues] = useState<PurchaseValues>(() => ({
+    amount: typedAmount(entry.amount.cents),
+    merchant: entry.description,
+    day: entry.booked_on,
+  }))
+  const [dayIncomplete, setDayIncomplete] = useState(false)
+  const [errors, setErrors] = useState<Errors<PurchaseField>>({})
+  const [failure, setFailure] = useState<string | null>(null)
+
+  const change = (field: PurchaseField, value: string) => {
+    setValues((current) => ({ ...current, [field]: value }))
+    if (errors[field]) setErrors((current) => ({ ...current, [field]: undefined }))
+  }
+  const focusFirstProblem = () =>
+    focusWhenReady(() =>
+      formRef.current?.querySelector<HTMLElement>('[aria-invalid="true"]'),
+    )
+
+  const submit = (event: React.FormEvent) => {
+    event.preventDefault()
+    if (edit.isPending) return
+    const found = purchaseProblems(values, dayIncomplete)
+    setErrors(found)
+    setFailure(null)
+    if (!isClean(found)) {
+      focusFirstProblem()
+      return
+    }
+    const patch: CapturePatch = {}
+    const amount = purchaseAmount(values.amount)
+    if (amountToCents(amount) !== -entry.amount.cents) patch.amount = amount
+    const merchant = values.merchant.trim()
+    if (merchant !== entry.description) patch.merchant = merchant
+    if (values.day !== entry.booked_on) patch.day = values.day
+    if (Object.keys(patch).length === 0) return onCancel()
+
+    edit.mutate(
+      { id: entry.id, patch },
+      {
+        onSuccess: (capture) => {
+          purchaseToast(capture, 'Listo: compra corregida')
+          onDone()
+        },
+        onError: (failed) => {
+          const fields = serverProblems(failed, ['amount', 'merchant', 'day'] as const)
+          if (fields) {
+            setErrors(fields)
+            focusFirstProblem()
+          } else {
+            setFailure(problemMessage(failed))
+            focusWhenReady(() => submitRef.current)
+          }
+        },
+      },
+    )
+  }
+
+  return (
+    <>
+      <div
+        className={cn(
+          'relative flex shrink-0 flex-col gap-1',
+          sheet ? 'touch-none px-4 pt-5 pb-2' : 'px-6 pt-6 pb-3',
+        )}
+        {...(sheet ? swipe : {})}
+      >
+        {sheet && <SheetHandle />}
+        <DialogTitle className="pr-12 font-display text-heading font-bold">
+          Corregir compra
+        </DialogTitle>
+        <DialogDescription className="pr-10 text-small font-medium text-pretty text-muted-foreground">
+          Corrige el monto, dónde fue o el día.
+        </DialogDescription>
+      </div>
+
+      <form
+        ref={formRef}
+        id={formId}
+        onSubmit={submit}
+        noValidate
+        className={cn(
+          'flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto py-2',
+          sheet ? 'px-4' : 'px-6',
+        )}
+      >
+        <PurchaseFields
+          values={values}
+          errors={errors}
+          onChange={change}
+          onDayIncompleteChange={setDayIncomplete}
+          autoFocus
+        />
+      </form>
+
+      <div
+        className={cn(
+          'flex shrink-0 flex-col gap-3',
+          sheet ? 'px-4 pt-3 pb-4' : 'px-6 pt-3 pb-6',
+        )}
+      >
+        {failure && (
+          <Alert variant="attention">
+            <CircleAlertIcon aria-hidden="true" />
+            <AlertTitle>No pudimos corregir la compra</AlertTitle>
+            <AlertDescription>{failure}</AlertDescription>
+          </Alert>
+        )}
+        <div className={cn('flex gap-2', sheet ? 'flex-col-reverse' : 'justify-end')}>
+          <Button
+            type="button"
+            variant={sheet ? 'ghost' : 'secondary'}
+            size={sheet ? 'lg' : 'default'}
+            className={cn(sheet && 'w-full')}
+            onClick={onCancel}
+          >
+            Cancelar
+          </Button>
+          <Button
+            ref={submitRef}
+            type="submit"
+            form={formId}
+            size={sheet ? 'lg' : 'default'}
+            className={cn(sheet && 'w-full')}
+            // Not disabled, for the same reason as Categorizar's "Guardar".
+            aria-disabled={edit.isPending || undefined}
+          >
+            {edit.isPending && <Spinner />}
+            Guardar
+          </Button>
+        </div>
+      </div>
+    </>
   )
 }
 

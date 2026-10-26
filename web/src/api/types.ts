@@ -64,6 +64,41 @@ export interface Account {
    * reason; absent or null means unknown or never.
    */
   last_synced_at?: string | null
+  /**
+   * What the purchases the owner noted, and no statement has printed yet, come to.
+   * Signed like the balance (negative) and never in it. Absent when there are none.
+   */
+  pending?: PendingPurchases
+  /**
+   * The balance with the pending purchases in it. Only for an anchored account that
+   * has some: an unanchored balance is not the bank's to begin with.
+   */
+  estimated_balance?: Amount
+  /** How many noted purchases the owner should look at; absent when none. */
+  to_review?: number
+  /** The account's shortcut key as the owner may know it; absent for a brokerage account. */
+  shortcut?: ShortcutStatus
+}
+
+/** An account's noted purchases that count as spending until their line arrives. */
+export interface PendingPurchases {
+  /** Negative, like the balance. */
+  amount: Amount
+  count: number
+}
+
+/** Whether an account has a working shortcut key, and what can be shown of it: never the key. */
+export interface ShortcutStatus {
+  configured: boolean
+  /** The key's last four characters. */
+  hint?: string
+  created_at?: string
+  /** The last run by hand, which tests the shortcut and notes nothing. */
+  tested_at?: string
+  /** The last purchase the key noted. */
+  last_capture_at?: string
+  /** The first card name the shortcut sent. */
+  card_label?: string
 }
 
 /** What a card's statement says is due. Dates are civil (YYYY-MM-DD). */
@@ -152,13 +187,17 @@ export interface SecurityStatus {
 export type EntryKind =
   'income' | 'expense' | 'refund' | 'fee' | 'interest' | 'transfer' | 'trade'
 
-/** One line a statement or IBKR printed. */
+/**
+ * One line a statement or IBKR printed, or a purchase the owner noted that no
+ * statement has printed yet (`origin: 'capture'`).
+ */
 export interface Entry {
   id: string
   account_id: string
   /** The day the bank printed (YYYY-MM-DD), with no time zone to shift it. */
   booked_on: string
   posted_on?: string
+  /** For a purchase the shortcut noted, the moment it arrived. */
   booked_at?: string
   /** Signed from the owner's point of view: negative is money leaving. */
   amount: Amount
@@ -173,6 +212,30 @@ export interface Entry {
   category_id?: string
   category_source?: 'rule' | 'user' | 'assistant'
   note?: string
+  /**
+   * 'statement' for a printed line; 'capture' for a purchase the owner noted that no
+   * statement has printed yet, which counts as spending but is not in the balance.
+   * Optional: older APIs do not send it, and absent means a printed line.
+   */
+  origin?: 'statement' | 'capture'
+  /** How a capture was noted: by the phone's shortcut, or by hand. */
+  capture_source?: 'shortcut' | 'manual'
+}
+
+/**
+ * Where a noted purchase stands, derived by the server whenever it is read. Only
+ * `pending` counts as spending: `printed` (a line of the same amount covers it),
+ * `linked` (joined to its line) and `missing` (a statement passed its day without
+ * it) leave the counting to the statement, and `discarded` never happened.
+ */
+export type CaptureState = 'pending' | 'printed' | 'missing' | 'linked' | 'discarded'
+
+/** A purchase the owner noted, as /api/captures returns it: the movement it reads as. */
+export interface Capture extends Entry {
+  state: CaptureState
+  linked_by?: 'auto' | 'user'
+  /** Once linked, the printed line it turned out to be. */
+  line?: Entry
 }
 
 export interface EntryPage {
@@ -301,6 +364,13 @@ export interface ImportAccountResult {
   warnings: string[]
   /** A card whose file prints no balance, with no starting balance yet. */
   needs_opening: boolean
+  /** Purchases the owner noted that this file linked to their lines; absent when none. */
+  captures_linked?: number
+  /**
+   * Noted purchases this is the first statement to pass without printing; absent
+   * when none.
+   */
+  captures_missing?: number
 }
 
 export interface ImportResult {

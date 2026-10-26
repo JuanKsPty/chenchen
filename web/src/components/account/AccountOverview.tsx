@@ -12,6 +12,11 @@
  *     the status chip (beside it from lg, under it on mobile). Unless the notice's
  *     "Revisar" already does, a ghost "Ver saldos del banco" (below lg; a broker's
  *     "Ver saldos" at every size) opens the review sheet.
+ *   - The purchases the owner noted that no statement has printed yet, when there
+ *     are some, in a muted line under the balance: "Pendiente −$12.50 · 3 compras ·
+ *     Estimado $1,187.50" (a card: "Pendiente $12.50 · Con lo pendiente, debes
+ *     $512.50"), with "Compras que anotaste y tu estado aún no trae." They are not in
+ *     the balance, so they never touch its chip: never orange, never "No cuadra".
  *   - A card's statement (Corte · Pago · Mínimo), or a broker's Efectivo · Posiciones
  *     with "Sincronizar ahora".
  *   - The notice: "El banco dice $2,173.90 desde el 03 oct." with "Revisar" when it
@@ -97,6 +102,7 @@ export function AccountOverview({
             </div>
           )}
         </div>
+        <PendingPurchasesLine account={account} />
       </div>
 
       <Facts account={account} />
@@ -130,6 +136,55 @@ export function AccountOverview({
           action={{ label: 'Anotar saldo', onClick: onAnchor }}
         />
       )}
+    </div>
+  )
+}
+
+/**
+ * What the noted purchases come to, beside the balance that does not have them yet.
+ * A bank account: "Pendiente −$12.50 · 3 compras · Estimado $1,187.50". A card, whose
+ * figure is what is owed: "Pendiente $12.50 · Con lo pendiente, debes $512.50". The
+ * estimate is only there when the balance is anchored; without it the count stands
+ * in.
+ */
+function PendingPurchasesLine({ account }: { account: Account }) {
+  const pending = account.pending
+  if (!pending || pending.count === 0 || account.type === 'brokerage') return null
+  const card = account.class === 'liability'
+  const estimated = account.estimated_balance
+  const count = `${pending.count} ${pending.count === 1 ? 'compra' : 'compras'}`
+
+  let rest: ReactNode = count
+  if (estimated && card) {
+    // What is owed is the balance's opposite; a card in the owner's favour says so.
+    const owed = -estimated.cents
+    rest =
+      owed >= 0 ? (
+        <>
+          Con lo pendiente, debes <Amount amount={owed} size="inline" />
+        </>
+      ) : (
+        <>
+          Con lo pendiente, tienes <Amount amount={-owed} size="inline" /> a favor
+        </>
+      )
+  } else if (estimated) {
+    rest = (
+      <>
+        {count} · Estimado <Amount amount={estimated} size="inline" />
+      </>
+    )
+  }
+
+  return (
+    <div className="flex flex-col pt-1 text-small font-medium text-muted-foreground">
+      <p>
+        Pendiente{' '}
+        <Amount amount={card ? -pending.amount.cents : pending.amount} size="inline" />
+        {' · '}
+        {rest}
+      </p>
+      <p>Compras que anotaste y tu estado aún no trae.</p>
     </div>
   )
 }

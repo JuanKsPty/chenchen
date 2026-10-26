@@ -1,7 +1,7 @@
 /**
- * The account's overflow menu (spec menu): Importar estado, Saldo según tu banco,
- * Renombrar, a divider, Eliminar. A brokerage account has no statements or bank
- * figures to type, so it keeps Renombrar and Eliminar.
+ * The account's overflow menu (spec menu): Anotar compra, Importar estado, Saldo
+ * según tu banco, Renombrar, a divider, Eliminar. A brokerage account has no
+ * purchases, statements or bank figures to type, so it keeps Renombrar and Eliminar.
  *
  *   const { items, dialogs } = useAccountActions(account)
  *   useTopBar({ …, menu: items })          the phone's "Más opciones"
@@ -12,7 +12,14 @@
  * menu never unmounts the dialog it opened. On close each dialog gives focus back to
  * the menu's button (useReturnFocus resolves a menu item to its trigger).
  */
-import { EllipsisIcon, FileUpIcon, PencilIcon, ScaleIcon, Trash2Icon } from 'lucide-react'
+import {
+  EllipsisIcon,
+  FileUpIcon,
+  PencilIcon,
+  ReceiptIcon,
+  ScaleIcon,
+  Trash2Icon,
+} from 'lucide-react'
 import { useMemo, useState, type ReactNode } from 'react'
 
 import type { Account } from '@/api/types'
@@ -26,10 +33,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { AddPurchaseDialog } from './AddPurchaseDialog'
 import { DeleteAccountDialog } from './DeleteAccountDialog'
 import { RenameAccountDialog } from './RenameAccountDialog'
 
-type Open = 'checkpoint' | 'rename' | 'delete' | null
+type Open = 'purchase' | 'checkpoint' | 'rename' | 'delete' | null
 
 export function useAccountActions(account: Account): {
   items: ReactNode
@@ -47,6 +55,10 @@ export function useAccountActions(account: Account): {
       <>
         {!brokerage && (
           <>
+            <DropdownMenuItem onSelect={() => setOpen('purchase')}>
+              <ReceiptIcon aria-hidden="true" />
+              Anotar compra
+            </DropdownMenuItem>
             <DropdownMenuItem onSelect={() => openImport({ accountId })}>
               <FileUpIcon aria-hidden="true" />
               Importar estado
@@ -83,12 +95,19 @@ export function useAccountActions(account: Account): {
   const dialogs = (
     <>
       {!brokerage && (
-        <CheckpointDialog
-          account={account}
-          anchor={anchor}
-          open={open === 'checkpoint'}
-          onOpenChange={close}
-        />
+        <>
+          <AddPurchaseDialog
+            account={account}
+            open={open === 'purchase'}
+            onOpenChange={close}
+          />
+          <CheckpointDialog
+            account={account}
+            anchor={anchor}
+            open={open === 'checkpoint'}
+            onOpenChange={close}
+          />
+        </>
       )}
       <RenameAccountDialog
         account={account}

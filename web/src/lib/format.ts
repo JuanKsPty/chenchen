@@ -27,6 +27,8 @@ import type { Account, Amount, EntryKind } from '@/api/types'
  *
  * Instants (ISO timestamps):
  *   formatDate(iso)       "24 oct 2026"
+ *   formatDayAndTime(iso) "26 oct a las 12:41", "26 oct a la 1:05" (the year when
+ *                         it is not this one)
  *   relativeTime(iso)     "hace un momento", "hace 5 min", "hace 2 h", "ayer",
  *                         "hace 3 días", "el 05 oct"
  *
@@ -93,6 +95,11 @@ const dateFormat = new Intl.DateTimeFormat('es', {
   year: 'numeric',
 })
 const dayMonthFormat = new Intl.DateTimeFormat('es', { day: '2-digit', month: 'short' })
+const timeFormat = new Intl.DateTimeFormat('es', {
+  hour: 'numeric',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
 const monthNameFormat = new Intl.DateTimeFormat('es', { month: 'long' })
 const weekdayFormat = new Intl.DateTimeFormat('es', { weekday: 'long' })
 
@@ -113,6 +120,19 @@ function ymdOf(date: Date): string {
 /** "24 oct 2026" for an instant. */
 export function formatDate(iso: string): string {
   return dateFormat.format(new Date(iso))
+}
+
+/**
+ * "26 oct a las 12:41" for an instant, on the 24-hour clock; "a la 1:05" when the
+ * hour is one, as it is said. The year only when it is not this one.
+ */
+export function formatDayAndTime(iso: string, now: Date = new Date()): string {
+  const at = new Date(iso)
+  const day =
+    at.getFullYear() === now.getFullYear()
+      ? dayMonthFormat.format(at)
+      : dateFormat.format(at)
+  return `${day} ${at.getHours() === 1 ? 'a la' : 'a las'} ${timeFormat.format(at)}`
 }
 
 /** "03 oct 2026" for a civil date. */

@@ -5,8 +5,16 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 
+import { ApiError } from '@/api/client'
 import * as api from '@/api/endpoints'
-import type { CheckpointInput, EntryPatch, EntryQuery, RuleInput } from '@/api/endpoints'
+import type {
+  CaptureInput,
+  CapturePatch,
+  CheckpointInput,
+  EntryPatch,
+  EntryQuery,
+  RuleInput,
+} from '@/api/endpoints'
 
 /**
  * Server state.
@@ -28,6 +36,9 @@ import type { CheckpointInput, EntryPatch, EntryQuery, RuleInput } from '@/api/e
  *   movements     useEntries(query): one page · useEntryPages(query without cursor):
  *                 infinite, "Ver más" = fetchNextPage, a new query resets the pages ·
  *                 useUpdateEntry()({id, patch})
+ *   captures      useAddCapture()(input) · useEditCapture()({id, patch}) ·
+ *                 useDiscardCapture()(id): purchases the owner noted, which count as
+ *                 spending until their line arrives, so each one refreshes money
  *   imports       useImportStatement()({file, accountId?}) · useDryRunStatement()(file) ·
  *                 useImportRuns(accountId)
  *   investments   useInvestmentLink(accountId, {enabled?}) · useLinkIBKR ·
@@ -212,6 +223,51 @@ export function useUpdateEntry() {
   return useMutation({
     mutationFn: ({ id, patch }: { id: string; patch: EntryPatch }) =>
       api.updateEntry(id, patch),
+    onSuccess: invalidate,
+  })
+}
+
+// --- noted purchases ----------------------------------------------------------
+
+/**
+ * Notes a purchase by hand. A pending one shows in the lists, in the account's
+ * "Pendiente" line and in Gastos; one its statement already printed changes how
+ * much is pending to review. Either way, money.
+ *
+ * Sending it again is not safe: the server makes a new purchase each time. So a
+ * failure refreshes money too, unless the server said no (a 4xx, which saved
+ * nothing). With no answer, or a 5xx, the first one may have been saved, and the
+ * account should show it before the owner notes it again.
+ */
+export function useAddCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (input: CaptureInput) => api.addCapture(input),
+    onSuccess: invalidate,
+    // A send with no answer may have been saved; the account shows it if so. Not
+    // awaited: with the connection gone the refetches retry for seconds, and the
+    // dialog should say what happened at once.
+    onError: (error) => {
+      if (!(error instanceof ApiError && error.status < 500)) void invalidate()
+    },
+  })
+}
+
+/** Corrects a noted purchase's amount, merchant or day; whether it counts derives again. */
+export function useEditCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: CapturePatch }) =>
+      api.editCapture(id, patch),
+    onSuccess: invalidate,
+  })
+}
+
+/** Discards a noted purchase that never happened: it stops counting. */
+export function useDiscardCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (id: string) => api.discardCapture(id),
     onSuccess: invalidate,
   })
 }

@@ -24,6 +24,10 @@
  *     has its own column) · the owner's note: "Alimentación · 24 oct · Tarjeta ···1111".
  *   - Right: the signed amount, body 600 tabular. In: "+$3,800.00" in positive.
  *     Out: "−$84.37" in the text colour.
+ *   - A purchase the owner noted that no statement has printed yet (origin
+ *     'capture') starts its second line with "Pendiente · " and mutes its amount: it
+ *     counts as spending, but the balance does not have it yet. Not the tile's
+ *     `pending`, which means "Sin categoría", and never red or orange.
  *   - Wide lists also show "Categorizar" in primary-text on uncategorized rows.
  *
  * Wide-layout columns respond to the nearest @container (MovementList sets one). The
@@ -62,9 +66,18 @@ export function MovementRow({
   const category = movementCategory(entry, categoryName)
   const accountText = showAccount && account ? accountWithNumber(account) : undefined
   const accountColumn = Boolean(accountText) && !compact
+  // A list only ever carries the noted purchases that still count (the server leaves
+  // out those its statement already printed), so a capture here is pending.
+  const pending = entry.origin === 'capture'
 
   const meta = (
     <>
+      {pending && (
+        <>
+          <span className="font-semibold">Pendiente</span>
+          {' · '}
+        </>
+      )}
       {category.label}
       {showDate && ` · ${formatCivilDayMonth(entry.booked_on)}`}
       {accountText && (
@@ -99,7 +112,12 @@ export function MovementRow({
           </span>
         </>
       )}
-      <Amount amount={entry.amount} signed className="text-right" />
+      <Amount
+        amount={entry.amount}
+        signed
+        tone={pending ? 'muted' : 'auto'}
+        className="text-right"
+      />
     </>
   )
 
