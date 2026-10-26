@@ -17,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // Config is the whole configuration of the API process.
@@ -25,12 +25,10 @@ type Config struct {
 	Env  string // "development" or "production"; affects log format and error detail
 	HTTP HTTPConfig
 	DB   DBConfig
-	TB   TigerBeetleConfig
 	Auth AuthConfig
 	AI   AIConfig
 	IBKR IBKRConfig
 	Log  LogConfig
-	Seed SeedConfig
 }
 
 type HTTPConfig struct {
@@ -47,12 +45,6 @@ type HTTPConfig struct {
 type DBConfig struct {
 	URL         string
 	MaxConns    int32
-	ConnectWait time.Duration
-}
-
-type TigerBeetleConfig struct {
-	ClusterID   uint64
-	Addresses   []string
 	ConnectWait time.Duration
 }
 
@@ -80,10 +72,6 @@ type AuthConfig struct {
 type AIConfig struct {
 	APIKey string
 	Model  string
-	// HoldTTL is how long a movement proposed by the assistant keeps its funds
-	// reserved while waiting for the user to confirm. When it elapses the
-	// ledger releases the reservation on its own — no cleanup job involved.
-	HoldTTL time.Duration
 	// MaxToolTurns bounds the agentic loop so a confused model cannot spin.
 	MaxToolTurns int
 
@@ -91,9 +79,8 @@ type AIConfig struct {
 	// one call can cost a fraction of a cent, and a ceiling that cannot represent
 	// the thing it counts is not a ceiling.
 	//
-	// They exist because this deployment is public, registration is open and the
-	// test credentials are published: without them, the budget is whatever a
-	// stranger decides to spend. Zero disables the assistant's use of the API
+	// They exist because this deployment is public and registration is open:
+	// without them, the budget is whatever a stranger decides to spend. Zero disables the assistant's use of the API
 	// entirely, which is a supported state — the rule-based engine answers.
 	//
 	// BudgetMicros is the lifetime ceiling and the one that matters.
@@ -131,11 +118,6 @@ type LogConfig struct {
 	Format string // json | text
 }
 
-type SeedConfig struct {
-	// File is the dataset the seeder imports, relative to the working directory.
-	File string
-}
-
 // Load reads the environment and validates it.
 func Load() (Config, error) {
 	var errs []error
@@ -155,14 +137,9 @@ func Load() (Config, error) {
 			CORSOrigins:     list("CORS_ORIGINS", "http://localhost:5173"),
 		},
 		DB: DBConfig{
-			URL:         str("DATABASE_URL", "postgres://corebank:corebank@localhost:5432/corebank?sslmode=disable"),
+			URL:         str("DATABASE_URL", "postgres://chenchen:chenchen@localhost:5432/chenchen?sslmode=disable"),
 			MaxConns:    int32(number("DB_MAX_CONNS", 10, fail)),
 			ConnectWait: duration("DB_CONNECT_WAIT", 30*time.Second, fail),
-		},
-		TB: TigerBeetleConfig{
-			ClusterID:   uint64(number("TB_CLUSTER_ID", 0, fail)),
-			Addresses:   list("TB_ADDRESSES", "127.0.0.1:3001"),
-			ConnectWait: duration("TB_CONNECT_WAIT", 30*time.Second, fail),
 		},
 		Auth: AuthConfig{
 			AccessTTL:         duration("ACCESS_TOKEN_TTL", 15*time.Minute, fail),
@@ -176,9 +153,8 @@ func Load() (Config, error) {
 			DeviceTTL: duration("DEVICE_TOKEN_TTL", 4320*time.Hour, fail),
 		},
 		AI: AIConfig{
-			APIKey:  str("ANTHROPIC_API_KEY", ""),
-			Model:   str("ANTHROPIC_MODEL", "claude-sonnet-5"),
-			HoldTTL: duration("CONFIRMATION_TTL", 2*time.Minute, fail),
+			APIKey: str("ANTHROPIC_API_KEY", ""),
+			Model:  str("ANTHROPIC_MODEL", "claude-sonnet-5"),
 			// Four, not eight. A banking question needs one or two rounds of
 			// tools; the rest of the allowance only ever bought a confused model
 			// more chances to keep asking, and each round re-sends the whole
@@ -192,13 +168,10 @@ func Load() (Config, error) {
 			Level:  oneOf("LOG_LEVEL", "info", "debug", "info", "warn", "error"),
 			Format: oneOf("LOG_FORMAT", defaultLogFormat(env), "json", "text"),
 		},
-		Seed: SeedConfig{
-			File: str("SEED_FILE", "seed/data/hnl-seed.json"),
-		},
 	}
 
-	// An unset signing secret must not stop the process from booting — the
-	// evaluator's first run has no .env of its own — but a hardcoded fallback
+	// An unset signing secret must not stop the process from booting — a fresh
+	// clone has no .env of its own — but a hardcoded fallback
 	// committed to a public repository would be worse than no secret at all.
 	// So one is generated per process: everything works, and the only cost is
 	// that sessions do not survive a restart. Load's caller warns about it.
@@ -231,16 +204,13 @@ func Load() (Config, error) {
 	if cfg.Auth.BcryptCost < 10 || cfg.Auth.BcryptCost > 15 {
 		fail("BCRYPT_COST must be between 10 and 15, got %d", cfg.Auth.BcryptCost)
 	}
-	if len(cfg.TB.Addresses) == 0 {
-		fail("TB_ADDRESSES must not be empty")
-	}
 	if cfg.AI.MaxToolTurns < 1 {
 		fail("AI_MAX_TOOL_TURNS must be at least 1, got %d", cfg.AI.MaxToolTurns)
 	}
 
 	// Optional, like the AI key: an empty value leaves the IBKR link feature
-	// disabled rather than failing the boot, since most deployments of this
-	// codebase (the public demo included) will never set it.
+	// disabled rather than failing the boot, since a deployment that never links
+	// a brokerage account has no reason to set it.
 	if raw := strings.TrimSpace(os.Getenv("IBKR_TOKEN_ENCRYPTION_KEY")); raw != "" {
 		key, err := base64.StdEncoding.DecodeString(raw)
 		if err != nil {

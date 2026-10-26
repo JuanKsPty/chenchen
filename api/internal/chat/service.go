@@ -3,8 +3,7 @@
 //
 // The loop is the interesting part, and it lives here rather than in the provider
 // so that its rules hold whoever is answering — how many rounds of tools are
-// allowed, what happens when one fails, and above all that a movement is only ever
-// proposed. See mcpserver for why the model cannot act as anybody but the
+// allowed and what happens when one fails. See mcpserver for why the model cannot act as anybody but the
 // authenticated customer.
 package chat
 
@@ -13,14 +12,15 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/mcpserver"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // historyTurns is how much of the conversation is replayed to the model.
@@ -56,8 +56,8 @@ func (s *Service) Provider() llm.Provider { return s.provider }
 // only updates on a page refresh would be telling the customer their reply came
 // from a model that did not write it.
 //
-// A provider that cannot explain itself — the bare fallback — is described from what
-// it does expose, which is the honest reading: no key was configured.
+// A provider that cannot explain itself — a bare Unavailable — is described from
+// what it does expose, which is the honest reading: no key was configured.
 func (s *Service) ProviderState() ProviderState {
 	if p, ok := s.provider.(stateful); ok {
 		return p.State()
@@ -79,26 +79,35 @@ type Event struct {
 	Tool string
 	// Failed marks a tool that returned an error.
 	Failed bool
-	// Confirmation is set on EventConfirmation: a movement holding funds and
-	// waiting for the customer.
-	Confirmation *mcpserver.Confirmation
 	// Code and Message describe a failure, for EventError.
 	Code    string
 	Message string
 	// Provider is set on EventDone: which engine actually answered, which can have
 	// changed during this very exchange.
 	Provider *ProviderState
+	// Proposal is set on EventProposal: a change the assistant proposed, for the
+	// owner to apply or discard.
+	Proposal *Proposal
+}
+
+// Proposal is what the interface needs to render a proposal's card. It comes
+// from the tool's own structured result, which the proposals package wrote,
+// never from the model's prose.
+type Proposal struct {
+	ID      string `json:"proposal_id"`
+	Kind    string `json:"kind"`
+	Summary string `json:"summary"`
 }
 
 type EventKind string
 
 const (
-	EventMessage      EventKind = "message"
-	EventToolCall     EventKind = "tool_call"
-	EventToolResult   EventKind = "tool_result"
-	EventConfirmation EventKind = "confirmation"
-	EventError        EventKind = "error"
-	EventDone         EventKind = "done"
+	EventMessage    EventKind = "message"
+	EventToolCall   EventKind = "tool_call"
+	EventToolResult EventKind = "tool_result"
+	EventProposal   EventKind = "proposal"
+	EventError      EventKind = "error"
+	EventDone       EventKind = "done"
 )
 
 // Emit receives events as the reply is produced.
@@ -182,8 +191,8 @@ func (s *Service) Reply(ctx context.Context, userID uuid.UUID, customerName, mes
 				"limit", s.maxTurns, "pending_calls", len(reply.ToolCalls))
 			emit(Event{
 				Kind: EventError, Code: "too_many_steps",
-				Message: "No pude completar la consulta en los pasos disponibles. " +
-					"Prueba a pedírmelo de forma más concreta.",
+				Message: "No pude terminar la respuesta en los pasos que tengo. " +
+					"Pídemelo de forma más concreta.",
 			})
 			return nil
 		}
@@ -204,10 +213,8 @@ func (s *Service) runTools(ctx context.Context, session *mcpserver.Session, call
 	turn := llm.Message{Role: llm.RoleTool, Results: make([]llm.ToolResult, 0, len(calls))}
 	logger := logging.FromContext(ctx)
 
-	// Sequentially, not concurrently. Two of these can move money, and running
-	// them in parallel would make the order in which reservations hit an account's
-	// balance nondeterministic — so a pair of transfers could both be reserved
-	// against funds that only cover one.
+	// Sequentially, not concurrently, so the events arrive in the order the
+	// model asked for the calls and the log reads as one story.
 	for _, call := range calls {
 		emit(Event{Kind: EventToolCall, Tool: call.Name})
 
@@ -223,12 +230,8 @@ func (s *Service) runTools(ctx context.Context, session *mcpserver.Session, call
 			"arguments", string(call.Arguments))
 
 		emit(Event{Kind: EventToolResult, Tool: call.Name, Failed: result.IsError})
-
-		// The confirmation card comes from the tool's structured output, never
-		// from what the model says about it. A hallucinated id would otherwise
-		// render a working button.
-		if confirmation, ok := mcpserver.ConfirmationFrom(call.Name, result); ok {
-			emit(Event{Kind: EventConfirmation, Tool: call.Name, Confirmation: &confirmation})
+		if p := proposalOf(call.Name, result); p != nil {
+			emit(Event{Kind: EventProposal, Tool: call.Name, Proposal: p})
 		}
 
 		turn.Results = append(turn.Results, llm.ToolResult{
@@ -238,6 +241,18 @@ func (s *Service) runTools(ctx context.Context, session *mcpserver.Session, call
 		})
 	}
 	return turn, nil
+}
+
+// proposalOf reads the proposal a propose_* tool stored, if it stored one.
+func proposalOf(tool string, result mcpserver.Result) *Proposal {
+	if result.IsError || !strings.HasPrefix(tool, "propose_") || len(result.Structured) == 0 {
+		return nil
+	}
+	var p Proposal
+	if err := json.Unmarshal(result.Structured, &p); err != nil || p.ID == "" {
+		return nil
+	}
+	return &p
 }
 
 // History returns the conversation for the interface to render on load.

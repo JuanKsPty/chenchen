@@ -4,21 +4,37 @@ import { Slot } from "radix-ui"
 
 import { cn } from "@/lib/utils"
 
+/**
+ * Badge, drawn as the spec's chip: 28px pill, Figtree 14/20 600, 16px icon,
+ * padding 0 10 (0 10 0 8 with a leading icon). Not interactive unless asChild
+ * wraps a link.
+ *
+ * Variants:
+ *   default / secondary / outline   neutral: surface2, muted text ("Sincronizado",
+ *                                    "Sin saldo inicial")
+ *   positive    positive-soft, positive text ("Cuadra", "Aplicado")
+ *   attention   solid attention fill ("No cuadra · $25.00"). The only orange fill.
+ *   destructive older name for attention
+ *   accent      primary-soft, primary-text (a filter with a value)
+ *   label       micro 12/16 on surface, muted: the type tag on a proposal card
+ *   ghost / link
+ */
 const badgeVariants = cva(
-  "group/badge inline-flex h-5 w-fit shrink-0 items-center justify-center gap-1 overflow-hidden rounded-4xl border border-transparent px-2 py-0.5 text-xs font-medium whitespace-nowrap transition-all focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 has-data-[icon=inline-end]:pr-1.5 has-data-[icon=inline-start]:pl-1.5 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 [&>svg]:pointer-events-none [&>svg]:size-3!",
+  "group/badge inline-flex h-7 w-fit shrink-0 items-center justify-center gap-1.5 overflow-hidden rounded-full px-2.5 text-small font-semibold whitespace-nowrap transition-colors has-[>svg:first-child]:pl-2 has-data-[icon=inline-start]:pl-2 has-data-[icon=inline-end]:pr-2 [&>svg]:pointer-events-none [&>svg]:size-4!",
   {
     variants: {
       variant: {
-        default: "bg-primary text-primary-foreground [a]:hover:bg-primary/80",
-        secondary:
-          "bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80",
-        destructive:
-          "bg-destructive/10 text-destructive focus-visible:ring-destructive/20 dark:bg-destructive/20 dark:focus-visible:ring-destructive/40 [a]:hover:bg-destructive/20",
-        outline:
-          "border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground",
-        ghost:
-          "hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50",
-        link: "text-primary underline-offset-4 hover:underline",
+        default: "bg-muted text-muted-foreground [a]:hover:bg-line",
+        secondary: "bg-muted text-muted-foreground [a]:hover:bg-line",
+        outline: "bg-muted text-muted-foreground [a]:hover:bg-line",
+        positive: "bg-positive-soft text-positive",
+        attention: "bg-attention text-attention-foreground",
+        destructive: "bg-attention text-attention-foreground",
+        accent: "bg-primary-soft text-primary-text",
+        label:
+          "h-auto bg-card px-2 py-0.5 text-micro text-muted-foreground has-[>svg:first-child]:pl-2",
+        ghost: "bg-transparent text-muted-foreground [a]:hover:bg-muted",
+        link: "bg-transparent px-0 text-primary-text underline-offset-4 hover:underline",
       },
     },
     defaultVariants: {

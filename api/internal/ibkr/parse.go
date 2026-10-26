@@ -1,20 +1,47 @@
 package ibkr
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/JuanKsPty/corebank/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
 // Statement is one Flex Query report, translated out of IBKR's XML into
-// corebank-native types. Nothing downstream of this package ever sees IBKR's
+// chenchén-native types. Nothing downstream of this package ever sees IBKR's
 // own attribute strings.
 type Statement struct {
-	AccountID        string
+	AccountID string
+
+	// FromDate and ToDate are the period the report covers, and GeneratedAt
+	// is when IBKR produced it. Each is the zero time when the report does
+	// not carry it, and a malformed value is treated the same way: these
+	// describe the report, they are not data to import, so an unexpected
+	// format must not fail a sync that is otherwise fine.
+	FromDate    time.Time
+	ToDate      time.Time
+	GeneratedAt time.Time
+
+	// HasCashTransactions, HasTrades and HasPositions report whether the
+	// query includes each section at all. A missing section is not the same
+	// as an empty one: replacing the positions snapshot with a section that
+	// was never requested would wipe every holding.
+	HasCashTransactions bool
+	HasTrades           bool
+	HasPositions        bool
+	HasCashReport       bool
+
+	// CashBalances is the Cash Report: the account's cash per currency at the
+	// start and end of the period, as IBKR computes it. It is the figure a
+	// computed cash balance has to agree with.
+	CashBalances []CashBalance
+
 	CashTransactions []CashTransaction
 	Trades           []Trade
 	Positions        []Position
@@ -22,15 +49,15 @@ type Statement struct {
 
 // CashTransaction is money entering or leaving the brokerage account itself —
 // a contribution, a withdrawal, a dividend, interest, a fee, or a trade's net
-// settlement. This is the half of a statement that becomes a real ledger
-// posting; see internal/investments.
+// settlement. This is the half of a statement that becomes movements; see
+// internal/investments.
 type CashTransaction struct {
 	// ExternalRef is IBKR's transactionID: the key SetCategory-style dedup
 	// relies on so re-running the same query twice does not double-post.
 	ExternalRef string
 	// Type is IBKR's own label ("Dividends", "Deposits/Withdrawals", "Broker
 	// Interest Paid", ...), kept verbatim for the movement's description
-	// rather than mapped onto a closed set corebank would have to keep in
+	// rather than mapped onto a closed set chenchén would have to keep in
 	// sync with IBKR's.
 	Type   string
 	Symbol string
@@ -39,9 +66,28 @@ type CashTransaction struct {
 	Amount   money.Cents
 	Currency string
 	When     time.Time
+	// ReportDate is the day IBKR booked the movement.
+	ReportDate  time.Time
+	Description string
+	// Key identifies the movement across syncs: IBKR's transactionID when
+	// there is one, otherwise a hash of what the row says plus its position
+	// among identical rows. Never a counter over the whole window, which
+	// shifts as the window rolls forward.
+	Key string
 }
 
-// Trade is a single execution. Only its net cash effect reaches the ledger
+// CashBalance is one currency's line of the Cash Report.
+type CashBalance struct {
+	Currency      string
+	Starting      money.Cents
+	Ending        money.Cents
+	EndingSettled money.Cents
+	// AsOf is the day Ending refers to; the report's ToDate when the line
+	// does not carry its own.
+	AsOf time.Time
+}
+
+// Trade is a single execution. Only its net cash effect becomes a movement
 // (as a CashTransaction with the same transaction id, on statements that
 // report one); the trade itself — the position it changed — is stored in
 // Postgres only. See internal/investments' package doc for why.
@@ -63,7 +109,7 @@ type Trade struct {
 }
 
 // Position is a holding as of the moment the statement was generated — a
-// snapshot, not a live quote. Never posted to the ledger; see
+// snapshot, not a live quote. Never a movement; see
 // internal/investments.
 type Position struct {
 	Symbol         string
@@ -81,7 +127,7 @@ type Position struct {
 //
 // A statement with more than one <FlexStatement> block is refused rather
 // than merged: a Flex Query configured for one account produces exactly one,
-// and corebank's investments.Service.Sync takes a single account number to
+// and chenchén's investments.Service.Sync takes a single account number to
 // apply the result to. Seeing more than one here means the query is
 // configured differently than expected, which is worth failing loudly on
 // rather than guessing which block corresponds to the linked account.
@@ -96,9 +142,33 @@ func Parse(body []byte) (Statement, error) {
 	}
 	raw := doc.Statements[0]
 
-	stmt := Statement{AccountID: raw.AccountID}
+	stmt := Statement{
+		AccountID:           raw.AccountID,
+		FromDate:            parseOptionalDate(raw.FromDate),
+		ToDate:              parseOptionalDate(raw.ToDate),
+		GeneratedAt:         parseOptionalDateTime(raw.WhenGenerated),
+		HasCashTransactions: raw.CashTransactions != nil,
+		HasTrades:           raw.Trades != nil,
+		HasPositions:        raw.OpenPositions != nil,
+		HasCashReport:       raw.CashReport != nil,
+	}
 
-	for _, ct := range filterCashTransactions(raw.CashTransactions.Items) {
+	var (
+		cashItems     []cashTransactionXML
+		tradeItems    []tradeXML
+		positionItems []openPositionXML
+	)
+	if raw.CashTransactions != nil {
+		cashItems = raw.CashTransactions.Items
+	}
+	if raw.Trades != nil {
+		tradeItems = raw.Trades.Items
+	}
+	if raw.OpenPositions != nil {
+		positionItems = raw.OpenPositions.Items
+	}
+
+	for _, ct := range filterCashTransactions(cashItems) {
 		amount, err := money.Parse(ct.Amount)
 		if err != nil {
 			return Statement{}, fmt.Errorf("ibkr: cash transaction %s: amount %q: %w",
@@ -108,6 +178,10 @@ func Parse(body []byte) (Statement, error) {
 		if err != nil {
 			return Statement{}, fmt.Errorf("ibkr: cash transaction %s: %w", ct.TransactionID, err)
 		}
+		reportDate, err := parseIBKRDate(ct.ReportDate)
+		if err != nil {
+			reportDate = when
+		}
 		stmt.CashTransactions = append(stmt.CashTransactions, CashTransaction{
 			ExternalRef: ct.TransactionID,
 			Type:        ct.Type,
@@ -115,10 +189,36 @@ func Parse(body []byte) (Statement, error) {
 			Amount:      amount,
 			Currency:    ct.Currency,
 			When:        when,
+			ReportDate:  reportDate,
+			Description: ct.Description,
 		})
 	}
+	assignCashKeys(stmt.CashTransactions)
 
-	for _, tr := range raw.Trades.Items {
+	if raw.CashReport != nil {
+		for _, c := range raw.CashReport.Items {
+			// BASE_SUMMARY restates the other lines converted to the base
+			// currency; counting it would double every balance.
+			if c.Currency == "" || c.Currency == "BASE_SUMMARY" {
+				continue
+			}
+			starting, err1 := parseApproxCents(zeroIfEmpty(c.StartingCash))
+			ending, err2 := parseApproxCents(zeroIfEmpty(c.EndingCash))
+			settled, err3 := parseApproxCents(zeroIfEmpty(c.EndingSettledCash))
+			if err := errors.Join(err1, err2, err3); err != nil {
+				return Statement{}, fmt.Errorf("ibkr: cash report %s: %w", c.Currency, err)
+			}
+			asOf := stmt.ToDate
+			if d, err := parseIBKRDate(c.ToDate); err == nil {
+				asOf = d
+			}
+			stmt.CashBalances = append(stmt.CashBalances, CashBalance{
+				Currency: c.Currency, Starting: starting, Ending: ending, EndingSettled: settled, AsOf: asOf,
+			})
+		}
+	}
+
+	for _, tr := range filterTrades(tradeItems) {
 		price, err := parseApproxCents(tr.TradePrice)
 		if err != nil {
 			return Statement{}, fmt.Errorf("ibkr: trade %s: price %q: %w", tr.TradeID, tr.TradePrice, err)
@@ -153,7 +253,7 @@ func Parse(body []byte) (Statement, error) {
 		})
 	}
 
-	for _, p := range filterOpenPositions(raw.OpenPositions.Items) {
+	for _, p := range filterOpenPositions(positionItems) {
 		markPrice, err := parseApproxCents(p.MarkPrice)
 		if err != nil {
 			return Statement{}, fmt.Errorf("ibkr: position %s: mark price %q: %w", p.Symbol, p.MarkPrice, err)
@@ -207,7 +307,7 @@ func zeroIfEmpty(s string) string {
 // rounded — but none of Trade's or Position's fields are ledger amounts
 // (see internal/investments' package doc: only a CashTransaction's own
 // Amount is), so rounding here trades a false sense of sub-cent precision
-// for a value corebank stores and displays in cents everywhere else.
+// for a value chenchén stores and displays in cents everywhere else.
 func parseApproxCents(s string) (money.Cents, error) {
 	f, err := strconv.ParseFloat(s, 64)
 	if err != nil {
@@ -253,7 +353,7 @@ func filterCashTransactions(items []cashTransactionXML) []cashTransactionXML {
 //
 // Verified against a real account: several symbols each appeared twice, once
 // levelOfDetail="SUMMARY" (the whole position) and once "LOT" (one tax lot).
-// corebank tracks aggregate holdings, not individual lots, so the LOT rows
+// chenchén tracks aggregate holdings, not individual lots, so the LOT rows
 // would otherwise violate investment_positions' one-row-per-instrument
 // constraint. Falls back to keeping everything if no row is SUMMARY, on the
 // same reasoning as filterCashTransactions.
@@ -303,4 +403,67 @@ func parseIBKRDate(date string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("malformed date %q: %w", date, err)
 	}
 	return t, nil
+}
+
+// parseOptionalDate parses a statement-level date attribute, returning the
+// zero time when it is absent or not in the expected "YYYYMMdd" form.
+func parseOptionalDate(date string) time.Time {
+	t, err := parseIBKRDate(date)
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// parseOptionalDateTime parses whenGenerated ("YYYYMMdd;HHmmss"), returning
+// the zero time when it is absent or malformed.
+func parseOptionalDateTime(dateTime string) time.Time {
+	if dateTime == "" {
+		return time.Time{}
+	}
+	t, err := parseIBKRDateTime(dateTime, "")
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// assignCashKeys gives every cash row its stable Key.
+func assignCashKeys(rows []CashTransaction) {
+	seen := map[string]int{}
+	for i := range rows {
+		r := &rows[i]
+		if r.ExternalRef != "" {
+			r.Key = "id:" + r.ExternalRef
+			continue
+		}
+		tuple := fmt.Sprintf("%s|%s|%s|%d|%s|%s", r.ReportDate.Format("20060102"), r.Type, r.Symbol,
+			r.Amount, r.Currency, r.Description)
+		sum := sha256.Sum256([]byte(tuple))
+		r.Key = fmt.Sprintf("noref:%s:%d", hex.EncodeToString(sum[:12]), seen[tuple])
+		seen[tuple]++
+	}
+}
+
+// filterTrades keeps execution-level rows when the report has any. A query
+// that also asks for order or closed-lot detail restates each fill at those
+// levels, often without a tradeID, and counting them would repeat the trade.
+func filterTrades(items []tradeXML) []tradeXML {
+	hasExecution := false
+	for _, it := range items {
+		if it.LevelOfDetail == "EXECUTION" {
+			hasExecution = true
+			break
+		}
+	}
+	if !hasExecution {
+		return items
+	}
+	out := make([]tradeXML, 0, len(items))
+	for _, it := range items {
+		if it.LevelOfDetail == "EXECUTION" {
+			out = append(out, it)
+		}
+	}
+	return out
 }

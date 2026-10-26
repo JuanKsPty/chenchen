@@ -1,19 +1,51 @@
 import { Link } from 'react-router-dom'
 
-import { Wordmark } from '@/components/Wordmark'
+import type { ApiError } from '@/api/client'
+import { Wordmark } from '@/components/brand'
+import { shell } from '@/lib/layout'
 import { cn } from '@/lib/utils'
 
 /**
- * AuthLayout is the frame around signing in and signing up.
+ * The frame of the signed-out pages: the portada, Entrar and Registro.
  *
- * One card, centred, and nothing else. This used to be two panels — the form beside an
- * ink panel restating what the bank is — which is a reasonable thing for a landing page
- * to do and the wrong thing here. Somebody who reached `/entrar` has already decided;
- * they came to type a password, and half the screen arguing the product's merits is an
- * obstacle between them and the only control that matters. The argument lives on `/`,
- * where it belongs and where it is demonstrated rather than asserted.
- *
- * The wordmark stays, because a form that asks for a password should say whose it is.
+ * They use the app's own `shell` container (spec landingHero): 1120px of content
+ * with the 16/32 gutter, so the wordmark sits where the signed-in bar's does and
+ * does not jump between pages.
+ */
+
+/**
+ * The 72px bar with the wordmark alone, 28px tall. No buttons: the portada's hero
+ * already holds both ways in. On the forms the wordmark links back to the portada.
+ */
+export function PublicHeader({ linkHome = false }: { linkHome?: boolean }) {
+  return (
+    // 72px under the notch: index.html sets viewport-fit=cover, as in the shell.
+    <header
+      className={cn(
+        shell,
+        'flex h-[calc(4.5rem+env(safe-area-inset-top))] shrink-0 items-center pt-[env(safe-area-inset-top)]',
+      )}
+    >
+      {linkHome ? (
+        <Link
+          to="/"
+          aria-label="chenchén, ir a la portada"
+          className="-ml-2 flex h-12 items-center rounded-full px-2"
+        >
+          <Wordmark size="landing" />
+        </Link>
+      ) : (
+        <Wordmark size="landing" />
+      )}
+    </header>
+  )
+}
+
+/**
+ * AuthLayout frames the e-mail forms (Entrar and Registro): a 400px column, a card
+ * from md and the bare page below it, so a phone gets the whole width for the
+ * fields. The heading is the page's h1 in title 32/36; the footer ("¿No tienes
+ * cuenta? Crear cuenta") sits under the card.
  */
 export function AuthLayout({
   title,
@@ -22,46 +54,40 @@ export function AuthLayout({
   footer,
 }: {
   title: string
-  subtitle: string
+  subtitle?: React.ReactNode
   children: React.ReactNode
-  footer: React.ReactNode
+  footer?: React.ReactNode
 }) {
   return (
-    <div className="flex min-h-dvh flex-col items-center justify-center bg-paper px-4 py-10">
-      <div className="w-full max-w-[26rem]">
-        <Link
-          to="/"
-          aria-label="corebank, ir al inicio"
-          className="mx-auto mb-8 block w-fit"
-        >
-          <Wordmark className="h-[18px] text-ink" />
-        </Link>
-
-        <div className="card bg-paper-raised p-6 sm:p-7">
-          <h1 className="type-display text-[1.5rem]">{title}</h1>
-          <p className="mt-1.5 text-[0.9375rem] text-ink-soft">{subtitle}</p>
-
-          <div className="mt-6">{children}</div>
-
-          <div className="mt-6 border-t border-rule pt-5 text-[0.875rem] text-ink-soft">
+    <div className="flex min-h-dvh flex-col bg-background">
+      <PublicHeader linkHome />
+      <main className="flex flex-1 flex-col items-center px-4 pt-6 pb-12 md:justify-center md:px-8 md:pt-0 md:pb-24">
+        <div className="w-full max-w-100 md:rounded-2xl md:bg-card md:p-8 md:shadow-card">
+          <h1 className="font-display text-title font-bold text-balance">{title}</h1>
+          {subtitle && (
+            <p className="mt-2 text-body text-pretty text-muted-foreground">{subtitle}</p>
+          )}
+          <div className="mt-8">{children}</div>
+        </div>
+        {footer && (
+          <div className="mt-6 flex w-full max-w-100 flex-wrap items-center justify-center gap-x-1 text-body text-muted-foreground">
             {footer}
           </div>
-        </div>
-      </div>
+        )}
+      </main>
     </div>
   )
 }
 
-export function AuthLink({ to, children }: { to: string; children: React.ReactNode }) {
+/**
+ * Under a server fault (5xx) only, the start of the request id: it is what makes
+ * the failure findable in the logs. An ordinary refusal shows nothing extra.
+ */
+export function Reference({ failure }: { failure: ApiError }) {
+  if (failure.status < 500 || !failure.requestId) return null
   return (
-    <Link
-      to={to}
-      className={cn(
-        'font-medium text-copper underline decoration-copper/35 underline-offset-2',
-        'hover:decoration-copper',
-      )}
-    >
-      {children}
-    </Link>
+    <span className="mt-1 block font-normal select-all">
+      Referencia {failure.requestId.slice(0, 8)}
+    </span>
   )
 }

@@ -12,11 +12,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/logging"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/logging"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // maxMessageRunes caps one customer message. Long enough for any banking request,
@@ -68,9 +68,7 @@ type sendRequest struct {
 //
 // SSE rather than a single JSON response because an exchange can take several
 // seconds: the model thinks, a tool runs, then it thinks again. Streaming makes
-// that visible progress instead of a spinner, and it is what lets the confirmation
-// card appear the instant the funds are reserved rather than after the assistant
-// finishes writing about it.
+// that visible progress instead of a spinner.
 //
 // SSE rather than WebSockets because the traffic is one-directional — the customer
 // posts, the server narrates — and SSE needs no protocol upgrade, so it survives
@@ -155,11 +153,11 @@ func errorEvent(err error) Event {
 	switch {
 	case errors.Is(err, llm.ErrUnavailable):
 		return Event{Kind: EventError, Code: "assistant_unavailable",
-			Message: "El asistente no está disponible ahora mismo. Vuelve a intentarlo en un momento."}
+			Message: "El asistente no está disponible ahora. Intenta otra vez en un momento."}
 
 	case errors.Is(err, context.DeadlineExceeded):
 		return Event{Kind: EventError, Code: "assistant_timeout",
-			Message: "El asistente tardó demasiado en responder. Inténtalo de nuevo."}
+			Message: "El asistente tardó demasiado en responder. Intenta otra vez."}
 
 	case errors.Is(err, context.Canceled):
 		// The customer navigated away. Nothing to report to a browser that is gone,
@@ -168,7 +166,7 @@ func errorEvent(err error) Event {
 
 	default:
 		return Event{Kind: EventError, Code: "assistant_error",
-			Message: "No he podido completar la consulta. Inténtalo de nuevo."}
+			Message: "No pude terminar la respuesta. Intenta otra vez."}
 	}
 }
 
@@ -180,52 +178,27 @@ func errorEvent(err error) Event {
 // browser would need a discriminated union per event type. A single optional-field
 // shape keeps the client's handling to one switch.
 type eventPayload struct {
-	Text         string            `json:"text,omitempty"`
-	Tool         string            `json:"tool,omitempty"`
-	Failed       bool              `json:"failed,omitempty"`
-	Confirmation *confirmationCard `json:"confirmation,omitempty"`
-	Code         string            `json:"code,omitempty"`
-	Message      string            `json:"message,omitempty"`
-	Provider     *providerView     `json:"provider,omitempty"`
-}
-
-// confirmationCard is everything the interface needs to render the card and act on
-// it — with no second request, so the card cannot appear before its own details.
-type confirmationCard struct {
-	// HoldID is what the client posts to /api/transactions/{hold_id}/confirm.
-	// Ownership is verified there on every use, so this is a handle rather than a
-	// capability.
-	HoldID             string `json:"hold_id"`
-	Kind               string `json:"kind"`
-	Amount             string `json:"amount"`
-	FromAccount        string `json:"from_account"`
-	ToAccount          string `json:"to_account"`
-	BalanceIfConfirmed string `json:"balance_if_confirmed,omitempty"`
-	ExpiresAt          string `json:"expires_at"`
+	Text     string        `json:"text,omitempty"`
+	Tool     string        `json:"tool,omitempty"`
+	Failed   bool          `json:"failed,omitempty"`
+	Code     string        `json:"code,omitempty"`
+	Message  string        `json:"message,omitempty"`
+	Provider *providerView `json:"provider,omitempty"`
+	Proposal *Proposal     `json:"proposal,omitempty"`
 }
 
 func writeEvent(w http.ResponseWriter, event Event) error {
 	payload := eventPayload{
-		Text:    event.Text,
-		Tool:    event.Tool,
-		Failed:  event.Failed,
-		Code:    event.Code,
-		Message: event.Message,
+		Text:     event.Text,
+		Tool:     event.Tool,
+		Failed:   event.Failed,
+		Code:     event.Code,
+		Message:  event.Message,
+		Proposal: event.Proposal,
 	}
 	if event.Provider != nil {
 		view := toProviderView(*event.Provider)
 		payload.Provider = &view
-	}
-	if event.Confirmation != nil {
-		payload.Confirmation = &confirmationCard{
-			HoldID:             event.Confirmation.ID.String(),
-			Kind:               event.Confirmation.Kind,
-			Amount:             event.Confirmation.Amount,
-			FromAccount:        event.Confirmation.FromAccount,
-			ToAccount:          event.Confirmation.ToAccount,
-			BalanceIfConfirmed: event.Confirmation.BalanceIfConfirmed,
-			ExpiresAt:          event.Confirmation.ExpiresAt,
-		}
 	}
 
 	data, err := json.Marshal(payload)
@@ -243,8 +216,8 @@ func writeEvent(w http.ResponseWriter, event Event) error {
 
 type historyResponse struct {
 	Messages []messageView `json:"messages"`
-	// Provider tells the interface what is answering, so it can label a
-	// rule-based fallback as such instead of passing it off as an assistant.
+	// Provider tells the interface what is answering, so it can say plainly
+	// when the assistant is unavailable and why.
 	Provider providerView `json:"provider"`
 }
 
@@ -252,7 +225,7 @@ type providerView struct {
 	Name string `json:"name"`
 	IsAI bool   `json:"is_ai"`
 	// Engine says *why* a rule-based reply is rule-based, which the interface needs
-	// in order to be truthful. "No AI configured" and "the demo's AI budget ran out"
+	// in order to be truthful. "No AI configured" and "the AI budget ran out"
 	// look identical from is_ai alone, and they are not the same message: the first
 	// is how the project runs without credentials, the second means the money is
 	// gone. One of them is worth telling somebody about.

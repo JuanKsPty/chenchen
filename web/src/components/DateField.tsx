@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useId, useState } from 'react'
 import type { Matcher } from 'react-day-picker'
 import { CalendarIcon } from 'lucide-react'
 
-import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field'
+import { Field, FieldError, FieldLabel } from '@/components/ui/field'
 import {
   InputGroup,
   InputGroupAddon,
@@ -12,14 +12,6 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Skeleton } from '@/components/ui/skeleton'
 
-/**
- * The calendar, split out of the main bundle.
- *
- * `react-day-picker` and the `date-fns` locale it needs are 26 KB gzipped — more than a
- * tenth of the whole application — for a control that lives behind a button on one
- * screen. Loading it when the button is pressed keeps that off the first paint of every
- * page, and by the time the popover has finished opening it is already there.
- */
 /**
  * The single-date props this field actually uses.
  *
@@ -47,7 +39,9 @@ interface CalendarPickerProps {
 const LazyCalendar = lazy(async () => {
   const [{ Calendar }, { es }] = await Promise.all([
     import('@/components/ui/calendar'),
-    import('date-fns/locale/es'),
+    // DayPicker's own Spanish locale: date-fns' plus its labels ("Ir al mes
+    // siguiente", "Barra de navegación"), which otherwise stay in English.
+    import('react-day-picker/locale/es'),
   ])
   return {
     default: (props: CalendarPickerProps) => (
@@ -57,11 +51,25 @@ const LazyCalendar = lazy(async () => {
 })
 
 /**
+ * <DateField label value onChange onIncompleteChange? min? max? className? />
+ *
+ *   label     the visible label ("Desde", "Hasta")
+ *   value     ISO yyyy-mm-dd, or ""
+ *   onChange  called with ISO yyyy-mm-dd once the text is a real date, or "" when
+ *             the field is emptied; never with a half-typed date
+ *   onIncompleteChange  true while the text is not a real date (half-typed, or a day
+ *             that does not exist), when `value` is no longer what the field shows
+ *   min, max  ISO bounds: they explain a rejected date and grey it out in the calendar
+ *
+ * A pill field (48px on mobile, 44 from md) with the placeholder "dd/mm/aaaa" and a
+ * calendar button inside it (44px below lg, where it may be a finger; 36 from lg,
+ * "Elegir desde en el calendario"). A wrong date says why under the field.
+ *
  * A date field that writes the date the way this application's readers write it, and
  * lets them pick it instead if they would rather.
  *
  * `<input type="date">` was here and had to go. Its placeholder and its typing order
- * come from the browser's locale, not the page's, so a Spanish-language bank rendered
+ * come from the browser's locale, not the page's, so a Spanish-language app rendered
  * "mm/dd/yyyy" for anybody whose browser was set to en-US — and a customer who reads
  * 03/08 as the third of August had been handed a control that means the eighth of
  * March. There is no HTML or CSS that changes it: the format is the user agent's.
@@ -76,6 +84,7 @@ export function DateField({
   label,
   value,
   onChange,
+  onIncompleteChange,
   min,
   max,
   className,
@@ -85,6 +94,12 @@ export function DateField({
   value: string
   /** Called with ISO `yyyy-mm-dd`, or empty when the field is cleared. */
   onChange: (iso: string) => void
+  /**
+   * Called with true while the text is not a real date, so a form can hold its
+   * submit instead of sending the last date that was (`value`), which is not what
+   * the field shows.
+   */
+  onIncompleteChange?: (incomplete: boolean) => void
   /** ISO bounds. They explain a rejected date, and they grey it out in the calendar. */
   min?: string
   max?: string
@@ -94,15 +109,20 @@ export function DateField({
   const [text, setText] = useState(() => toDisplay(value))
   const [open, setOpen] = useState(false)
 
-  // Follow the value when it is changed from outside — the "Limpiar" button empties
-  // every filter at once, and a field still showing what was typed into it would be
-  // lying about what is being filtered.
+  // Follow the value when it is changed from outside (the parent resets or fills
+  // it); a field still showing what was typed into it would be lying about the date
+  // it holds.
   useEffect(() => {
     setText((current) => (toISO(current) === value ? current : toDisplay(value)))
   }, [value])
 
   const digits = text.replace(/\D/g, '')
   const iso = toISO(text)
+  const incomplete = text !== '' && !iso
+
+  useEffect(() => {
+    onIncompleteChange?.(incomplete)
+  }, [incomplete, onIncompleteChange])
 
   let problem: string | undefined
   if (digits.length === 8 && !iso) {
@@ -156,20 +176,22 @@ export function DateField({
           autoComplete="off"
           maxLength={10}
           aria-invalid={problem ? true : undefined}
-          aria-describedby={problem ? `${id}-error` : `${id}-hint`}
+          aria-describedby={problem ? `${id}-error` : undefined}
         />
         <InputGroupAddon align="inline-end">
           <Popover open={open} onOpenChange={setOpen}>
             <PopoverTrigger asChild>
               <InputGroupButton
-                size="icon-xs"
+                size="icon"
+                variant="plain"
+                className="text-muted-foreground hover:text-foreground lg:size-9"
                 aria-label={`Elegir ${label.toLowerCase()} en el calendario`}
               >
                 <CalendarIcon aria-hidden="true" />
               </InputGroupButton>
             </PopoverTrigger>
             <PopoverContent align="end" className="w-auto p-0">
-              <Suspense fallback={<Skeleton className="m-2 h-56 w-60" />}>
+              <Suspense fallback={<Skeleton className="m-2 h-72 w-72 rounded-2xl" />}>
                 <LazyCalendar
                   autoFocus
                   defaultMonth={toDate(iso) ?? undefined}
@@ -184,11 +206,7 @@ export function DateField({
           </Popover>
         </InputGroupAddon>
       </InputGroup>
-      {problem ? (
-        <FieldError id={`${id}-error`}>{problem}</FieldError>
-      ) : (
-        <FieldDescription id={`${id}-hint`}>Escríbela o elígela.</FieldDescription>
-      )}
+      {problem && <FieldError id={`${id}-error`}>{problem}</FieldError>}
     </Field>
   )
 }

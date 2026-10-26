@@ -12,9 +12,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/JuanKsPty/corebank/api/internal/ledger"
-	"github.com/JuanKsPty/corebank/api/internal/money"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // Error is a failure already shaped for the client.
@@ -22,7 +21,7 @@ import (
 // Message is user-facing and in Spanish, matching the interface. Code is a
 // stable machine-readable identifier the frontend can branch on without
 // matching prose. cause is logged but never serialised: it is where the
-// database driver's or the ledger's own wording stays.
+// database driver's own wording stays.
 type Error struct {
 	Status  int
 	Code    string
@@ -84,7 +83,7 @@ func Internal(err error) *Error {
 	return &Error{
 		Status:  http.StatusInternalServerError,
 		Code:    "internal_error",
-		Message: "Ocurrió un error inesperado. Inténtalo de nuevo.",
+		Message: "Algo falló de nuestro lado. Tus datos están bien; intenta otra vez en un momento.",
 		cause:   err,
 	}
 }
@@ -94,7 +93,7 @@ func Invalid(fields map[string]string) *Error {
 	return &Error{
 		Status:  http.StatusUnprocessableEntity,
 		Code:    "validation_failed",
-		Message: "Revisa los datos enviados.",
+		Message: "Revisa los datos marcados.",
 		Fields:  fields,
 	}
 }
@@ -117,55 +116,13 @@ func asAPIError(err error) *Error {
 	// A repository reporting "no rows" that no handler chose to interpret is
 	// still a missing resource, not a server fault.
 	case errors.Is(err, store.ErrNotFound):
-		return NotFound("not_found", "El recurso solicitado no existe.").WithCause(err)
+		return NotFound("not_found", "No encontramos lo que buscas.").WithCause(err)
 
 	case errors.Is(err, store.ErrConflict):
-		return Conflict("conflict", "El recurso ya existe o entra en conflicto con otro.").WithCause(err)
+		return Conflict("conflict", "Eso ya existe.").WithCause(err)
 
-	// --- ledger: money ---
-	case errors.Is(err, ledger.ErrInsufficientFunds):
-		return Unprocessable("insufficient_funds",
-			"La cuenta no tiene fondos suficientes para esta operación.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrSourceNotFound):
-		return NotFound("source_account_not_found", "La cuenta de origen no existe.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrDestinationNotFound):
-		return NotFound("destination_account_not_found", "La cuenta de destino no existe.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrSameAccount):
-		return BadRequest("same_account",
-			"La cuenta de origen y la de destino deben ser distintas.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrAmountNotPositive), errors.Is(err, money.ErrNotPositive):
+	case errors.Is(err, money.ErrNotPositive):
 		return BadRequest("amount_not_positive", "El monto debe ser mayor que cero.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrInvalidAccountNumber):
-		return BadRequest("invalid_account_number", "El número de cuenta no es válido.").WithCause(err)
-
-	// --- ledger: two-phase confirmation ---
-	case errors.Is(err, ledger.ErrHoldNotFound):
-		return NotFound("confirmation_not_found",
-			"Esta confirmación ya no existe.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrHoldExpired):
-		return Conflict("confirmation_expired",
-			"La confirmación expiró y los fondos se liberaron. Vuelve a intentarlo.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrHoldAlreadySettled):
-		return Conflict("already_confirmed", "Esta operación ya fue confirmada.").WithCause(err)
-
-	case errors.Is(err, ledger.ErrHoldAlreadyVoided):
-		return Conflict("already_cancelled", "Esta operación ya fue cancelada.").WithCause(err)
-
-	// --- ledger: idempotency ---
-	// A replayed movement is not a failure; the caller's earlier attempt
-	// succeeded. Handlers that can distinguish it return the original result
-	// instead, so reaching here means a path that cannot, and reporting the
-	// operation as done is still the truthful answer.
-	case errors.Is(err, ledger.ErrPreviouslyFailed):
-		return Conflict("movement_previously_failed",
-			"Esta operación ya había fallado antes y no puede reintentarse con el mismo identificador.").WithCause(err)
 
 	// --- money parsing ---
 	case errors.Is(err, money.ErrTooPrecise):

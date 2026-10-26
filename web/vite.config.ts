@@ -30,15 +30,5 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
-    rollupOptions: {
-      output: {
-        // The charting library is over half the bundle and only the dashboard's
-        // flow chart needs it. Splitting it out means the login page — the first
-        // thing anybody loads — does not pay for it.
-        manualChunks: {
-          charts: ['recharts'],
-        },
-      },
-    },
   },
 })

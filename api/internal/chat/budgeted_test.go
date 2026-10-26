@@ -10,9 +10,9 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/identity"
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/store"
+	"github.com/JuanKsPty/chenchen/api/internal/identity"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
 // --- doubles -----------------------------------------------------------------
@@ -515,14 +515,14 @@ func TestBudgetedScopesAreDatedInUTC(t *testing.T) {
 	}
 }
 
-// The plain fallback cannot report a state, and must be described as what it is:
+// A bare Unavailable cannot report a state, and must be described as what it is:
 // an application with no key configured, not one whose budget ran out.
-func TestProviderStateOfABareFallback(t *testing.T) {
-	svc := &Service{provider: NewFallback()}
+func TestProviderStateOfABareUnavailable(t *testing.T) {
+	svc := &Service{provider: NewUnavailable()}
 
 	got := svc.ProviderState()
 	if got.IsAI {
-		t.Error("ProviderState() claims the rule-based engine is an AI")
+		t.Error("ProviderState() claims the unavailable stand-in is an AI")
 	}
 	if got.Engine != EngineUnconfigured {
 		t.Errorf("ProviderState().Engine = %q, want %q", got.Engine, EngineUnconfigured)

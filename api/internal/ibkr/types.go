@@ -23,16 +23,27 @@ type sendRequestResponse struct {
 type statementDocument struct {
 	XMLName    xml.Name `xml:"FlexQueryResponse"`
 	Statements []struct {
-		AccountID        string `xml:"accountId,attr"`
-		CashTransactions struct {
+		AccountID string `xml:"accountId,attr"`
+		// The window the report covers and when IBKR produced it. The client
+		// never sends dates, so these are the only record of which period the
+		// query's own saved settings actually returned.
+		FromDate      string `xml:"fromDate,attr"`
+		ToDate        string `xml:"toDate,attr"`
+		WhenGenerated string `xml:"whenGenerated,attr"`
+		// Pointers, so a section the query does not include at all (nil) can
+		// be told apart from one that is present but empty.
+		CashTransactions *struct {
 			Items []cashTransactionXML `xml:"CashTransaction"`
 		} `xml:"CashTransactions"`
-		Trades struct {
+		Trades *struct {
 			Items []tradeXML `xml:"Trade"`
 		} `xml:"Trades"`
-		OpenPositions struct {
+		OpenPositions *struct {
 			Items []openPositionXML `xml:"OpenPosition"`
 		} `xml:"OpenPositions"`
+		CashReport *struct {
+			Items []cashReportXML `xml:"CashReportCurrency"`
+		} `xml:"CashReport"`
 	} `xml:"FlexStatements>FlexStatement"`
 }
 
@@ -71,6 +82,17 @@ type tradeXML struct {
 	// cash transactions and positions do — but captured so that becomes a
 	// one-line fix instead of a schema change if it turns out they do.
 	LevelOfDetail string `xml:"levelOfDetail,attr"`
+}
+
+// cashReportXML is one currency's line of the Cash Report section: the cash
+// the account held at the start and end of the report's period.
+type cashReportXML struct {
+	Currency          string `xml:"currency,attr"`
+	LevelOfDetail     string `xml:"levelOfDetail,attr"`
+	StartingCash      string `xml:"startingCash,attr"`
+	EndingCash        string `xml:"endingCash,attr"`
+	EndingSettledCash string `xml:"endingSettledCash,attr"`
+	ToDate            string `xml:"toDate,attr"`
 }
 
 type openPositionXML struct {

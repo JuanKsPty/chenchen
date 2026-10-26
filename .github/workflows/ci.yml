@@ -8,14 +8,17 @@
 # by construction rather than by a pipeline remembering to check first — and there
 # is one less credential to leak.
 #
-# Nothing here needs a database or a ledger. The one test that wants TigerBeetle
-# skips itself when it cannot reach one, so the whole suite runs on a bare runner.
+# The api job runs against a real PostgreSQL service container. Tests that need a
+# database get their own throwaway one from internal/storetest, and with CI=true a
+# missing database fails the run instead of skipping those tests.
 
 name: ci
 
+# Every pull request, not only those based on main: in a stack of pull requests
+# each one is based on the branch below it, and a filter on main would leave
+# every PR above the bottom one unchecked.
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main]
 
@@ -31,12 +34,22 @@ jobs:
   api:
     name: api
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        # The same major version the deployment runs.
+        image: postgres:17-alpine
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 20
     steps:
       - uses: actions/checkout@v5
 
-      # ubuntu-latest, and not a slimmer image: the TigerBeetle Go client links a
-      # precompiled native library that ships for glibc only, so this cannot be
-      # built on Alpine and cannot be built without cgo.
       - uses: actions/setup-go@v6
         with:
           go-version-file: api/go.mod
@@ -64,12 +77,14 @@ jobs:
         working-directory: api
         run: go mod tidy -diff
 
+      # Static, as the image builds it.
       - name: build
         working-directory: api
         env:
-          CGO_ENABLED: 1
+          CGO_ENABLED: 0
         run: go build ./...
 
+      # cgo only here: the race detector needs it, the binaries do not.
       # -race because the assistant's spend ceiling is guarded by atomics and
       # reached from concurrent requests. A ceiling that holds only when requests
       # arrive one at a time is not a ceiling, and its test spawns twenty
@@ -78,6 +93,7 @@ jobs:
         working-directory: api
         env:
           CGO_ENABLED: 1
+          TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres?sslmode=disable
         run: go test -race ./...
 
   web:
@@ -140,6 +156,24 @@ jobs:
             exit 1
           fi
           echo "no API keys found in tracked files"
+
+      # Private working notes live in info/, which is gitignored. This keeps their
+      # wording out of tracked files too, where a stray paste would be public. The
+      # terms are a repository variable rather than written here, because a list of
+      # words that must not appear in this repository would itself appear in it.
+      - name: no private context in tracked files
+        env:
+          PRIVATE_TERMS: ${{ vars.PRIVATE_TERMS }}
+        run: |
+          if [ -z "$PRIVATE_TERMS" ]; then
+            echo "::warning::PRIVATE_TERMS is not set; skipping"
+            exit 0
+          fi
+          if git grep -nIiE "$PRIVATE_TERMS" -- .; then
+            echo "::error::a tracked file mentions private context; keep it in info/"
+            exit 1
+          fi
+          echo "no private context found in tracked files"
 
       # An .env is how the key reaches a container locally, so it must never be
       # tracked. .gitignore covers it; this checks that the ignore rule was not

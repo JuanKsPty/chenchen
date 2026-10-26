@@ -1,4 +1,4 @@
--- A bank-account import (Banco General or BAC checking/savings) now posts
+-- A bank-account import (a checking or savings statement) now posts
 -- real ledger movements into one of the customer's own accounts, instead of
 -- only ever landing in external_transactions — see internal/bankimport's
 -- package doc for the updated split. A card import is unaffected:

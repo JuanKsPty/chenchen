@@ -8,8 +8,8 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/JuanKsPty/corebank/api/internal/llm"
-	"github.com/JuanKsPty/corebank/api/internal/mcpserver"
+	"github.com/JuanKsPty/chenchen/api/internal/llm"
+	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
 )
 
 // The size of the fixed preamble decides two things, so it is measured rather than

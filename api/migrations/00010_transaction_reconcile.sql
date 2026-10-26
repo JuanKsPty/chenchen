@@ -1,5 +1,5 @@
 -- A customer can state the true balance a bank import got wrong (a parser
--- miscounted or misread a statement) and have corebank post one corrective
+-- miscounted or misread a statement) and have chenchén post one corrective
 -- deposit or withdrawal for the difference — see internal/transactions'
 -- Reconcile, posted through the ordinary deposit/withdraw path exactly like
 -- an IBKR cash sync or a bank import already does (00005_investments.sql,

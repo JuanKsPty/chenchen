@@ -160,7 +160,7 @@ func VerifyPin(hash, plain string) error {
 type timingEqualiser struct{ decoy []byte }
 
 func newTimingEqualiser(cost int) (timingEqualiser, error) {
-	decoy, err := bcrypt.GenerateFromPassword([]byte("corebank-timing-decoy"), cost)
+	decoy, err := bcrypt.GenerateFromPassword([]byte("chenchen-timing-decoy"), cost)
 	if err != nil {
 		return timingEqualiser{}, fmt.Errorf("auth: generating the timing decoy: %w", err)
 	}

@@ -18,15 +18,19 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
-	"github.com/JuanKsPty/corebank/api/internal/accounts"
-	"github.com/JuanKsPty/corebank/api/internal/auth"
-	"github.com/JuanKsPty/corebank/api/internal/bankimport"
-	"github.com/JuanKsPty/corebank/api/internal/categories"
-	"github.com/JuanKsPty/corebank/api/internal/chat"
-	"github.com/JuanKsPty/corebank/api/internal/config"
-	"github.com/JuanKsPty/corebank/api/internal/httpx"
-	"github.com/JuanKsPty/corebank/api/internal/investments"
-	"github.com/JuanKsPty/corebank/api/internal/transactions"
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
+	"github.com/JuanKsPty/chenchen/api/internal/auth"
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/chat"
+	"github.com/JuanKsPty/chenchen/api/internal/config"
+	"github.com/JuanKsPty/chenchen/api/internal/httpx"
+	"github.com/JuanKsPty/chenchen/api/internal/imports"
+	"github.com/JuanKsPty/chenchen/api/internal/investments"
+	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/proposals"
+	"github.com/JuanKsPty/chenchen/api/internal/reports"
+	"github.com/JuanKsPty/chenchen/api/internal/rules"
+	"github.com/JuanKsPty/chenchen/api/internal/transfers"
 )
 
 // Deps are the collaborators the routing table needs. It grows as features land;
@@ -39,14 +43,18 @@ type Deps struct {
 	// that appears in the response.
 	Health map[string]httpx.Checker
 
-	Auth         *auth.Handler
-	Tokens       *auth.TokenIssuer
-	Accounts     *accounts.Handler
-	Transactions *transactions.Handler
-	Categories   *categories.Handler
-	Investments  *investments.Handler
-	BankImport   *bankimport.Handler
-	Chat         *chat.Handler
+	Auth        *auth.Handler
+	Tokens      *auth.TokenIssuer
+	Accounts    *accounts.Handler
+	Movements   *movements.Handler
+	Categories  *categories.Handler
+	Investments *investments.Handler
+	Imports     *imports.Handler
+	Reports     *reports.Handler
+	Transfers   *transfers.Handler
+	Rules       *rules.Handler
+	Proposals   *proposals.Handler
+	Chat        *chat.Handler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -79,28 +87,26 @@ func NewRouter(d Deps) http.Handler {
 			r.Use(auth.Require(d.Tokens))
 
 			r.Get("/me", d.Auth.Me)
-			r.Get("/dashboard/summary", d.Transactions.Dashboard)
-			r.Mount("/accounts", d.Accounts.Routes(d.Transactions.AccountHistory))
-			r.Mount("/transactions", d.Transactions.Routes())
+			r.Mount("/accounts", d.Accounts.Routes(d.Movements.AccountEntries))
+			r.Mount("/entries", d.Movements.Routes())
 			r.Mount("/categories", d.Categories.Routes())
 			r.Mount("/investments", d.Investments.Routes())
-			r.Mount("/external-accounts", d.BankImport.Routes())
-			// Mounted at the transaction's own URL, not under
-			// /external-accounts, for the same reason
-			// transactions/{id}/category sits under /transactions rather
-			// than under /accounts.
-			r.Patch("/external-transactions/{id}/category", d.BankImport.SetCategory)
+			r.Mount("/imports", d.Imports.Routes())
+			r.Mount("/reports", d.Reports.Routes())
+			r.Mount("/transfers", d.Transfers.Routes())
+			r.Mount("/category-rules", d.Rules.Routes())
+			r.Mount("/proposals", d.Proposals.Routes())
 			r.Mount("/chat", d.Chat.Routes())
 		})
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-			httpx.Fail(w, r, httpx.NotFound("not_found", "El recurso solicitado no existe."))
+			httpx.Fail(w, r, httpx.NotFound("not_found", "No encontramos lo que buscas."))
 		})
 		r.MethodNotAllowed(func(w http.ResponseWriter, r *http.Request) {
 			httpx.Fail(w, r, &httpx.Error{
 				Status:  http.StatusMethodNotAllowed,
 				Code:    "method_not_allowed",
-				Message: "El método no está permitido en este recurso.",
+				Message: "Eso no se puede hacer aquí.",
 			})
 		})
 	})
@@ -154,7 +160,7 @@ func Run(ctx context.Context, addr string, h http.Handler, shutdownTimeout time.
 	}
 	// Request contexts intentionally do not inherit ctx: cancelling it means
 	// "start shutting down", and a movement already in flight must be allowed
-	// to finish rather than be aborted between the ledger and the database.
+	// to finish rather than be aborted halfway through its transaction.
 
 	errCh := make(chan error, 1)
 	go func() {

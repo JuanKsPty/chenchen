@@ -1,22 +1,13 @@
 # =============================================================================
-# corebank API
+# chenchén API
 #
-# Debian, not Alpine, and that is not a preference. The TigerBeetle Go client
-# links a precompiled native library that ships only for glibc targets
-# (aarch64-linux, x86_64-linux) — there is no musl variant. Building on Alpine
-# fails with every type in the package reported as undefined, because the build
-# constraints exclude the package outright. The same reason forces CGO_ENABLED=1:
-# without cgo there is nothing to link the client against.
-#
-# The container this produces needs `seccomp=unconfined` to run: the client sets up
-# its own io_uring, which Docker's default profile blocks. See docker-compose.yml.
-#
-# Build context is ./api, so the seed dataset has to live inside this directory
-# rather than at the repository root.
+# A static Go binary: nothing in the API needs cgo, so it builds with
+# CGO_ENABLED=0 and runs on any base. The race detector in CI is the only thing
+# that still uses cgo.
 # =============================================================================
 
 # --- build -------------------------------------------------------------------
-FROM golang:1.26-bookworm AS build
+FROM golang:1.26-alpine AS build
 
 WORKDIR /src
 
@@ -27,45 +18,30 @@ RUN go mod download
 
 COPY . .
 
-# Both binaries come out of one build stage because they share every dependency,
-# and compiling them twice in separate stages would download and compile the
-# TigerBeetle client twice.
-#
 # No `-ldflags "-s -w"`: stripping symbols saves a few megabytes and takes the
-# stack traces with it, which is a poor trade for a service that moves money.
-RUN CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/api      ./cmd/api \
- && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/seed     ./cmd/seed \
- && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/ibkrsync ./cmd/ibkrsync \
- && CGO_ENABLED=1 GOOS=linux go build -trimpath -o /out/import   ./cmd/import
+# stack traces with it, which is a poor trade for a service that holds somebody's
+# finances.
+RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/api      ./cmd/api \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/ibkrsync ./cmd/ibkrsync \
+ && CGO_ENABLED=0 GOOS=linux go build -trimpath -o /out/import   ./cmd/import
 
 # --- runtime -----------------------------------------------------------------
-FROM debian:bookworm-slim
+FROM alpine:3.22
 
-# ca-certificates is needed to reach the Anthropic API over TLS when a key is
-# configured. tzdata so timestamps render in a real zone rather than UTC-only.
-# curl is for the healthcheck: /bin/sh here is dash, which has no /dev/tcp, and a
-# healthcheck an operator cannot also run by hand is a liability.
-RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates tzdata curl \
- && rm -rf /var/lib/apt/lists/*
-
-# A service that never needs to write to its own filesystem should not run as
-# the user that can.
-RUN useradd --system --uid 10001 --no-create-home corebank
+# ca-certificates to reach the Anthropic API and IBKR over TLS. curl is for the
+# healthcheck, which the deployment's compose file runs as
+# `curl --fail http://127.0.0.1:8080/healthz`; it stays so the image and that
+# file can change independently.
+RUN apk add --no-cache ca-certificates curl \
+ && adduser -S -u 10001 -H chenchen
 
 WORKDIR /app
 
 COPY --from=build /out/api      /usr/local/bin/api
-COPY --from=build /out/seed     /usr/local/bin/seed
 COPY --from=build /out/ibkrsync /usr/local/bin/ibkrsync
 COPY --from=build /out/import   /usr/local/bin/import
 
-# The dataset, at the path SEED_FILE defaults to (relative to the working
-# directory). Committed to the repository on purpose: without it a fresh clone
-# comes up with an empty bank.
-COPY seed/data/ ./seed/data/
-
-USER corebank
+USER chenchen
 
 EXPOSE 8080
 

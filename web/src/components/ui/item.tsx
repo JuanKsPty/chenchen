@@ -34,18 +34,18 @@ function ItemSeparator({
 }
 
 const itemVariants = cva(
-  "group/item flex w-full flex-wrap items-center rounded-lg border text-sm transition-colors duration-100 outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 [a]:transition-colors [a]:hover:bg-muted",
+  "group/item flex w-full flex-wrap items-center rounded-2xl text-body transition-colors duration-180 ease-out [a]:transition-colors [a]:hover:bg-muted [button]:hover:bg-muted",
   {
     variants: {
       variant: {
-        default: "border-transparent",
-        outline: "border-border",
-        muted: "border-transparent bg-muted/50",
+        default: "",
+        outline: "bg-card shadow-card",
+        muted: "bg-muted",
       },
       size: {
-        default: "gap-2.5 px-3 py-2.5",
-        sm: "gap-2.5 px-3 py-2.5",
-        xs: "gap-2 px-2.5 py-2 in-data-[slot=dropdown-menu-content]:p-0",
+        default: "gap-3 px-4 py-3",
+        sm: "gap-3 px-3 py-2.5",
+        xs: "gap-2 px-3 py-2 in-data-[slot=dropdown-menu-content]:p-0",
       },
     },
     defaultVariants: {
@@ -81,9 +81,9 @@ const itemMediaVariants = cva(
     variants: {
       variant: {
         default: "bg-transparent",
-        icon: "[&_svg:not([class*='size-'])]:size-4",
+        icon: "text-muted-foreground [&_svg:not([class*='size-'])]:size-5",
         image:
-          "size-10 overflow-hidden rounded-sm group-data-[size=sm]/item:size-8 group-data-[size=xs]/item:size-6 [&_img]:size-full [&_img]:object-cover",
+          "size-11 overflow-hidden rounded-full group-data-[size=sm]/item:size-10 group-data-[size=xs]/item:size-8 [&_img]:size-full [&_img]:object-cover",
       },
     },
     defaultVariants: {
@@ -125,7 +125,7 @@ function ItemTitle({ className, ...props }: React.ComponentProps<"div">) {
     <div
       data-slot="item-title"
       className={cn(
-        "line-clamp-1 flex w-fit items-center gap-2 text-sm leading-snug font-medium underline-offset-4",
+        "line-clamp-1 flex w-fit items-center gap-2 text-body font-medium underline-offset-4",
         className
       )}
       {...props}
@@ -138,7 +138,7 @@ function ItemDescription({ className, ...props }: React.ComponentProps<"p">) {
     <p
       data-slot="item-description"
       className={cn(
-        "line-clamp-2 text-left text-sm leading-normal font-normal text-muted-foreground group-data-[size=xs]/item:text-xs [&>a]:underline [&>a]:underline-offset-4 [&>a:hover]:text-primary",
+        "line-clamp-2 text-left text-small font-medium text-muted-foreground [&>a]:text-primary-text [&>a]:underline [&>a]:underline-offset-4",
         className
       )}
       {...props}

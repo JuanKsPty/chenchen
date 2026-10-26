@@ -2,6 +2,7 @@ package ibkr
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -127,4 +128,18 @@ func mustUnescape(t *testing.T, s string) string {
 		return s
 	}
 	return u
+}
+
+// An HTTP error is IBKR's service being down or busy, not a verdict on the token:
+// it must not read as a rejected request.
+func TestClientHTTPErrorIsUnavailableNotRejected(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		client := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(status)
+		})
+		_, err := client.SendRequest(context.Background())
+		if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrRequestFailed) {
+			t.Errorf("HTTP %d: error = %v, want ErrUnavailable and not ErrRequestFailed", status, err)
+		}
+	}
 }

@@ -1,5 +1,5 @@
 # =============================================================================
-# corebank web
+# chenchén web
 #
 # Alpine is fine here, unlike in the API image: the frontend has no native
 # dependencies, so nothing needs glibc.
@@ -32,7 +32,7 @@ FROM nginx:1.29-alpine
 # The stock config listens on 80 and would need root to bind it. Replacing it
 # with one on 8080 is what lets this run unprivileged.
 RUN rm /etc/nginx/conf.d/default.conf
-COPY nginx.conf /etc/nginx/conf.d/corebank.conf
+COPY nginx.conf /etc/nginx/conf.d/chenchen.conf
 
 COPY --from=build /src/dist /usr/share/nginx/html
 

@@ -27,8 +27,7 @@ type DB struct {
 //
 // The retry loop is not defensive padding: in the compose stack the API can be
 // scheduled the instant Postgres reports healthy, and a single refused
-// connection at that moment should not turn into a crash-restart cycle the
-// evaluator has to watch.
+// connection at that moment should not turn into a crash-restart cycle.
 func Open(ctx context.Context, url string, maxConns int32, wait time.Duration, logger *slog.Logger) (*DB, error) {
 	cfg, err := pgxpool.ParseConfig(url)
 	if err != nil {
@@ -71,18 +70,10 @@ func Open(ctx context.Context, url string, maxConns int32, wait time.Duration, l
 
 // Querier is the subset of pgx satisfied by both the pool and a transaction, so
 // every query in this package runs unchanged inside or outside one.
-//
-// SendBatch is included for the seeder, which inserts thousands of rows: batching
-// pipelines them into a single round trip. COPY would be faster still, but it
-// speaks binary and would need the OIDs of this schema's custom types — CITEXT and
-// the two enums — registered by hand. Batched inserts keep the server's own type
-// inference doing that work, and at this data volume the difference is
-// milliseconds.
 type Querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults
 }
 
 // Queries is the repository: every SQL statement in the application is a method
@@ -116,3 +107,11 @@ func (db *DB) Ping(ctx context.Context) error {
 
 // Close releases every pooled connection.
 func (db *DB) Close() { db.pool.Close() }
+
+// Exec runs one statement outside any transaction. It exists for tests that
+// assert what the schema itself refuses; application code goes through
+// Queries.
+func (db *DB) Exec(ctx context.Context, sql string, args ...any) error {
+	_, err := db.pool.Exec(ctx, sql, args...)
+	return err
+}
