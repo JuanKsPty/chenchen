@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -156,6 +157,25 @@ func (q *Queries) CapturesByAccount(ctx context.Context, userID, accountID uuid.
 		out = append(out, c)
 	}
 	return out, wrap("store.CapturesByAccount", rows.Err())
+}
+
+// RecentDuplicateCapture finds the latest capture of one of the user's
+// accounts with this amount and merchant received at or after since, in any
+// state: the same tap sent twice — a terminal repeating its signal, an
+// automation that runs on two devices — which must be noted once. Merchants
+// are compared ignoring case and runs of whitespace. ok is false when there is
+// none.
+func (q *Queries) RecentDuplicateCapture(ctx context.Context, userID, accountID uuid.UUID, amount money.Cents,
+	merchant string, since time.Time) (c Capture, ok bool, err error) {
+	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+captureColumns+` FROM capture_states
+		WHERE user_id = $1 AND account_id = $2 AND amount_cents = $3 AND received_at >= $5
+		  AND lower(btrim(regexp_replace(merchant, '\s+', ' ', 'g'))) = lower(btrim(regexp_replace($4, '\s+', ' ', 'g')))
+		ORDER BY received_at DESC, id DESC LIMIT 1`, userID, accountID, int64(amount), merchant, since))
+	err = wrap("store.RecentDuplicateCapture", err)
+	if errors.Is(err, ErrNotFound) {
+		return Capture{}, false, nil
+	}
+	return c, err == nil, err
 }
 
 func scanCapture(s scanner) (Capture, error) {

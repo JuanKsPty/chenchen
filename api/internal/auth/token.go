@@ -144,3 +144,30 @@ func NewDeviceToken() (token string, hash string, err error) { return newOpaqueT
 
 // HashDeviceToken is the value stored in the database for a device token.
 func HashDeviceToken(token string) string { return hashOpaqueToken(token) }
+
+// CaptureKeyPrefix starts every capture key, so the shortcut endpoint can turn
+// away anything else before it looks anything up, and a key pasted somewhere
+// it does not belong can be recognised for what it is.
+const CaptureKeyPrefix = "chn_"
+
+// NewCaptureKey returns a fresh capture key and the hash to store for it.
+//
+// The random part is the same shape as a refresh or device token, and it gets
+// names of its own for the same reason a device token does, with more at
+// stake: a capture key lives in plain text inside a phone's shortcut, synced
+// through iCloud, and all it proves is "this shortcut may note purchases in one
+// account". It must never be read as a session, a device or a user — which is
+// why it carries a prefix neither of the others has, and why nothing that
+// accepts one of those ever accepts this.
+func NewCaptureKey() (key string, hash string, err error) {
+	token, _, err := newOpaqueToken()
+	if err != nil {
+		return "", "", err
+	}
+	key = CaptureKeyPrefix + token
+	return key, HashCaptureKey(key), nil
+}
+
+// HashCaptureKey is the value stored in the database for a capture key: the
+// hash of the whole key, prefix included.
+func HashCaptureKey(key string) string { return hashOpaqueToken(key) }

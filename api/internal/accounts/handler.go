@@ -312,6 +312,22 @@ type View struct {
 	EstimatedBalance *money.Amount `json:"estimated_balance,omitempty"`
 	// ToReview counts the noted purchases the owner should look at.
 	ToReview int `json:"to_review,omitempty"`
+	// Shortcut is the account's shortcut key as the owner sees it; absent
+	// for a brokerage account, which takes no purchases.
+	Shortcut *ShortcutView `json:"shortcut,omitempty"`
+}
+
+// ShortcutView is an account's shortcut key on the wire: whether it has one
+// that works and what the owner may know of it, never the key. Hint is its
+// last four characters. LastCaptureAt is the last purchase it noted, and
+// TestedAt the last run by hand; CardLabel the first card name it sent.
+type ShortcutView struct {
+	Configured    bool       `json:"configured"`
+	Hint          string     `json:"hint,omitempty"`
+	CreatedAt     *time.Time `json:"created_at,omitempty"`
+	TestedAt      *time.Time `json:"tested_at,omitempty"`
+	LastCaptureAt *time.Time `json:"last_capture_at,omitempty"`
+	CardLabel     string     `json:"card_label,omitempty"`
 }
 
 // PendingView is an account's pending purchases on the wire. Amount is signed
@@ -367,6 +383,13 @@ func NewView(a Account) View {
 	if a.Type == "brokerage" {
 		h := a.Holdings.Amount()
 		v.Holdings = &h
+	} else {
+		v.Shortcut = &ShortcutView{}
+		if k := a.CaptureKey; k != nil {
+			created := k.CreatedAt
+			v.Shortcut = &ShortcutView{Configured: true, Hint: k.Hint, CreatedAt: &created, TestedAt: k.TestedAt,
+				LastCaptureAt: k.LastUsedAt, CardLabel: k.CardLabel}
+		}
 	}
 	if d := a.Drift; d != nil {
 		v.Drift = &DriftView{AsOf: d.AsOf, Stated: d.Stated.Amount(), Computed: d.Computed.Amount(),

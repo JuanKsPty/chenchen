@@ -67,6 +67,15 @@ type AuthConfig struct {
 	// it. Long, because re-proving a device is exactly the friction PIN login
 	// exists to remove.
 	DeviceTTL time.Duration
+	// CaptureIPRateLimit is how many purchases the phone's shortcut endpoint
+	// takes per IP per minute. It runs before a key is looked up, so guessing
+	// keys costs a request each; but the address comes from X-Forwarded-For,
+	// which a client can set, so it is only a speed bump.
+	CaptureIPRateLimit int
+	// CaptureKeyRateLimit is how many purchases one shortcut key may send per
+	// minute, and the limit that holds: far more than anyone taps, few enough
+	// that a leaked key cannot bury an account in noise before it is revoked.
+	CaptureKeyRateLimit int
 }
 
 type AIConfig struct {
@@ -150,7 +159,9 @@ func Load() (Config, error) {
 			// 180 days: long enough that "trusted this device" means something,
 			// short enough that a device nobody has touched in half a year is not
 			// trusted forever.
-			DeviceTTL: duration("DEVICE_TOKEN_TTL", 4320*time.Hour, fail),
+			DeviceTTL:           duration("DEVICE_TOKEN_TTL", 4320*time.Hour, fail),
+			CaptureIPRateLimit:  number("CAPTURE_IP_RATE_LIMIT", 60, fail),
+			CaptureKeyRateLimit: number("CAPTURE_KEY_RATE_LIMIT", 12, fail),
 		},
 		AI: AIConfig{
 			APIKey: str("ANTHROPIC_API_KEY", ""),
@@ -206,6 +217,14 @@ func Load() (Config, error) {
 	}
 	if cfg.AI.MaxToolTurns < 1 {
 		fail("AI_MAX_TOOL_TURNS must be at least 1, got %d", cfg.AI.MaxToolTurns)
+	}
+	// A limiter quietly treats anything below one as one, so a zero meant as
+	// "off" would instead let one purchase a minute through: say so at boot.
+	if cfg.Auth.CaptureIPRateLimit < 1 {
+		fail("CAPTURE_IP_RATE_LIMIT must be at least 1, got %d", cfg.Auth.CaptureIPRateLimit)
+	}
+	if cfg.Auth.CaptureKeyRateLimit < 1 {
+		fail("CAPTURE_KEY_RATE_LIMIT must be at least 1, got %d", cfg.Auth.CaptureKeyRateLimit)
 	}
 
 	// Optional, like the AI key: an empty value leaves the IBKR link feature

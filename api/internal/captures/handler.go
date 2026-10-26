@@ -19,18 +19,23 @@ import (
 )
 
 // Handler serves /api/captures: the owner noting, correcting, pairing and
-// reviewing their purchases, in their own session.
+// reviewing their purchases, and making or revoking their shortcuts' keys, in
+// their own session.
 type Handler struct {
 	svc *Service
 }
 
 func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 
-// Routes returns the /api/captures subrouter.
+// Routes returns the /api/captures subrouter. /keys is a fixed segment, so chi
+// matches it before the {id} routes and a key's URL is never read as a
+// purchase's.
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Post("/", h.add)
 	r.Get("/review", h.review)
+	r.Post("/keys/{accountID}", h.createKey)
+	r.Delete("/keys/{accountID}", h.revokeKey)
 	r.Patch("/{id}", h.edit)
 	r.Post("/{id}/link", h.link)
 	r.Delete("/{id}/link", h.unlink)
@@ -278,8 +283,7 @@ func TranslateError(err error) error {
 	case errors.Is(err, ErrAccountNotFound):
 		return httpx.NotFound("account_not_found", "La cuenta no existe.").WithCause(err)
 	case errors.Is(err, ErrBrokerage):
-		return httpx.Unprocessable("brokerage_account",
-			"En una cuenta de inversión no se anotan compras.").WithCause(err)
+		return httpx.Unprocessable("brokerage_account", msgBrokerage).WithCause(err)
 	case errors.Is(err, ErrLinked):
 		return httpx.Conflict("capture_linked",
 			"Esta compra ya está unida a una línea de tu estado.").WithCause(err)

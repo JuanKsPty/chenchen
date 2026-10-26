@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -433,7 +434,7 @@ func checkAmount(amount money.Cents) error {
 }
 
 func cleanMerchant(merchant string) (string, error) {
-	merchant = strings.TrimSpace(merchant)
+	merchant = squeeze(merchant)
 	switch {
 	case merchant == "":
 		return "", ErrMerchantRequired
@@ -441,6 +442,29 @@ func cleanMerchant(merchant string) (string, error) {
 		return "", ErrMerchantTooLong
 	}
 	return merchant, nil
+}
+
+// squeeze tidies a name someone typed or a phone sent: whitespace of any kind
+// collapses to single spaces and is trimmed, and control and format
+// characters go, since they cannot be seen and a format character can make
+// the name render as something other than what it is (see the accounts
+// alias). They are dropped rather than refused: a purchase must not be lost
+// over a stray tab in its merchant.
+func squeeze(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	// Ranging decodes invalid UTF-8 as U+FFFD, so the result is always text
+	// the database takes.
+	for _, r := range s {
+		switch {
+		case unicode.IsSpace(r):
+			b.WriteRune(' ')
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
 }
 
 func cleanNote(note string) (string, error) {

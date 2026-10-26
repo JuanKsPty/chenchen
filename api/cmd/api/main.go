@@ -119,6 +119,10 @@ func run() error {
 	// The chat gets its own budget: a message costs an upstream API call, which is
 	// a different order of expense from reading a balance.
 	chatLimiter := httpx.NewRateLimiter(chatMessagesPerMinute)
+	// The phone's shortcut gets two: per address before its key is looked
+	// up, and per key, which is the one a leaked key cannot get around.
+	captureIPLimiter := httpx.NewRateLimiter(cfg.Auth.CaptureIPRateLimit)
+	captureKeyLimiter := httpx.NewRateLimiter(cfg.Auth.CaptureKeyRateLimit)
 
 	router := server.NewRouter(server.Deps{
 		Config: cfg,
@@ -139,9 +143,13 @@ func run() error {
 		Proposals:   proposals.NewHandler(proposalsSvc),
 		Chat:        chat.NewHandler(chatSvc, authSvc, chatLimiter),
 		Captures:    captures.NewHandler(capturesSvc),
+		Shortcut: captures.NewShortcutHandler(capturesSvc, auth.NewCaptureKeys(db),
+			captureIPLimiter, captureKeyLimiter),
 	})
 
-	go housekeeping(ctx, authSvc, []*httpx.RateLimiter{loginLimiter, pinLoginLimiter, chatLimiter}, logger)
+	go housekeeping(ctx, authSvc, []*httpx.RateLimiter{
+		loginLimiter, pinLoginLimiter, chatLimiter, captureIPLimiter, captureKeyLimiter,
+	}, logger)
 
 	return server.Run(ctx, cfg.HTTP.Addr, router, cfg.HTTP.ShutdownTimeout, logger)
 }

@@ -79,12 +79,22 @@ type Account struct {
 	// ToReview counts the noted purchases the owner should look at: a printed
 	// line could be them, or a statement passed their day without one.
 	ToReview int
+	// CaptureKey is the account's live shortcut key, nil when it has none.
+	// Never the key itself: only its hint and when it was last used.
+	CaptureKey *store.CaptureKey
 }
 
 // withCaptures sets what an account's noted purchases come to, beside its
 // balance.
 func withCaptures(a *Account, c store.CaptureSummary) {
 	a.Pending, a.PendingCount, a.ToReview = c.PendingTotal, c.PendingCount, c.ToReview
+}
+
+// withKey sets the account's live shortcut key, if it has one.
+func withKey(a *Account, keys map[uuid.UUID]store.CaptureKey) {
+	if k, ok := keys[a.ID]; ok {
+		a.CaptureKey = &k
+	}
 }
 
 // CardStatement is what a card's statement says the owner must do: when it
@@ -136,6 +146,10 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 	if err != nil {
 		return nil, err
 	}
+	keys, err := s.db.Q().CaptureKeysByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
 
 	out := make([]Account, 0, len(rows))
 	for _, row := range rows {
@@ -145,6 +159,7 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 		}
 		a.LastSyncedAt = lastSynced(row, synced)
 		withCaptures(&a, captures[row.ID])
+		withKey(&a, keys)
 		out = append(out, a)
 	}
 	return out, nil
@@ -184,6 +199,11 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (Account, error
 		return Account{}, err
 	}
 	withCaptures(&a, captures[id])
+	keys, err := s.db.Q().CaptureKeysByUser(ctx, userID)
+	if err != nil {
+		return Account{}, err
+	}
+	withKey(&a, keys)
 	return a, nil
 }
 

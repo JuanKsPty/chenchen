@@ -57,6 +57,7 @@ type Deps struct {
 	Proposals   *proposals.Handler
 	Chat        *chat.Handler
 	Captures    *captures.Handler
+	Shortcut    *captures.ShortcutHandler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -80,6 +81,13 @@ func NewRouter(d Deps) http.Handler {
 		// Public: issuing and ending sessions. Rate limiting lives inside the
 		// auth router, which knows which of its endpoints are worth guessing at.
 		r.Mount("/auth", d.Auth.Routes())
+
+		// Public as well, though no session: the phone's shortcut posts a
+		// purchase with one account's capture key, which its handler checks
+		// and which can do nothing else. Outside the group below on purpose: a
+		// key is never read as an access token, so it reaches nothing a
+		// session reaches, and an access token is no key.
+		r.Mount("/shortcut", d.Shortcut.Routes())
 
 		// Everything past here requires a verified access token. Grouping it
 		// under one middleware, rather than applying it per handler, is what

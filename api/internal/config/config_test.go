@@ -29,6 +29,25 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.AI.Enabled() {
 		t.Error("AI reports itself enabled without an API key")
 	}
+	if cfg.Auth.CaptureIPRateLimit != 60 || cfg.Auth.CaptureKeyRateLimit != 12 {
+		t.Errorf("capture limits = %d per IP, %d per key; want 60 and 12",
+			cfg.Auth.CaptureIPRateLimit, cfg.Auth.CaptureKeyRateLimit)
+	}
+}
+
+func TestCaptureRateLimitsFromEnv(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("CAPTURE_IP_RATE_LIMIT", "30")
+	t.Setenv("CAPTURE_KEY_RATE_LIMIT", "6")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Auth.CaptureIPRateLimit != 30 || cfg.Auth.CaptureKeyRateLimit != 6 {
+		t.Errorf("capture limits = %d per IP, %d per key; want 30 and 6",
+			cfg.Auth.CaptureIPRateLimit, cfg.Auth.CaptureKeyRateLimit)
+	}
 }
 
 func TestJWTSecretIsGeneratedWhenUnset(t *testing.T) {
@@ -137,6 +156,9 @@ func TestLoadRejects(t *testing.T) {
 		{"DB_MAX_CONNS", "0"},
 		{"HTTP_SHUTDOWN_TIMEOUT", "-5s"},
 		{"AI_MAX_TOOL_TURNS", "0"},
+		{"CAPTURE_IP_RATE_LIMIT", "0"},
+		{"CAPTURE_KEY_RATE_LIMIT", "-1"},
+		{"CAPTURE_KEY_RATE_LIMIT", "twelve"},
 		{"IBKR_TOKEN_ENCRYPTION_KEY", "not valid base64!!"},
 		{"IBKR_TOKEN_ENCRYPTION_KEY", base64.StdEncoding.EncodeToString([]byte("too short"))},
 	} {
@@ -159,6 +181,7 @@ func clearEnv(t *testing.T) {
 		"ENV", "HTTP_ADDR", "HTTP_SHUTDOWN_TIMEOUT", "CORS_ORIGINS",
 		"DATABASE_URL", "DB_MAX_CONNS", "DB_CONNECT_WAIT",
 		"JWT_SECRET", "ACCESS_TOKEN_TTL", "REFRESH_TOKEN_TTL", "BCRYPT_COST", "LOGIN_RATE_LIMIT",
+		"CAPTURE_IP_RATE_LIMIT", "CAPTURE_KEY_RATE_LIMIT",
 		"ANTHROPIC_API_KEY", "ANTHROPIC_MODEL", "AI_MAX_TOOL_TURNS",
 		"IBKR_TOKEN_ENCRYPTION_KEY",
 		"LOG_LEVEL", "LOG_FORMAT",
