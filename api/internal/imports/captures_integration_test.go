@@ -51,13 +51,14 @@ func TestANotedPurchaseCountsUntilItsLineArrivesAndThenOnce(t *testing.T) {
 	}
 
 	// The statement prints the café on the 18th: the line counts, the noted
-	// purchase no longer. Nothing prints the 25th's yet, so it still counts.
+	// purchase no longer, and since it can be no other line the import links
+	// them. Nothing prints the 25th's yet, so it still counts.
 	e.importFile(t, "tarjeta.txt", []byte(cardFile))
 	if got := e.spent(t); got != 1430+1200 {
 		t.Errorf("spent = %s, want 26.30: the statement's 14.30 and the unprinted 12.00, the café once", got)
 	}
-	if c, err := e.db.Q().CaptureByID(ctx, e.user, cafe); err != nil || c.State != store.CapturePrinted {
-		t.Errorf("the café's capture = %+v, %v; want printed", c, err)
+	if c, err := e.db.Q().CaptureByID(ctx, e.user, cafe); err != nil || c.State != store.CaptureLinked {
+		t.Errorf("the café's capture = %+v, %v; want linked", c, err)
 	}
 	// The café appears once in the list too: as its line.
 	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user, From: jan(1), Search: "caf"})
@@ -110,7 +111,9 @@ func TestCallingALineATransferNeverBringsItsPurchaseBack(t *testing.T) {
 	// The rule makes the pharmacy's line a transfer as it is imported. That
 	// line is still the purchase, so neither counts: 0.55 of charges and the
 	// café's line. Both purchases are within the settle days of the
-	// statement's end, so only the line can stop them counting.
+	// statement's end, so only the line can stop them counting. The café is
+	// linked to its line; a line that counts as a transfer never is on a
+	// guess, so the pharmacy is only printed.
 	e.importFile(t, "tarjeta.txt", []byte(cardFile))
 	if got := e.spent(t); got != 55+950 {
 		t.Errorf("after the import: spent = %s, want 10.05: the pharmacy is a transfer, purchase and line", got)
@@ -128,9 +131,9 @@ func TestCallingALineATransferNeverBringsItsPurchaseBack(t *testing.T) {
 	if got := e.spent(t); got != 55 {
 		t.Errorf("after marking the café a transfer: spent = %s, want 0.55", got)
 	}
-	for _, id := range []uuid.UUID{cafe, pharmacy} {
-		if c, err := e.db.Q().CaptureByID(ctx, e.user, id); err != nil || c.State != store.CapturePrinted {
-			t.Errorf("%s = %+v, %v; want printed", c.Merchant, c, err)
+	for id, want := range map[uuid.UUID]string{cafe: store.CaptureLinked, pharmacy: store.CapturePrinted} {
+		if c, err := e.db.Q().CaptureByID(ctx, e.user, id); err != nil || c.State != want {
+			t.Errorf("%s = %+v, %v; want %s", c.Merchant, c, err, want)
 		}
 	}
 

@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/JuanKsPty/chenchen/api/internal/captures"
 	"github.com/JuanKsPty/chenchen/api/internal/categories"
 	"github.com/JuanKsPty/chenchen/api/internal/civil"
 	"github.com/JuanKsPty/chenchen/api/internal/logging"
@@ -58,6 +59,12 @@ type AccountResult struct {
 	Warnings     []string
 	NeedsOpening bool
 	RunID        uuid.UUID
+	// CapturesLinked counts the purchases the owner noted that this import
+	// linked to their lines, and CapturesMissing those it is the first
+	// statement to pass without printing: they stop counting and wait in
+	// review.
+	CapturesLinked  int
+	CapturesMissing int
 }
 
 // ErrAccountMismatch means the caller imported from one account's page a file
@@ -116,6 +123,10 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		if err != nil {
 			return err
 		}
+		missingBefore, err := q.MissingCaptures(ctx, userID)
+		if err != nil {
+			return err
+		}
 		var from, to civil.Date
 		for _, st := range parsed.Statements {
 			holders := holderNames(owner.FullName, st.Identity.Holder)
@@ -133,8 +144,13 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		}
 		// A card payment and its bank debit are one transfer; matched now,
 		// neither counts as spending.
-		_, err = transfers.AutoMatch(ctx, q, userID, from, to)
-		return err
+		if _, err := transfers.AutoMatch(ctx, q, userID, from, to); err != nil {
+			return err
+		}
+		// Then the purchases the owner noted find their lines: after the
+		// transfers, so a line just found to be one is not taken for a
+		// purchase.
+		return linkCaptures(ctx, q, userID, missingBefore, result.Accounts)
 	})
 	if err != nil {
 		return Result{}, err
@@ -143,7 +159,8 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 	for _, a := range result.Accounts {
 		logging.FromContext(ctx).Info("statement imported", "account_id", a.AccountID,
 			"source", parsed.Source, "period_start", a.PeriodStart.String(), "period_end", a.PeriodEnd.String(),
-			"new", a.New, "duplicates", a.Duplicates, "warnings", len(a.Warnings))
+			"new", a.New, "duplicates", a.Duplicates, "warnings", len(a.Warnings),
+			"captures_linked", a.CapturesLinked, "captures_missing", a.CapturesMissing)
 	}
 	return result, nil
 }
@@ -200,12 +217,12 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 			Raw: l.Raw,
 		}
 		m := matchRules(l, rules)
-		if m.categoryID != nil {
+		if m.CategoryID != nil {
 			src := "rule"
-			e.CategoryID, e.CategorySource = m.categoryID, &src
+			e.CategoryID, e.CategorySource = m.CategoryID, &src
 		}
-		if m.setKind != nil && *m.setKind != e.Kind {
-			e.UserKind = m.setKind
+		if m.SetKind != nil && *m.SetKind != e.Kind {
+			e.UserKind = m.SetKind
 		}
 		entries = append(entries, e)
 	}
@@ -274,6 +291,38 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 		res.NeedsOpening = len(cps) == 0
 	}
 	return res, nil
+}
+
+// linkCaptures links each imported account's noted purchases to their lines
+// and counts, per account, the purchases this import linked and those it made
+// missing: missing now and not before it.
+func linkCaptures(ctx context.Context, q *store.Queries, userID uuid.UUID, missingBefore map[uuid.UUID]uuid.UUID,
+	results []AccountResult) error {
+	at := map[uuid.UUID]int{}
+	for i := range results {
+		if _, seen := at[results[i].AccountID]; seen {
+			continue
+		}
+		at[results[i].AccountID] = i
+		n, err := captures.AutoLink(ctx, q, userID, []uuid.UUID{results[i].AccountID})
+		if err != nil {
+			return err
+		}
+		results[i].CapturesLinked = n
+	}
+	missing, err := q.MissingCaptures(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for id, account := range missing {
+		if _, was := missingBefore[id]; was {
+			continue
+		}
+		if i, ok := at[account]; ok {
+			results[i].CapturesMissing++
+		}
+	}
+	return nil
 }
 
 // seedDefaultRules gives the user the default card rules the first time they

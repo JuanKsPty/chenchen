@@ -77,6 +77,9 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]store.CategoryR
 }
 
 // Create adds a rule and, when asked, applies it to what is already imported.
+// Like Update, it takes the user's lock first: applying a rule files lines and
+// noted purchases, which linking a purchase to its line also writes, in the
+// other order, under that lock.
 func (s *Service) Create(ctx context.Context, userID uuid.UUID, in Input) (store.CategoryRule, int64, error) {
 	if err := s.validate(ctx, userID, &in); err != nil {
 		return store.CategoryRule{}, 0, err
@@ -84,6 +87,9 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, in Input) (store
 	r := toRule(userID, uuid.New(), in)
 	var applied int64
 	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
 		created, err := q.CreateCategoryRuleIfNew(ctx, r)
 		if err != nil {
 			return err
@@ -107,6 +113,9 @@ func (s *Service) Update(ctx context.Context, userID, id uuid.UUID, in Input) (s
 	r := toRule(userID, id, in)
 	var applied int64
 	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
 		if err := q.UpdateCategoryRule(ctx, r); err != nil {
 			if errors.Is(err, store.ErrNotFound) {
 				return ErrNotFound

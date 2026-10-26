@@ -20,6 +20,7 @@ import (
 
 	"github.com/JuanKsPty/chenchen/api/internal/accounts"
 	"github.com/JuanKsPty/chenchen/api/internal/auth"
+	"github.com/JuanKsPty/chenchen/api/internal/captures"
 	"github.com/JuanKsPty/chenchen/api/internal/categories"
 	"github.com/JuanKsPty/chenchen/api/internal/chat"
 	"github.com/JuanKsPty/chenchen/api/internal/config"
@@ -55,6 +56,7 @@ type Deps struct {
 	Rules       *rules.Handler
 	Proposals   *proposals.Handler
 	Chat        *chat.Handler
+	Captures    *captures.Handler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -97,6 +99,7 @@ func NewRouter(d Deps) http.Handler {
 			r.Mount("/category-rules", d.Rules.Routes())
 			r.Mount("/proposals", d.Proposals.Routes())
 			r.Mount("/chat", d.Chat.Routes())
+			r.Mount("/captures", d.Captures.Routes())
 		})
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {

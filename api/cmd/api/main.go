@@ -17,6 +17,7 @@ import (
 
 	"github.com/JuanKsPty/chenchen/api/internal/accounts"
 	"github.com/JuanKsPty/chenchen/api/internal/auth"
+	"github.com/JuanKsPty/chenchen/api/internal/captures"
 	"github.com/JuanKsPty/chenchen/api/internal/categories"
 	"github.com/JuanKsPty/chenchen/api/internal/chat"
 	"github.com/JuanKsPty/chenchen/api/internal/config"
@@ -85,6 +86,7 @@ func run() error {
 	categoriesSvc := categories.NewService(db)
 	movementsSvc := movements.NewService(db, categoriesSvc)
 	importsSvc := imports.NewService(db, categoriesSvc)
+	capturesSvc := captures.NewService(db, categoriesSvc)
 	investmentsSvc := investments.NewService(db, cfg.IBKR.TokenEncryptionKey)
 
 	authSvc, err := auth.NewService(db, accountsSvc, categoriesSvc, cfg.Auth)
@@ -136,6 +138,7 @@ func run() error {
 		Rules:       rules.NewHandler(rulesSvc),
 		Proposals:   proposals.NewHandler(proposalsSvc),
 		Chat:        chat.NewHandler(chatSvc, authSvc, chatLimiter),
+		Captures:    captures.NewHandler(capturesSvc),
 	})
 
 	go housekeeping(ctx, authSvc, []*httpx.RateLimiter{loginLimiter, pinLoginLimiter, chatLimiter}, logger)

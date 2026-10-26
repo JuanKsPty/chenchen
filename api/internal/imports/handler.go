@@ -139,6 +139,11 @@ type AccountResultView struct {
 	ChainBreak   *chainBreakView `json:"chain_break,omitempty"`
 	Warnings     []string        `json:"warnings"`
 	NeedsOpening bool            `json:"needs_opening"`
+	// CapturesLinked and CapturesMissing count the purchases the owner noted
+	// that this file linked to their lines, and those it is the first
+	// statement to pass without printing; absent when none.
+	CapturesLinked  int `json:"captures_linked,omitempty"`
+	CapturesMissing int `json:"captures_missing,omitempty"`
 }
 
 type chainBreakView struct {
@@ -155,6 +160,7 @@ func newResultView(r Result) ResultView {
 			PeriodStart: a.PeriodStart, PeriodEnd: a.PeriodEnd, Lines: a.Lines, New: a.New,
 			Duplicates: a.Duplicates, Opening: amountPtr(a.Opening), Closing: amountPtr(a.Closing),
 			Warnings: append([]string{}, a.Warnings...), NeedsOpening: a.NeedsOpening,
+			CapturesLinked: a.CapturesLinked, CapturesMissing: a.CapturesMissing,
 		}
 		if b := a.ChainBreak; b != nil {
 			av.ChainBreak = &chainBreakView{LineNo: b.LineNo, Bank: b.Bank.Amount(), Computed: b.Computed.Amount()}
