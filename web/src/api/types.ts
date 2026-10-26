@@ -220,6 +220,21 @@ export interface Entry {
   origin?: 'statement' | 'capture'
   /** How a capture was noted: by the phone's shortcut, or by hand. */
   capture_source?: 'shortcut' | 'manual'
+  /**
+   * On a printed line from the movement lists, the purchase the owner noted that was
+   * linked to it. Absent on any other movement, and from older APIs.
+   */
+  noted?: NotedPurchase
+}
+
+/** The noted purchase a printed line turned out to be. */
+export interface NotedPurchase {
+  capture_id: string
+  /** What the owner called it: "Café Unido". */
+  merchant: string
+  source: 'shortcut' | 'manual'
+  /** Whether chenchén linked them on its own or the owner did. */
+  linked_by: 'auto' | 'user'
 }
 
 /**
@@ -236,6 +251,21 @@ export interface Capture extends Entry {
   linked_by?: 'auto' | 'user'
   /** Once linked, the printed line it turned out to be. */
   line?: Entry
+}
+
+/**
+ * A noted purchase the owner should look at (GET /api/captures/review). Neither state
+ * counts as spending, so answering is about getting the record right, not the totals.
+ *   printed  lines of the same amount could be it and the choice was not obvious:
+ *            `candidates`, oldest first.
+ *   missing  a statement went past its day without it: `near` holds the lines that
+ *            come close (a tip, a late charge), best first, at most five.
+ * Both lists are always there, empty when there is nothing in them.
+ */
+export interface CaptureReviewItem extends Capture {
+  state: 'printed' | 'missing'
+  candidates: Entry[]
+  near: Entry[]
 }
 
 export interface EntryPage {

@@ -10,11 +10,15 @@
  *   - a pending notice for accounts with no starting balance ("2 cuentas sin saldo
  *     inicial", to Cuentas, where each one shows its chip);
  *   - a pending notice for transfers waiting for a yes or no ("1 transferencia por
- *     confirmar", to Gastos#transferencias).
+ *     confirmar", to Gastos#transferencias);
+ *   - a pending notice for purchases the owner noted that their statement does not
+ *     confirm ("2 compras por revisar" · "Tu estado no las confirma todavía.", to
+ *     Gastos#compras), counted from the accounts' `to_review`, which the list already
+ *     has: no request of its own.
  * Renders nothing when there is nothing to say. Counts only, no amounts, on the
  * pending ones: Inicio shows at most five figures before its first list.
  */
-import { ArrowLeftRightIcon, ScaleIcon } from 'lucide-react'
+import { ArrowLeftRightIcon, ReceiptIcon, ScaleIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import type { Account } from '@/api/types'
@@ -26,7 +30,7 @@ import {
   type AccountStatus,
 } from '@/lib/account'
 import { formatCivilDayMonth } from '@/lib/format'
-import { ACCOUNTS_PATH, TRANSFERS_HREF, accountHref } from '@/lib/nav'
+import { ACCOUNTS_PATH, CAPTURES_HREF, TRANSFERS_HREF, accountHref } from '@/lib/nav'
 import { useTransferSuggestions } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 
@@ -43,10 +47,12 @@ export function HomeNotices({
 
   const mismatches: Mismatch[] = []
   let unanchored = 0
+  let purchases = 0
   for (const account of accounts) {
     const status = accountStatus(account)
     if (status?.kind === 'no-cuadra') mismatches.push({ account, status })
     else if (status?.kind === 'sin-partida') unanchored += 1
+    purchases += account.to_review ?? 0
   }
   const transfers = suggestions.data?.suggestions.length ?? 0
 
@@ -104,6 +110,29 @@ export function HomeNotices({
             label: 'Revisar',
             ariaLabel: 'Revisar transferencias',
             to: TRANSFERS_HREF,
+          }}
+        />
+      ),
+    })
+  }
+
+  if (purchases > 0) {
+    items.push({
+      key: 'compras',
+      notice: (
+        <Notice
+          tone="pending"
+          icon={ReceiptIcon}
+          title={`${purchases} ${purchases === 1 ? 'compra' : 'compras'} por revisar`}
+          description={
+            purchases === 1
+              ? 'Tu estado no la confirma todavía.'
+              : 'Tu estado no las confirma todavía.'
+          }
+          action={{
+            label: 'Revisar',
+            ariaLabel: 'Revisar compras',
+            to: CAPTURES_HREF,
           }}
         />
       ),

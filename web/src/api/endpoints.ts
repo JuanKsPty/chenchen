@@ -3,6 +3,7 @@ import type {
   AccountList,
   Account,
   Capture,
+  CaptureReviewItem,
   CategoryNode,
   CategoryRule,
   CategoryTotal,
@@ -238,6 +239,27 @@ export const restoreCapture = (id: string) =>
 /** Unlinks a noted purchase from its line, which is remembered as not being it. */
 export const unlinkCapture = (id: string) =>
   request<Capture>(`/api/captures/${encodeURIComponent(id)}/link`, { method: 'DELETE' })
+
+/**
+ * Links a noted purchase to the printed line the owner says it is. Any amount goes:
+ * a tip is why the two can differ.
+ */
+export const linkCapture = (id: string, entryId: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/link`, {
+    method: 'POST',
+    body: { entry_id: entryId },
+  })
+
+/** Says a printed line is not this noted purchase: it is never offered for it again. */
+export const rejectCaptureLine = (id: string, entryId: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+    body: { entry_id: entryId },
+  })
+
+/** The noted purchases the owner should look at, newest first. */
+export const fetchCaptureReview = () =>
+  request<{ captures: CaptureReviewItem[] }>('/api/captures/review')
 
 // --- reports -------------------------------------------------------------------
 

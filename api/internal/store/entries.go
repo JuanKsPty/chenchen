@@ -76,6 +76,10 @@ type Entry struct {
 	// CaptureSource is how a capture was noted (shortcut | manual); empty for
 	// a printed line.
 	CaptureSource string
+	// Noted is, on a printed line, the purchase the owner noted that was
+	// linked to it. Only the movement lists fill it (with NotedPurchases):
+	// anywhere else nil says nothing.
+	Noted *NotedPurchase
 }
 
 // EffectiveKind is what reports treat the entry as.

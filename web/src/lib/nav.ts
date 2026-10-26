@@ -30,6 +30,7 @@ import type { EntryKind } from '@/api/types'
  *   spendingHref(ym?)              /gastos, or /gastos?mes=YYYY-MM
  *   parseSpendingMonth(params)     the ?mes value when it is a valid YYYY-MM
  *   TRANSFERS_HREF                 /gastos#transferencias
+ *   CAPTURES_HREF                  /gastos#compras
  */
 
 export const HOME_PATH = '/inicio'
@@ -42,6 +43,8 @@ export const SETTINGS_PATH = '/ajustes'
 export const SECURITY_HREF = `${SETTINGS_PATH}#seguridad`
 /** Gastos, scrolled to the transfers waiting for a yes or no. */
 export const TRANSFERS_HREF = `${SPENDING_PATH}#transferencias`
+/** Gastos, scrolled to the noted purchases a statement does not confirm. */
+export const CAPTURES_HREF = `${SPENDING_PATH}#compras`
 
 export interface NavItem {
   to: string

@@ -271,6 +271,19 @@ type View struct {
 	// noted, "shortcut" or "manual".
 	Origin        string `json:"origin,omitempty"`
 	CaptureSource string `json:"capture_source,omitempty"`
+	// Noted is, on a printed line from the movement lists, the purchase the
+	// owner noted that was linked to it: what lets the line say what they
+	// called it, and undo the link (DELETE /api/captures/{capture_id}/link).
+	Noted *NotedView `json:"noted,omitempty"`
+}
+
+// NotedView is the noted purchase a printed line turned out to be. Source is
+// "shortcut" or "manual"; LinkedBy is "auto" or "user".
+type NotedView struct {
+	CaptureID uuid.UUID `json:"capture_id"`
+	Merchant  string    `json:"merchant"`
+	Source    string    `json:"source"`
+	LinkedBy  string    `json:"linked_by"`
 }
 
 // NewView builds a movement's wire shape.
@@ -284,6 +297,9 @@ func NewView(e store.Entry) View {
 	if e.BankBalance != nil {
 		b := e.BankBalance.Amount()
 		v.BankBalance = &b
+	}
+	if n := e.Noted; n != nil {
+		v.Noted = &NotedView{CaptureID: n.CaptureID, Merchant: n.Merchant, Source: n.Source, LinkedBy: n.LinkedBy}
 	}
 	return v
 }

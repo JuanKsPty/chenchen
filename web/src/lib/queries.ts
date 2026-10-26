@@ -38,7 +38,10 @@ import type {
  *                 useUpdateEntry()({id, patch})
  *   captures      useAddCapture()(input) · useEditCapture()({id, patch}) ·
  *                 useDiscardCapture()(id): purchases the owner noted, which count as
- *                 spending until their line arrives, so each one refreshes money
+ *                 spending until their line arrives, so each one refreshes money ·
+ *                 useCaptureReview: the ones their statement does not confirm ·
+ *                 useLinkCapture()({id, entryId}) · useRejectCapture()({id, entryId}) ·
+ *                 useUnlinkCapture()(id)
  *   imports       useImportStatement()({file, accountId?}) · useDryRunStatement()(file) ·
  *                 useImportRuns(accountId)
  *   investments   useInvestmentLink(accountId, {enabled?}) · useLinkIBKR ·
@@ -74,13 +77,16 @@ export const keys = {
   rules: ['rules'] as const,
   proposals: ['proposals'] as const,
   transfers: ['transfer-suggestions'] as const,
+  captures: ['captures'] as const,
+  captureReview: ['captures', 'review'] as const,
 }
 
 /**
  * Every query-key prefix that shows money or what it means: balances, movements,
- * the spending and flow reports, an account's reconciliation, and the transfers
- * waiting for a yes or no. Recategorizing a movement shrinks "Sin categoría";
- * confirming a transfer takes it off the list; an import changes all of them.
+ * the spending and flow reports, an account's reconciliation, the transfers waiting
+ * for a yes or no, and the noted purchases waiting for review. Recategorizing a
+ * movement shrinks "Sin categoría"; confirming a transfer takes it off the list; an
+ * import changes all of them, and may settle or question a noted purchase.
  */
 const MONEY_KEYS = [
   'me',
@@ -93,6 +99,7 @@ const MONEY_KEYS = [
   'reports',
   'reconciliation',
   keys.transfers[0],
+  keys.captures[0],
 ] as const
 
 /**
@@ -269,6 +276,57 @@ export function useDiscardCapture() {
   return useMutation({
     mutationFn: (id: string) => api.discardCapture(id),
     onSuccess: invalidate,
+  })
+}
+
+/** The noted purchases a statement does not confirm, with the lines that could be them. */
+export function useCaptureReview() {
+  return useQuery({ queryKey: keys.captureReview, queryFn: api.fetchCaptureReview })
+}
+
+/*
+ * Linking, rejecting and unlinking each refresh money. Each can change what counts: a
+ * purchase whose only possible line was rejected, or that was unlinked, counts again;
+ * a line that gets the purchase's category moves in Gastos; one answer can settle
+ * another question (a "No" to one of two lines links the other).
+ *
+ * On success the refresh is awaited, so the caller goes on with the lists already
+ * saying what is true now and never asks the owner a question that was just settled.
+ * A failure refreshes too, since a refusal mostly means the screen was out of date
+ * (another tab linked it first) and a send with no answer may have gone through, but
+ * without waiting: with the connection gone the refetches retry for seconds, and the
+ * owner should hear what failed at once.
+ */
+
+/** Links a noted purchase to the line the owner says it is. */
+export function useLinkCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: ({ id, entryId }: { id: string; entryId: string }) =>
+      api.linkCapture(id, entryId),
+    onSuccess: invalidate,
+    onError: () => void invalidate(),
+  })
+}
+
+/** Says a line is not this noted purchase ("No"). */
+export function useRejectCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: ({ id, entryId }: { id: string; entryId: string }) =>
+      api.rejectCaptureLine(id, entryId),
+    onSuccess: invalidate,
+    onError: () => void invalidate(),
+  })
+}
+
+/** Undoes a link the owner says is wrong ("No es esta compra"). */
+export function useUnlinkCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (id: string) => api.unlinkCapture(id),
+    onSuccess: invalidate,
+    onError: () => void invalidate(),
   })
 }
 

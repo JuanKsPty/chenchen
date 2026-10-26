@@ -184,6 +184,13 @@ export function shiftMonth(ym: string, delta: number): string {
   return ymdOf(new Date(year, month - 1 + delta, 1)).slice(0, 7)
 }
 
+/** The civil day `delta` days away from `ymd` (YYYY-MM-DD). */
+export function shiftDay(ymd: string, delta: number): string {
+  const date = civil(ymd)
+  date.setDate(date.getDate() + delta)
+  return ymdOf(date)
+}
+
 /** The first and last civil day of a month (YYYY-MM), for report and movement filters. */
 export function monthBounds(ym: string): { from: string; to: string } {
   const [year = 0, month = 1] = ym.split('-').map(Number)

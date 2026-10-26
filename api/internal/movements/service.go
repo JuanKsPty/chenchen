@@ -2,7 +2,8 @@
 // account: every line their statements and IBKR printed, and every purchase
 // they noted — with the phone's shortcut or by hand — that no statement has
 // printed yet (ADR-0002). A noted purchase is listed only while it is pending;
-// once a printed line could be it, the line is the movement.
+// once a printed line could be it, the line is the movement, and once the two
+// are linked the line says which purchase it was.
 //
 // What a movement *is* — its amount, dates and account — came from a document,
 // or from what the owner noted, and cannot be edited here. What it *means*
@@ -80,7 +81,33 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, q Query) (Page, er
 		last := page.Entries[limit-1]
 		page.Next = &store.EntryCursor{BookedOn: last.BookedOn, ID: last.ID}
 	}
+	if err := s.fillNoted(ctx, userID, page.Entries); err != nil {
+		return Page{}, err
+	}
 	return page, nil
+}
+
+// fillNoted sets, on each printed line a purchase the owner noted was linked
+// to, which purchase that is (Entry.Noted): one read of the user's own
+// captures however long the page, so a line can say what the owner called it
+// and the link can be undone from there.
+func (s *Service) fillNoted(ctx context.Context, userID uuid.UUID, entries []store.Entry) error {
+	var lines []uuid.UUID
+	for _, e := range entries {
+		if e.Origin != store.OriginCapture {
+			lines = append(lines, e.ID)
+		}
+	}
+	noted, err := s.db.Q().NotedPurchases(ctx, userID, lines)
+	if err != nil {
+		return err
+	}
+	for i := range entries {
+		if n, ok := noted[entries[i].ID]; ok {
+			entries[i].Noted = &n
+		}
+	}
+	return nil
 }
 
 // Each streams every movement matching q, oldest first, for an export.
@@ -100,7 +127,8 @@ func (s *Service) filter(userID uuid.UUID, q Query, limit int) store.EntryFilter
 // owner noted that is still open — pending, or one a line could be or a
 // statement passed, which the lists no longer show but an id given out
 // earlier may still name. A capture linked to its line or discarded is
-// ErrNotFound.
+// ErrNotFound. It leaves Entry.Noted unset: only the lists need it, and every
+// write reads the movement through here, twice.
 func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (store.Entry, error) {
 	e, err := s.db.Q().EntryByID(ctx, userID, id)
 	if errors.Is(err, store.ErrNotFound) {

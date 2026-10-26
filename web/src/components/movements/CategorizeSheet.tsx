@@ -42,6 +42,13 @@
  *     comes back here;
  *   - "Descartar compra", for one that never happened: "Listo: compra descartada"
  *     with "Deshacer", which takes it back.
+ *
+ * A printed line that a noted purchase was linked to (`noted`) says so under its
+ * facts: "La anotaste como «Café Unido»." ("…con Atajos como…" when the shortcut
+ * noted it), with a ghost "No es esta compra" for a wrong link. That unlinks them, so
+ * the purchase counts again on its own until its real line arrives, and closes the
+ * sheet: "Listo: separamos la compra de este movimiento." with "Deshacer", which links
+ * them again.
  */
 import { CircleAlertIcon } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -50,12 +57,13 @@ import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
 import {
+  linkCapture,
   restoreCapture,
   updateEntry,
   type CapturePatch,
   type EntryPatch,
 } from '@/api/endpoints'
-import type { Account, CategoryNode, Entry } from '@/api/types'
+import type { Account, CategoryNode, Entry, NotedPurchase } from '@/api/types'
 import {
   PurchaseFields,
   purchaseAmount,
@@ -101,6 +109,7 @@ import {
   useMoneyInvalidation,
   useRules,
   useSaveRule,
+  useUnlinkCapture,
   useUpdateEntry,
 } from '@/lib/queries'
 import { cn } from '@/lib/utils'
@@ -294,12 +303,15 @@ function CategorizeForm({
   const sheet = layout === 'sheet'
   // A noted purchase still pending: what the owner wrote, not what the bank printed.
   const capture = entry.origin === 'capture'
+  // On a printed line: the purchase the owner noted that was linked to it.
+  const noted = capture ? undefined : entry.noted
   const accounts = useAccounts()
   const categories = useCategories()
   const rules = useRules()
   const update = useUpdateEntry()
   const saveRule = useSaveRule()
   const discard = useDiscardCapture()
+  const unlink = useUnlinkCapture()
   const invalidate = useMoneyInvalidation()
   const navigate = useNavigate()
   const swipe = useSwipeDown(onDone)
@@ -313,7 +325,9 @@ function CategorizeForm({
   const [withRule, setWithRule] = useState(false)
   const [saving, setSaving] = useState(false)
   const [discarding, setDiscarding] = useState(false)
+  const [unlinking, setUnlinking] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const busy = saving || discarding || unlinking
 
   useEffect(() => {
     if (focusCorrect) correctRef.current?.focus()
@@ -332,7 +346,7 @@ function CategorizeForm({
   const ruleChecked = withRule && canRule
 
   const save = async () => {
-    if (saving || discarding) return
+    if (busy) return
     const patch: EntryPatch = {}
     const nextCategory = transfer ? '' : category
     if ((entry.category_id ?? '') !== nextCategory) patch.category_id = nextCategory || null
@@ -396,7 +410,7 @@ function CategorizeForm({
 
   // A purchase that never happened (a declined tap, one noted twice) stops counting.
   const discardPurchase = async () => {
-    if (saving || discarding) return
+    if (busy) return
     setDiscarding(true)
     setError(null)
     try {
@@ -418,6 +432,36 @@ function CategorizeForm({
       setError(failure instanceof ApiError ? failure.message : GENERIC_ERROR)
     } finally {
       setDiscarding(false)
+    }
+  }
+
+  // "No es esta compra": the line and the purchase part ways. The line may lose the
+  // category the purchase gave it, so the sheet closes rather than show a stale one.
+  // A mistap is costly (the purchase may count again next to its own line, and
+  // nothing else here links them again), so the toast can link them back.
+  const unlinkPurchase = async (purchase: NotedPurchase) => {
+    if (busy) return
+    setUnlinking(true)
+    setError(null)
+    try {
+      await unlink.mutateAsync(purchase.capture_id)
+      toast('Listo: separamos la compra de este movimiento.', {
+        action: {
+          label: 'Deshacer',
+          // The sheet is gone by now, so this goes straight to the server.
+          onClick: () => {
+            linkCapture(purchase.capture_id, entry.id).then(
+              () => invalidate(),
+              () => toast('No se pudo deshacer. Intenta otra vez.'),
+            )
+          },
+        },
+      })
+      onDone()
+    } catch (failure) {
+      setError(problemMessage(failure))
+    } finally {
+      setUnlinking(false)
     }
   }
 
@@ -444,6 +488,7 @@ function CategorizeForm({
               </span>
             </>
           )}
+          {noted && <span className="block pt-1">{notedAs(noted)}</span>}
         </DialogDescription>
         {capture && (
           <div className="-ml-3 flex flex-wrap gap-1 pt-1">
@@ -457,6 +502,18 @@ function CategorizeForm({
             >
               {discarding && <Spinner />}
               Descartar compra
+            </Button>
+          </div>
+        )}
+        {noted && (
+          <div className="-ml-3 flex flex-wrap gap-1 pt-1">
+            <Button
+              variant="ghost"
+              onClick={() => void unlinkPurchase(noted)}
+              aria-disabled={unlinking || undefined}
+            >
+              {unlinking && <Spinner />}
+              No es esta compra
             </Button>
           </div>
         )}
@@ -626,6 +683,15 @@ function notedHow(entry: Entry): string {
   return entry.booked_at
     ? `Anotada con Atajos el ${formatDayAndTime(entry.booked_at)}`
     : 'Anotada con Atajos'
+}
+
+/**
+ * What the owner called the purchase linked to a printed line: "La anotaste como «Café
+ * Unido»." or, noted by the shortcut, "La anotaste con Atajos como «Café Unido»."
+ */
+function notedAs(noted: NotedPurchase): string {
+  const how = noted.source === 'shortcut' ? ' con Atajos' : ''
+  return `La anotaste${how} como «${noted.merchant}».`
 }
 
 /** An amount as the owner would type it: "12.50" for −$12.50, built from the cents. */

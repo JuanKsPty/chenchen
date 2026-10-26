@@ -444,6 +444,45 @@ func (q *Queries) UnlinkCapture(ctx context.Context, userID, captureID uuid.UUID
 	return q.RejectPair(ctx, userID, captureID, entryID)
 }
 
+// NotedPurchase is the purchase the owner noted that a printed line turned
+// out to be: what they called it, how they noted it (shortcut | manual) and
+// who linked the two (auto | user).
+type NotedPurchase struct {
+	CaptureID uuid.UUID
+	Merchant  string
+	Source    string
+	LinkedBy  string
+}
+
+// NotedPurchases finds which of the given printed lines a capture of the user
+// is linked to, keyed by line, so a line can say which purchase it is and the
+// owner can undo a wrong link. A line with none is absent, and so is any line
+// that is not the user's: only their own captures are read. Nothing that
+// builds a balance calls it.
+func (q *Queries) NotedPurchases(ctx context.Context, userID uuid.UUID, entryIDs []uuid.UUID) (map[uuid.UUID]NotedPurchase, error) {
+	out := map[uuid.UUID]NotedPurchase{}
+	if len(entryIDs) == 0 {
+		return out, nil
+	}
+	rows, err := q.q.Query(ctx, `SELECT entry_id, id, merchant, source, linked_by FROM captures
+		WHERE user_id = $1 AND entry_id = ANY($2)`, userID, entryIDs)
+	if err != nil {
+		return nil, wrap("store.NotedPurchases", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var (
+			line uuid.UUID
+			n    NotedPurchase
+		)
+		if err := rows.Scan(&line, &n.CaptureID, &n.Merchant, &n.Source, &n.LinkedBy); err != nil {
+			return nil, wrap("store.NotedPurchases", err)
+		}
+		out[line] = n
+	}
+	return out, wrap("store.NotedPurchases", rows.Err())
+}
+
 // RejectPair remembers that a line is not one of the user's captures, so it
 // is never a candidate for it again and never suggested as close to it.
 // Saying so twice is saying it once. Both must be the user's: the foreign keys
