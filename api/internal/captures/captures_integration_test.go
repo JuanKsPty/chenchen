@@ -115,7 +115,7 @@ func TestNotingAPurchaseByHand(t *testing.T) {
 			t.Errorf("%s: Add = %v, want %v", name, err, tt.want)
 		}
 	}
-	if s, _ := f.db.Q().CaptureSummaries(ctx, f.user); len(s) != 1 || s[card.ID].PendingCount != 2 {
+	if s, _ := f.db.Q().CaptureSummaries(ctx, f.user, day); len(s) != 1 || s[card.ID].PendingCount != 2 {
 		t.Errorf("CaptureSummaries = %+v; a refused purchase was stored", s)
 	}
 	// The longest merchant there may be is fine, and so is the largest amount.

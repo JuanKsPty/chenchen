@@ -9,6 +9,11 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
+// InstitutionManual is the institution of an account the owner keeps by hand:
+// a card someone else pays, whose statements never reach the app. Nothing a
+// statement or a sync printed can land in one (migration 00015).
+const InstitutionManual = "manual"
+
 // Account is one real-world account: a bank account, a card or a brokerage
 // account, keyed the way its institution keys it.
 type Account struct {
@@ -16,15 +21,23 @@ type Account struct {
 	UserID         uuid.UUID
 	Class          string // asset | liability
 	Type           string // checking | savings | credit_card | brokerage
-	Institution    string // banco_general | bac | ibkr
+	Institution    string // banco_general | bac | ibkr | manual
 	ExternalNumber string
 	Currency       string
 	DisplayName    string
 	Alias          string
-	CreatedAt      time.Time
+	// PaidByOther marks a card someone else pays: its purchases are the
+	// owner's spending, its debt is not theirs.
+	PaidByOther bool
+	CreatedAt   time.Time
 }
 
-const accountColumns = `id, user_id, class, type, institution, external_number, currency, display_name, alias, created_at`
+// KeptByHand reports whether the account lives only on the purchases the
+// owner notes, with nothing printed in it.
+func (a Account) KeptByHand() bool { return a.Institution == InstitutionManual }
+
+const accountColumns = `id, user_id, class, type, institution, external_number, currency, display_name, alias,
+	paid_by_other, created_at`
 
 // EnsureAccount returns the user's account with a's identity, creating it on
 // first sight. created reports which happened. An existing account keeps its
@@ -52,6 +65,54 @@ func (q *Queries) EnsureAccount(ctx context.Context, a Account) (Account, bool, 
 		return Account{}, false, wrap("store.EnsureAccount", err)
 	}
 	return found, false, nil
+}
+
+// CreateHandCard adds a card someone else pays, ending in last4, that the
+// owner calls alias. It is a card and a liability like any other, but kept by
+// hand and paid by another: no statement will ever reach it, and its debt is
+// not the owner's. Its number is written as a statement prints a card's, with
+// only the digits the owner knows, and it has no bank's name for it. A second
+// one ending in the same digits is a ConstraintError on
+// accounts_user_id_institution_external_number_currency_key.
+func (q *Queries) CreateHandCard(ctx context.Context, userID, id uuid.UUID, alias, last4 string) (Account, error) {
+	a, err := scanAccount(q.q.QueryRow(ctx, `
+		INSERT INTO accounts (id, user_id, class, type, institution, external_number, display_name, alias, paid_by_other)
+		VALUES ($1, $2, 'liability', 'credit_card', $3, '**** ' || $4, '', $5, true)
+		RETURNING `+accountColumns, id, userID, InstitutionManual, last4, alias))
+	return a, wrap("store.CreateHandCard", err)
+}
+
+// LastFour is the last four digits of a card's number however it is written —
+// '**** 4321', '4321' — or "" when it shows fewer than four.
+func LastFour(number string) string {
+	digits := make([]byte, 0, len(number))
+	for i := 0; i < len(number); i++ {
+		if c := number[i]; c >= '0' && c <= '9' {
+			digits = append(digits, c)
+		}
+	}
+	if len(digits) < 4 {
+		return ""
+	}
+	return string(digits[len(digits)-4:])
+}
+
+// PrintedCardEndingIn reports whether a statement the user imported printed a
+// card ending in last4: as the number of a card account, or as the card one of
+// its lines was made with (one account's statement can carry several cards).
+func (q *Queries) PrintedCardEndingIn(ctx context.Context, userID uuid.UUID, last4 string) (bool, error) {
+	var printed bool
+	err := q.q.QueryRow(ctx, `
+		SELECT EXISTS (
+		           SELECT 1 FROM accounts
+		           WHERE user_id = $1 AND type = 'credit_card' AND institution <> $3
+		             AND right(regexp_replace(external_number, '[^0-9]', '', 'g'), 4) = $2)
+		    OR EXISTS (
+		           SELECT 1 FROM entries e JOIN accounts a ON a.id = e.account_id
+		           WHERE e.user_id = $1 AND a.type = 'credit_card'
+		             AND right(regexp_replace(e.raw->>'Tarjeta', '[^0-9]', '', 'g'), 4) = $2)`,
+		userID, last4, InstitutionManual).Scan(&printed)
+	return printed, wrap("store.PrintedCardEndingIn", err)
 }
 
 // AccountsByUser lists a user's accounts: bank accounts, then cards, then
@@ -160,6 +221,6 @@ type scanner interface {
 func scanAccount(s scanner) (Account, error) {
 	var a Account
 	err := s.Scan(&a.ID, &a.UserID, &a.Class, &a.Type, &a.Institution, &a.ExternalNumber,
-		&a.Currency, &a.DisplayName, &a.Alias, &a.CreatedAt)
+		&a.Currency, &a.DisplayName, &a.Alias, &a.PaidByOther, &a.CreatedAt)
 	return a, err
 }

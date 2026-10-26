@@ -79,8 +79,8 @@ type noArgs struct{}
 type accountsResult struct {
 	Accounts []accountSummary `json:"accounts"`
 	// NetWorth is assets minus what is owed plus investments, in dollars.
-	NetWorth string `json:"net_worth" jsonschema:"assets minus debts plus investments, in dollars"`
-	Owed     string `json:"owed" jsonschema:"total owed on cards, in dollars"`
+	NetWorth string `json:"net_worth" jsonschema:"assets minus debts plus investments, in dollars; a card someone else pays is not in it"`
+	Owed     string `json:"owed" jsonschema:"total owed on cards, in dollars; a card someone else pays is not in it"`
 	Currency string `json:"currency" jsonschema:"always USD"`
 	Note     string `json:"note,omitempty"`
 }
@@ -88,15 +88,17 @@ type accountsResult struct {
 type accountSummary struct {
 	AccountID   string `json:"account_id" jsonschema:"the account's identifier; pass it to other tools"`
 	Name        string `json:"name" jsonschema:"what the owner calls it: their alias, or the bank's name for it"`
-	Institution string `json:"institution" jsonschema:"banco_general, bac or ibkr"`
+	Institution string `json:"institution" jsonschema:"banco_general, bac, ibkr, or manual for a card someone else pays that the owner keeps by hand"`
 	Type        string `json:"type" jsonschema:"checking, savings, credit_card or brokerage"`
 	Balance     string `json:"balance" jsonschema:"in dollars, signed from the owner's view: a card that owes money is negative"`
-	Owed        string `json:"owed,omitempty" jsonschema:"for a card: the amount owed, positive"`
+	Owed        string `json:"owed,omitempty" jsonschema:"for a card: the amount owed, positive; absent for a card someone else pays"`
 	Holdings    string `json:"holdings,omitempty" jsonschema:"for a brokerage account: the positions' market value"`
-	Anchored    bool   `json:"anchored" jsonschema:"false means no starting balance is known yet, so the balance is only the sum of imported movements and may not match the bank"`
+	Anchored    bool   `json:"anchored" jsonschema:"false means no starting balance is known yet, so the balance is only the sum of imported movements and may not match the bank; a card someone else pays never has one and needs none"`
 	MatchesBank *bool  `json:"matches_bank,omitempty" jsonschema:"whether the latest balance the bank stated agrees with the computed one; absent when there is nothing to compare"`
 	LastDay     string `json:"last_movement,omitempty" jsonschema:"date of the latest imported movement, YYYY-MM-DD"`
 	Pending     string `json:"pending,omitempty" jsonschema:"what purchases the owner noted and no statement has printed yet add up to, in dollars, negative; they count as spending but are not in balance until their statement arrives"`
+	PaidByOther bool   `json:"paid_by_other,omitempty" jsonschema:"true for a card someone else pays: its purchases are the owner's spending, but its debt is not theirs, so it is not in owed or net_worth; it has no statements and no balance"`
+	ThisMonth   string `json:"this_month,omitempty" jsonschema:"for a card someone else pays: what the owner spent on it this calendar month, in dollars, positive"`
 }
 
 type listMovementsArgs struct {
@@ -173,7 +175,9 @@ func newServer(deps Deps, userID uuid.UUID) *mcp.Server {
 			}
 			sum := accountSummary{AccountID: a.ID.String(), Name: name, Institution: a.Institution,
 				Type: a.Type, Balance: a.Balance.String(), Anchored: a.Anchored}
-			if a.Class == "liability" {
+			if a.PaidByOther {
+				sum.PaidByOther, sum.ThisMonth = true, a.ThisMonth.String()
+			} else if a.Class == "liability" {
 				sum.Owed = (-a.Balance).String()
 			}
 			if a.Type == "brokerage" {

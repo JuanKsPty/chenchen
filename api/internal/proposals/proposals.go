@@ -10,7 +10,8 @@
 //
 // Nothing a proposal can do changes a balance: a category, a note, a rule, a
 // transfer match or a stated balance, which only checks the imported
-// movements against the bank.
+// movements against the bank. A card someone else pays has no bank to check
+// against and no debt of the owner's, so a balance stated for it is invalid.
 //
 // A movement is a line a statement printed or a purchase the owner noted that
 // no statement has printed yet (ADR-0002). A noted purchase can be filed and
@@ -351,6 +352,9 @@ func (s *Service) check(ctx context.Context, userID uuid.UUID, payload any) (str
 		a, err := s.accounts.Get(ctx, userID, v.AccountID)
 		if err != nil {
 			return "", "", err
+		}
+		if a.PaidByOther {
+			return "", "", invalid("esa tarjeta la paga otra persona: no lleva saldo ni estados, así que no se le declara uno")
 		}
 		if v.AsOf.IsZero() || v.AsOf.After(civil.Of(s.now())) {
 			return "", "", invalid("la fecha del saldo debe ser un día que ya pasó")

@@ -248,19 +248,26 @@ type CaptureSummary struct {
 	// could be them but none is linked, or a statement passed their day
 	// without one.
 	ToReview int
+	// MonthTotal is what the pending captures booked in the month asked for
+	// add up to, signed like PendingTotal: the month's spending on a card
+	// someone else pays, whose captures are all it has.
+	MonthTotal money.Cents
 }
 
-// CaptureSummaries sums each of the user's accounts' open captures by state.
-// An account with none is absent.
-func (q *Queries) CaptureSummaries(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]CaptureSummary, error) {
+// CaptureSummaries sums each of the user's accounts' open captures by state,
+// and the pending ones booked in the calendar month that starts on month. An
+// account with none is absent.
+func (q *Queries) CaptureSummaries(ctx context.Context, userID uuid.UUID, month civil.Date) (map[uuid.UUID]CaptureSummary, error) {
 	rows, err := q.q.Query(ctx, `
 		SELECT account_id,
 		       COALESCE(SUM(amount_cents) FILTER (WHERE state = 'pending'), 0),
 		       count(*) FILTER (WHERE state = 'pending'),
-		       count(*) FILTER (WHERE state IN ('printed', 'missing'))
+		       count(*) FILTER (WHERE state IN ('printed', 'missing')),
+		       COALESCE(SUM(amount_cents) FILTER (WHERE state = 'pending' AND booked_on >= $2::date
+		                                          AND booked_on < ($2::date + interval '1 month')), 0)
 		FROM capture_states
 		WHERE user_id = $1 AND entry_id IS NULL AND discarded_at IS NULL
-		GROUP BY account_id`, userID)
+		GROUP BY account_id`, userID, month)
 	if err != nil {
 		return nil, wrap("store.CaptureSummaries", err)
 	}
@@ -269,11 +276,11 @@ func (q *Queries) CaptureSummaries(ctx context.Context, userID uuid.UUID) (map[u
 	for rows.Next() {
 		var id uuid.UUID
 		var s CaptureSummary
-		var total int64
-		if err := rows.Scan(&id, &total, &s.PendingCount, &s.ToReview); err != nil {
+		var total, monthTotal int64
+		if err := rows.Scan(&id, &total, &s.PendingCount, &s.ToReview, &monthTotal); err != nil {
 			return nil, wrap("store.CaptureSummaries", err)
 		}
-		s.PendingTotal = money.Cents(total)
+		s.PendingTotal, s.MonthTotal = money.Cents(total), money.Cents(monthTotal)
 		out[id] = s
 	}
 	return out, wrap("store.CaptureSummaries", rows.Err())

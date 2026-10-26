@@ -285,7 +285,15 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		}
 		out := driftResult{Account: rec.Account.DisplayName, Anchored: rec.Account.Anchored, Opening: rec.Opening.String(),
 			Checks: []driftCheck{}}
-		if !rec.Account.Anchored {
+		switch {
+		case rec.Account.PaidByOther:
+			// Kept by hand: nothing printed reaches it, so there is nothing
+			// to match and no starting balance to ask for. It has no bank's
+			// name either, only the one the owner gave it.
+			out.Account = rec.Account.Alias
+			out.Note = "Esta tarjeta la paga otra persona: no lleva saldo ni estados, así que no tiene nada que cuadrar. " +
+				untrustedDataNote
+		case !rec.Account.Anchored:
 			out.Note = "La cuenta no tiene saldo inicial: ingresa el saldo de un estado de cuenta con propose_checkpoint."
 		}
 		for _, c := range rec.Checks {

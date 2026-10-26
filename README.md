@@ -63,7 +63,7 @@ leer.
 
 | Tabla | Qué guarda |
 |---|---|
-| `accounts` | Una por cuenta real, identificada como la identifica su banco: institución, número y moneda. Si el estado de cuenta trae número de cliente y de producto, cuenta el del producto. |
+| `accounts` | Una por cuenta real, identificada como la identifica su banco: institución, número y moneda. Si el estado de cuenta trae número de cliente y de producto, cuenta el del producto. La excepción es una tarjeta que paga otra persona: la agregas tú, con un alias y sus últimos 4 dígitos (`manual`, `paid_by_other`), y nada impreso entra en ella. Sus compras anotadas cuentan como gasto tuyo; su deuda no entra en lo que debes ni en tu patrimonio. |
 | `entries` | Una por línea impresa. Monto con signo desde tu punto de vista: un cargo de tarjeta es negativo, y una tarjeta que debe $14.30 tiene saldo −14.30. Fecha civil de Panamá, sin zona horaria que la corra un día. |
 | `statements` | Período y saldos del estado de cuenta: inicial, final, disponible, retenido. |
 | `balance_checkpoints` | «Al cierre de este día el saldo era X», del estado de cuenta, del Cash Report de IBKR o ingresado a mano. Uno por cuenta es el **ancla**. |

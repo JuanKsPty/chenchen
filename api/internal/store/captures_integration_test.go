@@ -696,9 +696,11 @@ func TestCaptureSummariesCountWhatIsOpen(t *testing.T) {
 	addCapture(t, db, card, day.AddDays(1), -250)  // pending
 	addCapture(t, db, card, day.AddDays(-3), -333) // missing: settled, and not on it
 	addLine(t, db, card, day, -999, store.KindExpense, nil)
-	addCapture(t, db, card, day, -999)            // printed
-	addCapture(t, db, checking, day, -50)         // pending
-	linked := addCapture(t, db, quiet, day, -777) // linked
+	addCapture(t, db, card, day, -999)                 // printed
+	addCapture(t, db, checking, day, -50)              // pending
+	addCapture(t, db, checking, day.AddDays(-15), -20) // pending, on the last day of the month before
+	addCapture(t, db, checking, day.AddDays(17), -7)   // pending, on the first day of the month after
+	linked := addCapture(t, db, quiet, day, -777)      // linked
 	if err := link(t, db, linked, addLine(t, db, quiet, day, -777, store.KindExpense, nil)); err != nil {
 		t.Fatal(err)
 	}
@@ -708,13 +710,14 @@ func TestCaptureSummariesCountWhatIsOpen(t *testing.T) {
 	other := newUser(t, db, "other@example.com")
 	addCapture(t, db, newCard(t, db, other.ID), day, -4200)
 
-	got, err := db.Q().CaptureSummaries(ctx, u.ID)
+	// The month's total is October's pending purchases only.
+	got, err := db.Q().CaptureSummaries(ctx, u.ID, civil.Date{Year: 2026, Month: time.October, Day: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
 	want := map[uuid.UUID]store.CaptureSummary{
-		card.ID:     {PendingTotal: -350, PendingCount: 2, ToReview: 2},
-		checking.ID: {PendingTotal: -50, PendingCount: 1},
+		card.ID:     {PendingTotal: -350, PendingCount: 2, ToReview: 2, MonthTotal: -350},
+		checking.ID: {PendingTotal: -77, PendingCount: 3, MonthTotal: -50},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("CaptureSummaries = %+v, want %+v", got, want)

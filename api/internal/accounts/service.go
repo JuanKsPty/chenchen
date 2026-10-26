@@ -12,6 +12,11 @@
 // Purchases the owner noted that no statement has printed yet are shown beside
 // the balance, never in it (ADR-0002): nothing here that derives a balance, an
 // opening or a drift reads them.
+//
+// A card someone else pays is kept by hand: the owner adds it with its last
+// four digits, and it lives only on the purchases they note. Nothing printed
+// can land in it, so it has no balance to anchor or check; its purchases are
+// the owner's spending, but its debt is not theirs and stays out of net worth.
 package accounts
 
 import (
@@ -38,14 +43,42 @@ var (
 	ErrNotRelabelable = errors.New("accounts: only a bank account can be relabelled checking or savings")
 	// ErrCheckpointNotFound means no such checkpoint belongs to the account.
 	ErrCheckpointNotFound = errors.New("accounts: checkpoint not found")
+	// ErrKeptByHand means the account is a card someone else pays, kept by
+	// hand: no statement reaches it, so it has no balance to state.
+	ErrKeptByHand = errors.New("accounts: a card kept by hand has no balance")
+	// ErrIDTaken means the id a caller chose for a new card someone else pays
+	// is another account's.
+	ErrIDTaken = errors.New("accounts: the id belongs to another account")
+	// ErrAliasRequired means a card someone else pays was left without a
+	// name. It has no bank's name to fall back on.
+	ErrAliasRequired = errors.New("accounts: a card someone else pays needs a name")
+	// ErrLast4Invalid means the last four digits of a card are not four
+	// digits.
+	ErrLast4Invalid = errors.New("accounts: the last four digits must be four digits")
 )
+
+// HandCardTakenError means the owner already has a card ending in the same
+// four digits: one someone else pays or, when Printed, one whose statements
+// they import.
+type HandCardTakenError struct {
+	Last4   string
+	Printed bool
+}
+
+func (e HandCardTakenError) Error() string {
+	if e.Printed {
+		return "accounts: a card whose statements are imported already ends in " + e.Last4
+	}
+	return "accounts: a card someone else pays already ends in " + e.Last4
+}
 
 // Service reads and manages accounts.
 type Service struct {
-	db *store.DB
+	db  *store.DB
+	now func() time.Time
 }
 
-func NewService(db *store.DB) *Service { return &Service{db: db} }
+func NewService(db *store.DB) *Service { return &Service{db: db, now: time.Now} }
 
 // Account is an account with its computed position.
 type Account struct {
@@ -82,12 +115,26 @@ type Account struct {
 	// CaptureKey is the account's live shortcut key, nil when it has none.
 	// Never the key itself: only its hint and when it was last used.
 	CaptureKey *store.CaptureKey
+	// ThisMonth is what a card someone else pays was used for this calendar
+	// month in Panama, as a positive amount: its pending purchases, which for
+	// such a card are all its purchases. Zero for any other account.
+	ThisMonth money.Cents
 }
 
 // withCaptures sets what an account's noted purchases come to, beside its
 // balance.
 func withCaptures(a *Account, c store.CaptureSummary) {
 	a.Pending, a.PendingCount, a.ToReview = c.PendingTotal, c.PendingCount, c.ToReview
+	if a.PaidByOther {
+		a.ThisMonth = -c.MonthTotal
+	}
+}
+
+// thisMonth is the first day of the current calendar month in Panama, the
+// month a card someone else pays shows what it was used for.
+func (s *Service) thisMonth() civil.Date {
+	today := civil.Of(s.now().In(civil.Panama))
+	return civil.Date{Year: today.Year, Month: today.Month, Day: 1}
 }
 
 // withKey sets the account's live shortcut key, if it has one.
@@ -142,7 +189,7 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID) ([]Account, error)
 	if err != nil {
 		return nil, err
 	}
-	captures, err := s.db.Q().CaptureSummaries(ctx, userID)
+	captures, err := s.db.Q().CaptureSummaries(ctx, userID, s.thisMonth())
 	if err != nil {
 		return nil, err
 	}
@@ -194,7 +241,7 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (Account, error
 		}
 		a.LastSyncedAt = lastSynced(row, synced)
 	}
-	captures, err := s.db.Q().CaptureSummaries(ctx, userID)
+	captures, err := s.db.Q().CaptureSummaries(ctx, userID, s.thisMonth())
 	if err != nil {
 		return Account{}, err
 	}
@@ -328,11 +375,21 @@ func (s *Service) sumAt(ctx context.Context, c store.Checkpoint) (money.Cents, e
 	return s.db.Q().SumThroughDay(ctx, c.AccountID, c.AsOf)
 }
 
-// Rename sets or clears an account's alias.
+// Rename sets or clears an account's alias. A card someone else pays keeps
+// one: it has no bank's name to be known by instead.
 func (s *Service) Rename(ctx context.Context, userID, id uuid.UUID, rawAlias string) (Account, error) {
 	alias, err := normaliseAlias(rawAlias)
 	if err != nil {
 		return Account{}, err
+	}
+	if alias == "" {
+		row, err := s.resolve(ctx, userID, id)
+		if err != nil {
+			return Account{}, err
+		}
+		if row.KeptByHand() {
+			return Account{}, ErrAliasRequired
+		}
 	}
 	if err := s.db.Q().SetAccountAlias(ctx, userID, id, alias); err != nil {
 		return Account{}, notFound(err)
@@ -357,6 +414,87 @@ func (s *Service) SetType(ctx context.Context, userID, id uuid.UUID, typ string)
 	return s.Get(ctx, userID, id)
 }
 
+// AddHandCard adds a card someone else pays: one the owner uses while
+// somebody else gets its statements and pays it. It is known by the alias the
+// owner gives it and its last four digits, and lives only on the purchases
+// they note on it.
+//
+// The digits are one card's, in one place. A card whose statements the owner
+// imports already holds its purchases, so it cannot also be kept by hand: its
+// lines and the purchases noted on it would count twice, and its debt would
+// be both the owner's and not.
+// AddHandCard adds a card someone else pays. id, when the caller chooses one,
+// makes adding safe to repeat: a second call with the same id returns the card
+// the first one added instead of hearing that its digits are taken. A form that
+// lost the answer to its first send can send it again. uuid.Nil means a new id.
+func (s *Service) AddHandCard(ctx context.Context, userID, id uuid.UUID, rawAlias, last4 string) (Account, error) {
+	alias, aliasErr := normaliseAlias(rawAlias)
+	if aliasErr == nil && alias == "" {
+		aliasErr = ErrAliasRequired
+	}
+	var last4Err error
+	if !isLast4(last4) {
+		last4Err = ErrLast4Invalid
+	}
+	// Both at once, so a form with both fields wrong hears of both.
+	if err := errors.Join(aliasErr, last4Err); err != nil {
+		return Account{}, err
+	}
+	var a store.Account
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		// Under the lock an import takes, so none files the card between
+		// the check and the insert.
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		if id == uuid.Nil {
+			id = uuid.New()
+		} else if added, err := q.AccountByID(ctx, userID, id); err == nil {
+			// Added already, by an earlier send whose answer was lost. The
+			// user's lock makes this check and the insert below one step.
+			if !added.PaidByOther {
+				return ErrIDTaken
+			}
+			a = added
+			return nil
+		} else if !errors.Is(err, store.ErrNotFound) {
+			return err
+		}
+		printed, err := q.PrintedCardEndingIn(ctx, userID, last4)
+		if err != nil {
+			return err
+		}
+		if printed {
+			return HandCardTakenError{Last4: last4, Printed: true}
+		}
+		a, err = q.CreateHandCard(ctx, userID, id, alias, last4)
+		return err
+	})
+	if store.IsConstraint(err, "accounts_pkey") {
+		return Account{}, fmt.Errorf("%w: %v", ErrIDTaken, err)
+	}
+	if store.IsConstraint(err, "accounts_user_id_institution_external_number_currency_key") {
+		return Account{}, fmt.Errorf("%w: %v", HandCardTakenError{Last4: last4}, err)
+	}
+	if err != nil {
+		return Account{}, err
+	}
+	return s.Get(ctx, userID, a.ID)
+}
+
+// isLast4 reports whether s is exactly four ASCII digits.
+func isLast4(s string) bool {
+	if len(s) != 4 {
+		return false
+	}
+	for _, r := range s {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // Delete removes an account with everything imported into it. Importing its
 // files again recreates it with the same movements.
 func (s *Service) Delete(ctx context.Context, userID, id uuid.UUID) error {
@@ -376,7 +514,8 @@ type CheckpointInput struct {
 }
 
 // AddCheckpoint records a stated balance. Pinned, it becomes the anchor the
-// opening is derived from.
+// opening is derived from. A card kept by hand takes none: no statement says
+// what it owes, and its debt is not the owner's to state.
 func (s *Service) AddCheckpoint(ctx context.Context, userID, accountID uuid.UUID, in CheckpointInput) (store.Checkpoint, error) {
 	if in.AsOf.IsZero() {
 		return store.Checkpoint{}, fmt.Errorf("accounts: a checkpoint needs a date")
@@ -389,8 +528,12 @@ func (s *Service) AddCheckpoint(ctx context.Context, userID, accountID uuid.UUID
 		if err := q.LockUser(ctx, userID); err != nil {
 			return err
 		}
-		if _, err := q.AccountByID(ctx, userID, accountID); err != nil {
+		account, err := q.AccountByID(ctx, userID, accountID)
+		if err != nil {
 			return notFound(err)
+		}
+		if account.KeptByHand() {
+			return ErrKeptByHand
 		}
 		if err := q.CreateCheckpoint(ctx, c); err != nil {
 			return err
@@ -444,9 +587,13 @@ func (s *Service) Checkpoints(ctx context.Context, userID, accountID uuid.UUID) 
 }
 
 // NetWorth sums every account's balance and holdings. Liability balances are
-// negative already, so this is assets minus debts plus investments.
+// negative already, so this is assets minus debts plus investments. A card
+// someone else pays is left out: what it owes is not the owner's debt.
 func NetWorth(list []Account) (assets, liabilities, holdings money.Cents) {
 	for _, a := range list {
+		if a.PaidByOther {
+			continue
+		}
 		if a.Class == "liability" {
 			liabilities += a.Balance
 		} else {

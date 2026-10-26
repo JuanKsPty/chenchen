@@ -85,6 +85,22 @@ También se consideró guardar el estado de cada compra en una columna que el im
 actualiza. Se descartó porque deja huecos donde la compra y su línea cuentan a la vez,
 por ejemplo una compra anotada después del import o un par ambiguo.
 
+### Una tarjeta que paga otra persona
+
+Una tarjeta que la persona usa y otra persona paga (la de su papá, por ejemplo) es la
+excepción a «el estado de cuenta es la verdad»: sus estados nunca llegan a chenchén. La
+agrega la persona, con un alias y sus últimos 4 dígitos (`institution = 'manual'`,
+`paid_by_other`, migración 00015), y vive solo de sus compras anotadas:
+
+- **Nada impreso entra en ella.** Un trigger rechaza en esa cuenta líneas, estados,
+  saldos declarados e imports. El import rechaza entero un estado de una tarjeta que
+  termine en esos dígitos, o con líneas hechas con ella, y no se puede agregar a mano una
+  tarjeta cuyos estados ya se importan. Así ninguna compra cuenta dos veces.
+- **Sus compras quedan siempre `pending`.** Sin nada impreso que pueda ser ellas, cuentan
+  siempre en Gastos y en el flujo del mes, hasta que la persona descarte alguna.
+- **Su deuda no es de la persona.** Queda fuera de lo que debe y de su patrimonio. Su
+  saldo es siempre cero, así que nunca le falta el saldo inicial ni muestra «No cuadra».
+
 ## Consecuencias
 
 - El saldo, el ancla, el descuadre, la conciliación y las transferencias no cambian, y

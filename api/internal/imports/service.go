@@ -71,6 +71,19 @@ type AccountResult struct {
 // that belongs to a different account.
 var ErrAccountMismatch = errors.New("imports: the file belongs to a different account")
 
+// ErrPaidByOther means the file holds a statement for a card someone else
+// pays. That card is kept by hand, on the purchases the owner notes; its
+// statement, filed as a card of its own, would count each of them twice and
+// make another person's debt the owner's.
+var ErrPaidByOther = errors.New("imports: the statement is for a card someone else pays")
+
+// paidByOtherError is ErrPaidByOther for the card ending in last4, which the
+// message names: one file can hold several cards' statements.
+type paidByOtherError struct{ last4 string }
+
+func (e paidByOtherError) Error() string        { return ErrPaidByOther.Error() + ", ending in " + e.last4 }
+func (e paidByOtherError) Is(target error) bool { return target == ErrPaidByOther }
+
 // ErrUnreadable wraps a structural problem in the file, such as an unreadable
 // date or a missing column. Unwrap it for the parser's own message.
 type unreadableError struct{ err error }
@@ -186,6 +199,12 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 	if expect != nil && account.ID != *expect {
 		return AccountResult{}, fmt.Errorf("%w: %s %s", ErrAccountMismatch, id.Institution, id.ExternalNumber)
 	}
+	// The account just created, if any, goes with the transaction.
+	if last4, err := paidByOther(ctx, q, userID, st); err != nil {
+		return AccountResult{}, err
+	} else if last4 != "" {
+		return AccountResult{}, paidByOtherError{last4}
+	}
 
 	run := store.ImportRun{
 		ID: uuid.New(), UserID: userID, AccountID: &account.ID, Source: string(source), Status: "ok",
@@ -291,6 +310,39 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 		res.NeedsOpening = len(cps) == 0
 	}
 	return res, nil
+}
+
+// paidByOther returns the last four digits of the card someone else pays that
+// st is a statement of, or that one of its lines was made with, or "" when it
+// is neither. One account's statement can carry several cards, and the one the
+// owner uses may be any of them.
+func paidByOther(ctx context.Context, q *store.Queries, userID uuid.UUID, st statement.Statement) (string, error) {
+	if st.Identity.Type != "credit_card" {
+		return "", nil
+	}
+	accounts, err := q.AccountsByUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	byHand := map[string]bool{}
+	for _, a := range accounts {
+		if a.KeptByHand() {
+			byHand[store.LastFour(a.ExternalNumber)] = true
+		}
+	}
+	if len(byHand) == 0 {
+		return "", nil
+	}
+	numbers := []string{st.Identity.ExternalNumber}
+	for _, l := range st.Lines {
+		numbers = append(numbers, l.Raw["Tarjeta"])
+	}
+	for _, n := range numbers {
+		if last4 := store.LastFour(n); last4 != "" && byHand[last4] {
+			return last4, nil
+		}
+	}
+	return "", nil
 }
 
 // linkCaptures links each imported account's noted purchases to their lines

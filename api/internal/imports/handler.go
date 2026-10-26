@@ -2,6 +2,7 @@ package imports
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -102,6 +103,7 @@ func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 }
 
 func translate(r *http.Request, err error) error {
+	var paid paidByOtherError
 	switch {
 	case errors.Is(err, statement.ErrUnrecognised), errors.Is(err, statement.ErrAccountNotStated),
 		errors.Is(err, ErrUnreadable):
@@ -112,6 +114,9 @@ func translate(r *http.Request, err error) error {
 	case errors.Is(err, ErrAccountMismatch):
 		return httpx.Conflict("account_mismatch",
 			"Este archivo es de otra cuenta. Impórtalo desde esa cuenta o desde Cuentas.").WithCause(err)
+	case errors.As(err, &paid):
+		return httpx.Unprocessable("paid_by_other", fmt.Sprintf(
+			"La tarjeta que termina en %s la paga otra persona: sus estados no se importan.", paid.last4)).WithCause(err)
 	default:
 		return err
 	}
