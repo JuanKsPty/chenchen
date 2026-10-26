@@ -21,6 +21,7 @@ import type {
   InvestmentSyncResult,
   InvestmentTrade,
   Me,
+  NewShortcutKey,
   Portfolio,
   Reconciliation,
   SecurityStatus,
@@ -260,6 +261,29 @@ export const rejectCaptureLine = (id: string, entryId: string) =>
 /** The noted purchases the owner should look at, newest first. */
 export const fetchCaptureReview = () =>
   request<{ captures: CaptureReviewItem[] }>('/api/captures/review')
+
+// --- the phone's shortcut -------------------------------------------------------
+
+/**
+ * Where the phone's shortcut sends each purchase, with the account's key. The app
+ * never calls it; it shows it, after this site's origin, for the owner to paste.
+ */
+export const SHORTCUT_PURCHASES_PATH = '/api/shortcut/purchases'
+
+/**
+ * Makes the account's shortcut key, turning off the one it had. The answer is the
+ * only time the key itself is ever sent: see useCreateShortcutKey.
+ */
+export const createShortcutKey = (accountId: string) =>
+  request<NewShortcutKey>(`/api/captures/keys/${encodeURIComponent(accountId)}`, {
+    method: 'POST',
+  })
+
+/** Turns the account's shortcut key off: its shortcut stops noting purchases at once. */
+export const revokeShortcutKey = (accountId: string) =>
+  request<void>(`/api/captures/keys/${encodeURIComponent(accountId)}`, {
+    method: 'DELETE',
+  })
 
 // --- reports -------------------------------------------------------------------
 

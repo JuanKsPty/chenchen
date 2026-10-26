@@ -11,6 +11,7 @@
  * The overflow menu is the ellipsis by the desktop title and the mobile bar's "Más
  * opciones" (useTopBar). "Revisar", "Ver saldos del banco" and "Ver detalle" open the
  * review sheet by setting `?revisar=1`, which the sheet clears again when it closes.
+ * `?atajo=1` opens "Anotar compras con Atajos" the same way (useAccountActions).
  */
 import { useSearchParams, useParams } from 'react-router-dom'
 

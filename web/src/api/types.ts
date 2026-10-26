@@ -101,6 +101,19 @@ export interface ShortcutStatus {
   card_label?: string
 }
 
+/**
+ * A shortcut key just made (POST /api/captures/keys/{accountID}): the one answer that
+ * ever carries the key itself. Show it once and keep it nowhere; the server only
+ * keeps its hash, so it cannot be shown again.
+ */
+export interface NewShortcutKey {
+  /** "chn_…": what the shortcut sends as its Authorization. */
+  key: string
+  /** Its last four characters, all the owner sees of it afterwards. */
+  hint: string
+  created_at: string
+}
+
 /** What a card's statement says is due. Dates are civil (YYYY-MM-DD). */
 export interface CardStatement {
   closing_on: string

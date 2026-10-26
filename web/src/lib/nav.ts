@@ -24,8 +24,11 @@ import type { EntryKind } from '@/api/types'
  *   movementFiltersToParams(f)     the same, as URLSearchParams (for setSearchParams)
  *   movementFiltersToQuery(f)      the same, as the API's EntryQuery
  *
- *   accountHref(id, {review?})     /cuentas/:id, plus ?revisar=1 to open the review
+ *   accountHref(id, {review?, shortcut?})
+ *                                  /cuentas/:id, plus ?revisar=1 to open the review,
+ *                                  ?atajo=1 to open "Anotar compras con Atajos"
  *   isReviewRequested(params)      true when ?revisar=1 is present
+ *   isShortcutRequested(params)    true when ?atajo=1 is present
  *
  *   spendingHref(ym?)              /gastos, or /gastos?mes=YYYY-MM
  *   parseSpendingMonth(params)     the ?mes value when it is a valid YYYY-MM
@@ -160,14 +163,28 @@ export function movementFiltersToQuery(
 
 // --- accounts ----------------------------------------------------------------
 
-/** The account's page; with `review` it opens the "why it doesn't match" sheet. */
-export function accountHref(id: string, options: { review?: boolean } = {}): string {
+/**
+ * The account's page; with `review` it opens the "why it doesn't match" sheet, with
+ * `shortcut` the dialog that sets up the phone's shortcut for it.
+ */
+export function accountHref(
+  id: string,
+  options: { review?: boolean; shortcut?: boolean } = {},
+): string {
   const path = `${ACCOUNTS_PATH}/${encodeURIComponent(id)}`
-  return options.review ? `${path}?revisar=1` : path
+  const params = new URLSearchParams()
+  if (options.review) params.set('revisar', '1')
+  if (options.shortcut) params.set('atajo', '1')
+  const query = params.toString()
+  return query ? `${path}?${query}` : path
 }
 
 export function isReviewRequested(params: URLSearchParams): boolean {
   return params.get('revisar') === '1'
+}
+
+export function isShortcutRequested(params: URLSearchParams): boolean {
+  return params.get('atajo') === '1'
 }
 
 // --- spending ------------------------------------------------------------------

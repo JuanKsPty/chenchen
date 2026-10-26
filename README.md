@@ -24,7 +24,7 @@ teléfono, más el asistente y los ajustes:
 | **Movimientos** (`/movimientos`) | Todo lo importado, con búsqueda por comercio, monto o nota, filtros por cuenta, categoría, fechas y tipo, y exportación a CSV. Tocar un movimiento abre Categorizar. |
 | **Gastos** (`/gastos`) | En qué se te va el mes por categoría, entradas y salidas por mes, las transferencias que esperan un sí o un no y las reglas (`/gastos/reglas`). |
 | **Asistente** | Un panel a la derecha en escritorio y una hoja en el teléfono. Le preguntas por tu dinero; propone cambios y tú decides cuáles aplicar. |
-| **Ajustes** (`/ajustes`) | Modo claro, oscuro o el del sistema; el PIN y este dispositivo; la conexión con Interactive Brokers; y tus reglas. |
+| **Ajustes** (`/ajustes`) | Modo claro, oscuro o el del sistema; el PIN y este dispositivo; las conexiones con Interactive Brokers y con los atajos del iPhone que anotan tus compras; y tus reglas. |
 
 En un dispositivo de confianza entras con un PIN de 6 dígitos, y la app trae manifiesto
 e íconos para agregarla a la pantalla de inicio del teléfono.
@@ -220,6 +220,7 @@ Todo tiene un default que funciona; ver `.env.example`.
 | `AI_MAX_TOOL_TURNS` | `4` | Vueltas de herramientas por mensaje. |
 | `IBKR_TOKEN_ENCRYPTION_KEY` | *(vacío)* | 32 bytes en base64 (`openssl rand -base64 32`). Cifra el token de IBKR. Vacío, vincular IBKR se rechaza. Cambiarlo invalida el token guardado. |
 | `ENV` / `LOG_LEVEL` | `development` / `info` | `production` pasa los logs a JSON. |
+| `VITE_SHORTCUT_URL` | *(vacío)* | Opcional, al construir la imagen de la web: el enlace https de iCloud a un atajo listo para anotar compras desde el iPhone. Vacío, la web muestra solo los pasos para armarlo. Cambiarlo pide reconstruir la imagen; nunca es un secreto. |
 
 ---
 

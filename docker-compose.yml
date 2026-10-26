@@ -119,6 +119,9 @@ services:
   web:
     build:
       context: ./web
+      args:
+        # Optional, read at build time: see .env.example.
+        VITE_SHORTCUT_URL: ${VITE_SHORTCUT_URL:-}
     image: chenchen-web
     mem_limit: 32m
     ports:

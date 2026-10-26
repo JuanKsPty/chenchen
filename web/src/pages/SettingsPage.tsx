@@ -3,7 +3,8 @@
  *
  *   Apariencia   Claro / Oscuro / Sistema
  *   Seguridad    the PIN and this phone (#seguridad; /seguridad redirects here)
- *   Conexiones   Interactive Brokers accounts and their last sync
+ *   Conexiones   Interactive Brokers accounts and their last sync; under "Atajos",
+ *                the accounts whose iPhone shortcut notes purchases
  *   Reglas       the way into /gastos/reglas
  *
  * One column on a phone. When the page itself is 56rem or wider (lg and up, unless

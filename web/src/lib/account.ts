@@ -1,5 +1,11 @@
-import type { Account, Amount, Institution } from '@/api/types'
-import { formatCivilDate, institutionLabel, money, numberShort } from '@/lib/format'
+import type { Account, Amount, Institution, ShortcutStatus } from '@/api/types'
+import {
+  formatCivilDate,
+  institutionLabel,
+  money,
+  numberShort,
+  relativeTime,
+} from '@/lib/format'
 
 /**
  * What the app says about an account, in one place.
@@ -27,6 +33,9 @@ import { formatCivilDate, institutionLabel, money, numberShort } from '@/lib/for
  *   institutionInitials(i)     two or three letters ("IB"): the tile, never a bank logo
  *   groupAccounts(accounts)    [{ key, title, accounts, total }] for Cuentas, Tarjetas
  *                              and Inversiones, in that order, empty groups left out
+ *   hasShortcut(a)             whether the account has a working shortcut key
+ *   shortcutNote(shortcut)     how its shortcut is doing: "Última compra hace 2 h",
+ *                              "Probada, sin compras todavía", "Sin probar todavía"
  */
 
 /** Builds an Amount from cents, for a sum computed in the browser. */
@@ -253,4 +262,22 @@ export function groupAccounts(accounts: Account[]): AccountGroup[] {
     group.total = amountOf(group.total.cents + headline(account).amount.cents)
   }
   return [cuentas, tarjetas, inversiones].filter((group) => group.accounts.length > 0)
+}
+
+// --- the phone's shortcut ---------------------------------------------------
+
+/** Whether the account has a shortcut key that works. */
+export function hasShortcut(account: Account): boolean {
+  return account.shortcut?.configured === true
+}
+
+/**
+ * How an account's shortcut is doing, from its key: the last purchase it noted, or
+ * whether it was ever run by hand (which tests it and notes nothing).
+ */
+export function shortcutNote(shortcut: ShortcutStatus): string {
+  if (shortcut.last_capture_at)
+    return `Última compra ${relativeTime(shortcut.last_capture_at)}`
+  if (shortcut.tested_at) return 'Probada, sin compras todavía'
+  return 'Sin probar todavía'
 }

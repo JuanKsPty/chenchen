@@ -4,10 +4,15 @@
 # Alpine is fine here, unlike in the API image: the frontend has no native
 # dependencies, so nothing needs glibc.
 #
-# The build takes no VITE_* variables. That is deliberate — Vite inlines them at
+# The build takes no API URL. That is deliberate — Vite inlines VITE_* variables at
 # compile time, so an API URL baked into the bundle would be wrong the moment the
 # stack ran anywhere other than the machine that built it. nginx proxies /api to
 # the backend instead, and the browser only ever sees one origin.
+#
+# It takes one optional build argument, VITE_SHORTCUT_URL: a public iCloud link to
+# a ready-made shortcut for noting purchases from the iPhone. It is the same link
+# wherever the stack runs and nothing secret, so baking it in is fine; left empty,
+# the app shows the setup steps without it (see .env.example).
 # =============================================================================
 
 # --- build -------------------------------------------------------------------
@@ -21,6 +26,10 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+
+# Declared here, after the install, so changing it does not reinstall anything.
+# Vite reads it from the environment, as RUN sees every ARG.
+ARG VITE_SHORTCUT_URL=""
 
 # `npm run build` is `tsc -b && vite build`, so a type error fails the image
 # rather than shipping.

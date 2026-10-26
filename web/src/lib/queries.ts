@@ -42,6 +42,9 @@ import type {
  *                 useCaptureReview: the ones their statement does not confirm ·
  *                 useLinkCapture()({id, entryId}) · useRejectCapture()({id, entryId}) ·
  *                 useUnlinkCapture()(id)
+ *   shortcut keys useCreateShortcutKey(accountId) · useRevokeShortcutKey(accountId): the
+ *                 key the phone's shortcut notes purchases with. Not money: they refresh
+ *                 only the accounts, whose `shortcut` says whether there is one
  *   imports       useImportStatement()({file, accountId?}) · useDryRunStatement()(file) ·
  *                 useImportRuns(accountId)
  *   investments   useInvestmentLink(accountId, {enabled?}) · useLinkIBKR ·
@@ -327,6 +330,47 @@ export function useUnlinkCapture() {
     mutationFn: (id: string) => api.unlinkCapture(id),
     onSuccess: invalidate,
     onError: () => void invalidate(),
+  })
+}
+
+// --- the phone's shortcut ---------------------------------------------------------
+
+/**
+ * A key changes what an account says about its shortcut (`account.shortcut`, in the
+ * account and in the list Ajustes reads) and nothing about money. The refresh is
+ * awaited, so the dialog goes on with the account already saying what is true now.
+ */
+function useShortcutInvalidation(accountId: string) {
+  const queryClient = useQueryClient()
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: keys.accounts }),
+      queryClient.invalidateQueries({ queryKey: keys.account(accountId) }),
+    ])
+}
+
+/**
+ * Makes the account's shortcut key, turning off the one it had. The answer is the
+ * key itself, the one time the app ever sees it, and it must not linger: the caller
+ * moves it into its own state and calls reset() at once, and gcTime 0 drops the
+ * finished mutation, with the key in it, from the mutation cache as soon as nothing
+ * observes it (by default it would wait five minutes).
+ */
+export function useCreateShortcutKey(accountId: string) {
+  const invalidate = useShortcutInvalidation(accountId)
+  return useMutation({
+    mutationFn: () => api.createShortcutKey(accountId),
+    onSuccess: () => invalidate(),
+    gcTime: 0,
+  })
+}
+
+/** Turns the account's shortcut key off. */
+export function useRevokeShortcutKey(accountId: string) {
+  const invalidate = useShortcutInvalidation(accountId)
+  return useMutation({
+    mutationFn: () => api.revokeShortcutKey(accountId),
+    onSuccess: () => invalidate(),
   })
 }
 
