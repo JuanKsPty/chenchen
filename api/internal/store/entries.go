@@ -241,7 +241,9 @@ func (q *Queries) EachEntry(ctx context.Context, f EntryFilter, fn func(Entry) e
 }
 
 // AccountEntriesInOrder lists one account's entries in balance order, oldest
-// first: the order a running balance is computed in.
+// first: the order a running balance is computed in. Printed lines only, never
+// captures (ADR-0002): reconciliation walks this list against the bank's
+// balances.
 func (q *Queries) AccountEntriesInOrder(ctx context.Context, userID, accountID uuid.UUID) ([]Entry, error) {
 	query := `SELECT ` + entryColumns + ` FROM entries WHERE user_id = $1 AND account_id = $2
 		ORDER BY ` + entryOrder
@@ -253,7 +255,8 @@ func (q *Queries) AccountEntriesInOrder(ctx context.Context, userID, accountID u
 // source's own order otherwise.
 const entryOrder = `balance_on, booked_at NULLS FIRST, seq, id`
 
-// EntryByID returns one of the user's entries.
+// EntryByID returns one of the user's entries: a printed line, never a
+// capture (ADR-0002).
 func (q *Queries) EntryByID(ctx context.Context, userID, id uuid.UUID) (Entry, error) {
 	rows, err := q.queryEntries(ctx, "store.EntryByID",
 		`SELECT `+entryColumns+` FROM entries WHERE id = $1 AND user_id = $2`, id, userID)
@@ -299,7 +302,9 @@ type AccountSums struct {
 	LastBooking civil.Date
 }
 
-// SumsByAccount totals every entry of each of the user's accounts.
+// SumsByAccount totals every entry of each of the user's accounts. Printed
+// lines only, never captures (ADR-0002): a purchase the owner noted must not
+// move a balance.
 func (q *Queries) SumsByAccount(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]AccountSums, error) {
 	rows, err := q.q.Query(ctx, `
 		SELECT account_id, COALESCE(SUM(amount_cents), 0), count(*), MIN(balance_on), MAX(balance_on), MAX(booked_on)
@@ -323,7 +328,7 @@ func (q *Queries) SumsByAccount(ctx context.Context, userID uuid.UUID) (map[uuid
 }
 
 // SumThroughDay totals an account's entries that reached the balance on or
-// before day.
+// before day. Printed lines only, never captures (ADR-0002).
 func (q *Queries) SumThroughDay(ctx context.Context, accountID uuid.UUID, day civil.Date) (money.Cents, error) {
 	var total int64
 	err := q.q.QueryRow(ctx, `SELECT COALESCE(SUM(amount_cents), 0) FROM entries
@@ -332,7 +337,7 @@ func (q *Queries) SumThroughDay(ctx context.Context, accountID uuid.UUID, day ci
 }
 
 // SumBefore totals an account's entries that come strictly before the given
-// entry in balance order.
+// entry in balance order. Printed lines only, never captures (ADR-0002).
 func (q *Queries) SumBefore(ctx context.Context, accountID, entryID uuid.UUID) (money.Cents, error) {
 	var total int64
 	err := q.q.QueryRow(ctx, `

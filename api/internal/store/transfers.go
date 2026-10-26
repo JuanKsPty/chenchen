@@ -18,7 +18,8 @@ type TransferCandidate struct {
 // TransferCandidates finds unmatched pairs: equal and opposite amounts, in
 // different accounts of the same user, booked within window days of each
 // other, not both already transfers, and never rejected. from and to bound
-// the dates considered; zero means unbounded.
+// the dates considered; zero means unbounded. Printed lines only, never
+// captures (ADR-0002): a purchase the owner noted is not half of a transfer.
 func (q *Queries) TransferCandidates(ctx context.Context, userID uuid.UUID, window int, from, to civil.Date) ([]TransferCandidate, error) {
 	rows, err := q.q.Query(ctx, `
 		SELECT `+prefixed("o.", entryColumns)+`, `+prefixed("i.", entryColumns)+`
