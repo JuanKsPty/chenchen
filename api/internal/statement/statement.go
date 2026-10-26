@@ -15,12 +15,12 @@
 package statement
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/JuanKsPty/chenchen/api/internal/civil"
@@ -74,6 +74,9 @@ type Identity struct {
 	// Type is checking or credit_card; a bank account's export does not say
 	// whether it is checking or savings, so the owner can relabel it.
 	Type string
+	// Holder is the account holder's name as the bank prints it, when the
+	// file names them (BAC).
+	Holder string
 }
 
 // Line is one movement the file printed.
@@ -81,11 +84,10 @@ type Line struct {
 	// LineNo is the line's position in the file, 1-based, for messages that
 	// point back at it.
 	LineNo int
-	// BookedOn is the day the bank printed for the movement.
+	// BookedOn is the day the bank printed for the movement. No supported
+	// format carries the time of a movement: the BG account export's date
+	// cells hold one, but it is the time the file was downloaded.
 	BookedOn civil.Date
-	// BookedAt is set when the file carries a time (the BG account export),
-	// in Panama time.
-	BookedAt *time.Time
 	// PostedOn is the card's processing date ("Fecha proceso"), when present.
 	PostedOn *civil.Date
 	// Amount is signed from the holder's point of view.
@@ -97,6 +99,12 @@ type Line struct {
 	// the format prints one.
 	RunningBalance *money.Cents
 	Kind           Kind
+	// BankTransfer marks money the bank moved to or from another account — an
+	// ACH, a TEF, a mobile-banking transfer — rather than a purchase or a
+	// Yappy. When it names the account holder, it is the owner moving money
+	// between their own accounts, which only the importer, knowing the owner,
+	// can tell.
+	BankTransfer bool
 	// Occurrence tells two identical lines in one file apart: the first is 0,
 	// the second 1. It is part of the dedup key, so re-importing the same file
 	// yields the same keys.
@@ -155,6 +163,11 @@ type File struct {
 // ErrUnrecognised means the file matches none of the supported formats.
 var ErrUnrecognised = errors.New("statement: file format not recognised")
 
+// ErrAccountNotStated means the file is a known export that does not say which
+// account it is for — the BG account's .txt — so it cannot be filed. The same
+// movements come with the account in the .xlsx export.
+var ErrAccountNotStated = errors.New("statement: the file does not say which account it is for")
+
 // Parse detects the format and parses the file. It fails only on structural
 // problems — an unreadable date or amount, a missing column, a line with the
 // wrong number of fields. A balance that does not add up is a warning on the
@@ -168,15 +181,22 @@ func Parse(filename string, data []byte) (File, error) {
 		return parseBAC(data)
 	case SourceBGCard:
 		return parseBGCard(data)
+	case sourceBGAccountText:
+		return File{}, ErrAccountNotStated
 	default:
 		return File{}, ErrUnrecognised
 	}
 }
 
 const (
-	bgCardSignature = "Tarjeta;Fecha tran;Fecha proceso;Descripcion;Referencia;Categoria;Cargos (Db);Pagos (Cr)"
-	bacSignature    = "Número de Clientes"
+	bgCardSignature        = "Tarjeta;Fecha tran;Fecha proceso;Descripcion;Referencia;Categoria;Cargos (Db);Pagos (Cr)"
+	bgAccountTextSignature = "Fecha tran;Referencia;Descripcion;Cargos (Db);Pagos (Cr);Saldo total"
+	bacSignature           = "Número de Clientes"
 )
+
+// sourceBGAccountText is the BG account's .txt export, recognised only to say
+// why it cannot be imported.
+const sourceBGAccountText Source = "bg_account_txt"
 
 func detect(filename string, data []byte) Source {
 	if strings.HasSuffix(strings.ToLower(filename), ".xlsx") {
@@ -185,6 +205,9 @@ func detect(filename string, data []byte) Source {
 	head := data[:min(len(data), 2048)]
 	if strings.Contains(string(head), bgCardSignature) {
 		return SourceBGCard
+	}
+	if strings.HasPrefix(string(bytes.TrimPrefix(head, []byte("\xef\xbb\xbf"))), bgAccountTextSignature) {
+		return sourceBGAccountText
 	}
 	if strings.HasPrefix(latin1(head), bacSignature) {
 		return SourceBACAccount
@@ -198,12 +221,11 @@ func detect(filename string, data []byte) Source {
 // importing its file again produces the same keys.
 func DedupKey(id Identity, l Line) string {
 	h := sha256.New()
-	bookedAt := ""
-	if l.BookedAt != nil {
-		bookedAt = l.BookedAt.UTC().Format(time.RFC3339)
-	}
+	// The empty field once held the BG account's time of day, which turned out
+	// to be the time of the download; it stays empty so the keys of every
+	// other format are unchanged.
 	fmt.Fprintf(h, "%s|%s|%s|%s|%s|%d|%s|%s|%s|%d",
-		id.Institution, id.ExternalNumber, l.Raw["Tarjeta"], l.BookedOn, bookedAt,
+		id.Institution, id.ExternalNumber, l.Raw["Tarjeta"], l.BookedOn, "",
 		l.Amount, normalise(l.Description), l.BankRef, l.BankCategory, l.Occurrence)
 	return hex.EncodeToString(h.Sum(nil))
 }
@@ -219,11 +241,7 @@ func assignOccurrences(lines []Line) {
 	seen := make(map[string]int, len(lines))
 	for i := range lines {
 		l := &lines[i]
-		bookedAt := ""
-		if l.BookedAt != nil {
-			bookedAt = l.BookedAt.Format(time.RFC3339)
-		}
-		key := fmt.Sprintf("%s|%s|%s|%d|%s|%s", l.Raw["Tarjeta"], l.BookedOn, bookedAt,
+		key := fmt.Sprintf("%s|%s|%d|%s|%s", l.Raw["Tarjeta"], l.BookedOn,
 			l.Amount, normalise(l.Description), l.BankRef)
 		l.Occurrence = seen[key]
 		seen[key]++

@@ -63,6 +63,16 @@ func TestDryRunRejectsAnUnknownFormat(t *testing.T) {
 	}
 }
 
+func TestDryRunAsksForTheExportThatNamesTheAccount(t *testing.T) {
+	txt := "Fecha tran;Referencia;Descripcion;Cargos (Db);Pagos (Cr);Saldo total\r\n" +
+		"01/03/2026;452;YAPPY BG A PERSONA DE PRUEBA;-12.5;;87.5\r\n"
+	rec := upload(t, "movimientos.txt", []byte(txt))
+	code, message := problem(t, rec)
+	if rec.Code != http.StatusUnprocessableEntity || code != "account_not_stated" || !strings.Contains(message, ".xlsx") {
+		t.Errorf("status %d, problem = %s %q", rec.Code, code, message)
+	}
+}
+
 // The parser's own message is technical and in English. The person reads the
 // line it points at and what to do, and nothing about the format or the bank.
 func TestDryRunNamesTheLineItCannotRead(t *testing.T) {

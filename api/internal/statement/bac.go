@@ -55,6 +55,7 @@ func parseBAC(data []byte) (File, error) {
 		DisplayName:    "BAC " + field("Producto"),
 		Class:          ClassAsset,
 		Type:           "checking",
+		Holder:         field("Nombre"),
 	}
 	if id.ExternalNumber == "" {
 		return File{}, fmt.Errorf("statement: the BAC file does not say which product it is for")
@@ -163,7 +164,8 @@ func parseBAC(data []byte) (File, error) {
 			Description:  cell("Descripción de Transacción"),
 			BankRef:      cell("Referencia de Transacción"),
 			BankCategory: cell("Código de Transacción"),
-			Kind:         bankKind(amount),
+			Kind:         bacKind(cell("Código de Transacción"), amount),
+			BankTransfer: bacTransferCodes[cell("Código de Transacción")],
 			Raw:          rawMap,
 		}
 		if hasBalance && cell("Balance de Transacción") != "" {
@@ -199,6 +201,23 @@ func parseBAC(data []byte) (File, error) {
 	checkBACSummary(&st, sections.summary, debitCount, debitTotal, creditCount, creditTotal)
 	checkChain(&st)
 	return File{Source: SourceBACAccount, Statements: []Statement{st}}, nil
+}
+
+// bacTransferCodes are the transaction codes of money moved between banks or
+// accounts: ACH out (4A), ACH in (4C), ACH Xpress out (4S) and TEF (TF).
+var bacTransferCodes = map[string]bool{"4A": true, "4C": true, "4S": true, "TF": true}
+
+// bacKind refines bankKind with the transaction code: 59 is the bank's
+// commission, and a CM credit memo gives money back — a reversed purchase or
+// a promotion — so it lowers spending rather than counting as income.
+func bacKind(code string, amount money.Cents) Kind {
+	switch {
+	case code == "59" && amount < 0:
+		return KindFee
+	case code == "CM" && amount > 0:
+		return KindRefund
+	}
+	return bankKind(amount)
 }
 
 type bacLine struct {

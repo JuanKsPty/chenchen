@@ -99,6 +99,16 @@ una** línea bancaria del monto opuesto en ±5 días, el par se confirma solo al
 Si hay dudas, chenchén te lo sugiere en Gastos para que lo confirmes o lo descartes, y
 un par descartado no vuelve a aparecer.
 
+Lo que el banco ya dice en la línea también cuenta, esté o no la otra cuenta en chenchén:
+
+- Una transferencia «entre cuentas» es `transfer`.
+- Un ACH, una TEF o una transferencia que lleva tu nombre (nombre y primer apellido, como
+  en tu perfil o en el estado de cuenta) es `transfer`.
+- Un pago que te manda una persona desde la app del banco es `refund`: casi siempre es su
+  parte de algo que pagaste tú, así que baja tu gasto en vez de inflar tus ingresos.
+- Una nota de crédito (una compra revertida, una promoción) es `refund`.
+- La comisión del banco es `fee`.
+
 Las transferencias y la compraventa de valores **nunca** cuentan como gasto ni ingreso.
 Gasto es gasto + comisiones + intereses − reembolsos, e ingreso es ingreso, con el
 mismo filtro para Movimientos, el CSV, Gastos y el asistente.
@@ -118,7 +128,7 @@ su contenido:
 
 | Fuente | Archivo | Qué se lee |
 |---|---|---|
-| Cuenta bancaria | `.xlsx` | Movimientos, saldo corrido por línea y el saldo total. |
+| Cuenta bancaria | `.xlsx` | Movimientos, saldo corrido por línea y el saldo total. Las fechas traen la hora de la descarga, no la del movimiento, así que solo se lee el día. La versión `.txt` de la misma exportación no dice de qué cuenta es y se rechaza (`account_not_stated`). |
 | Cuenta bancaria | `.csv` (Latin-1) | Producto, saldo inicial, en libros y disponible, con el resumen de débitos y créditos como control. |
 | Tarjeta de crédito | `.txt` | Movimientos y fecha de proceso. No trae saldos: la tarjeta queda **sin saldo inicial** hasta que anotas lo que debías al corte de un estado en PDF. |
 | Interactive Brokers | Flex Web Service | Cash Transactions, Trades (Execution), Open Positions y Cash Report. |

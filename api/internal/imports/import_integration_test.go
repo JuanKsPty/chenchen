@@ -37,7 +37,7 @@ func setup(t *testing.T) env {
 	t.Helper()
 	db := storetest.New(t)
 	ctx := context.Background()
-	u, err := db.Q().CreateUser(ctx, store.User{ID: uuid.New(), Email: "o@example.com", PasswordHash: "x", FullName: "O"})
+	u, err := db.Q().CreateUser(ctx, store.User{ID: uuid.New(), Email: "o@example.com", PasswordHash: "x", FullName: "Ana Pérez"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -79,6 +79,13 @@ type bgRow struct {
 
 func bgFile(t *testing.T, rows []bgRow) []byte {
 	t.Helper()
+	return bgFileAt(t, 10, rows)
+}
+
+// bgFileAt is an export downloaded at hour: like the bank's own, every date
+// cell carries that time of day.
+func bgFileAt(t *testing.T, hour int, rows []bgRow) []byte {
+	t.Helper()
 	f := excelize.NewFile()
 	defer f.Close()
 	s := f.GetSheetName(0)
@@ -93,7 +100,7 @@ func bgFile(t *testing.T, rows []bgRow) []byte {
 	}
 	for i, r := range rows {
 		n := strconv.Itoa(9 + i)
-		set("A"+n, float64(time.Date(2026, 3, r.day, 10, 0, 0, 0, time.UTC).Sub(excelEpoch))/float64(24*time.Hour))
+		set("A"+n, float64(time.Date(2026, 3, r.day, hour, 0, 0, 0, time.UTC).Sub(excelEpoch))/float64(24*time.Hour))
 		set("D"+n, "264")
 		set("E"+n, r.desc)
 		if r.debit != 0 {
@@ -223,8 +230,9 @@ func TestReimportingIsIdempotentAndOverlapsDedupe(t *testing.T) {
 	if r := e.importFile(t, "m.xlsx", first); !r.Unchanged {
 		t.Error("the same bytes again must report unchanged")
 	}
-	// A later export overlapping the first by one day.
-	r := e.importFile(t, "m2.xlsx", bgFile(t, []bgRow{
+	// A later export overlapping the first by one day, downloaded at another
+	// time of day.
+	r := e.importFile(t, "m2.xlsx", bgFileAt(t, 18, []bgRow{
 		{day: 2, desc: "B", credit: 20, balance: 107.5},
 		{day: 3, desc: "C", debit: -7.5, balance: 100},
 	}))
@@ -432,6 +440,38 @@ func TestARuleFilesWhatIsAlreadyImportedButNotWhatTheOwnerChose(t *testing.T) {
 	pharmacy, _ = e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user, Search: "FARMACIA"})
 	if *pharmacy[0].CategoryID != salud.ID {
 		t.Error("the rule overwrote a category the owner chose")
+	}
+}
+
+func TestMoneyBetweenTheOwnersAccountsIsNeitherIncomeNorSpending(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	// The owner is Ana Pérez. Her bank sends 250.00 to another account of hers
+	// and receives her pay and a relative's transfer.
+	e.importFile(t, "estado.csv", bacFile("500.00", "1000.00",
+		"15/06/2026, 1, 4A, ACH BCOGENERAL Ana Perez, 250.00, 0.00, 250.00",
+		"16/06/2026, 2, 4C, ACH CRE EMPRESA DE PRUEBA S.A., 0.00, 650.00, 900.00",
+		"17/06/2026, 3, TF, TEF DE:LUIS PEREZ GOMEZ, 0.00, 100.00, 1000.00"))
+	// The other account gets money from her, pays a friend and gets the
+	// friend's share of something back.
+	e.importFile(t, "m.xlsx", bgFile(t, []bgRow{
+		{day: 1, desc: "ACH - ANA MARIA PEREZ GOMEZ", credit: 250, balance: 350},
+		{day: 2, desc: "YAPPY BG A PERSONA DE PRUEBA", debit: -30, balance: 320},
+		{day: 3, desc: "YAPPY BG DE PERSONA DE PRUEBA", credit: 12, balance: 332},
+	}))
+
+	points, err := reports.NewService(e.db).Flow(ctx, e.user, civil.Date{}, civil.Date{}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var in, out money.Cents
+	for _, p := range points {
+		in, out = in+p.In, out+p.Out
+	}
+	// Income is the pay and the relative's 100.00, not her own 250.00 twice;
+	// spending is the 30.00 she paid less the 12.00 she got back.
+	if in != 75000 || out != 1800 {
+		t.Errorf("in %s, out %s; want in 750.00, out 18.00", in, out)
 	}
 }
 
