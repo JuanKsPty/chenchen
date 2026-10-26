@@ -84,7 +84,7 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 
 	parsed, err := statement.Parse(filename, data)
 	if err != nil {
-		if errors.Is(err, statement.ErrUnrecognised) {
+		if errors.Is(err, statement.ErrUnrecognised) || errors.Is(err, statement.ErrAccountNotStated) {
 			return Result{}, err
 		}
 		return Result{}, unreadableError{err}
@@ -112,9 +112,14 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		if err != nil {
 			return err
 		}
+		owner, err := q.UserByID(ctx, userID)
+		if err != nil {
+			return err
+		}
 		var from, to civil.Date
 		for _, st := range parsed.Statements {
-			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, expect)
+			holders := holderNames(owner.FullName, st.Identity.Holder)
+			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, holders, expect)
 			if err != nil {
 				return err
 			}
@@ -144,7 +149,8 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 }
 
 func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID uuid.UUID, source statement.Source,
-	filename, sha string, st statement.Statement, rules []store.CategoryRule, expect *uuid.UUID) (AccountResult, error) {
+	filename, sha string, st statement.Statement, rules []store.CategoryRule, holders []holderName,
+	expect *uuid.UUID) (AccountResult, error) {
 	id := st.Identity
 	if st.PeriodStart.IsZero() || st.PeriodEnd.IsZero() {
 		// Only possible for a file with no movements and no stated date,
@@ -179,10 +185,17 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 	var firstEntry uuid.UUID
 	entries := make([]store.Entry, 0, len(st.Lines))
 	for i, l := range st.Lines {
+		kind := l.Kind
+		if l.BankTransfer && namesHolder(holders, l.Description) {
+			// Money the owner sent to, or got from, an account in their own
+			// name: neither spending nor income, whether or not that other
+			// account is in the app.
+			kind = statement.KindTransfer
+		}
 		e := store.Entry{
 			ID: uuid.New(), UserID: userID, AccountID: account.ID, StatementID: &stmtID, RunID: &run.ID,
-			BookedOn: l.BookedOn, BookedAt: l.BookedAt, PostedOn: l.PostedOn, Seq: i,
-			Amount: l.Amount, Kind: string(l.Kind), Description: l.Description, BankRef: l.BankRef,
+			BookedOn: l.BookedOn, PostedOn: l.PostedOn, Seq: i,
+			Amount: l.Amount, Kind: string(kind), Description: l.Description, BankRef: l.BankRef,
 			BankCategory: l.BankCategory, BankBalance: l.RunningBalance, DedupKey: statement.DedupKey(id, l),
 			Raw: l.Raw,
 		}

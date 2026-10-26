@@ -99,6 +99,11 @@ func ParseProblem(err error) *httpx.Error {
 			"No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt o .xlsx).").
 			WithCause(err)
 	}
+	if errors.Is(err, ErrAccountNotStated) {
+		return httpx.Unprocessable("account_not_stated",
+			"Este archivo no dice de qué cuenta es. Descarga los movimientos en Excel (.xlsx) y súbelos.").
+			WithCause(err)
+	}
 	msg := "El archivo tiene un formato que no reconocemos. Descárgalo otra vez de tu banco y súbelo sin abrirlo ni editarlo."
 	if m := lineNo.FindStringSubmatch(err.Error()); m != nil {
 		msg = fmt.Sprintf("La línea %s del archivo tiene un formato que no reconocemos. "+

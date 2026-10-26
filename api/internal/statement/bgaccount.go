@@ -16,7 +16,8 @@ import (
 )
 
 // excelEpoch is Excel's day zero. A BG export's date cell is a serial number of
-// days since it, fractional part included, in Panama wall-clock time.
+// days since it. Its fractional part is the time the file was downloaded — the
+// same on every row — so only the day is the movement's.
 var excelEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 
 // parseBGAccount reads a Banco General account movement export (.xlsx):
@@ -83,7 +84,7 @@ func parseBGAccount(data []byte) (File, error) {
 		if cell("Fecha") == "" {
 			continue
 		}
-		at, err := excelDateTime(cell("Fecha"))
+		bookedOn, err := excelDate(cell("Fecha"))
 		if err != nil {
 			return File{}, fmt.Errorf("statement: BG account line %d: fecha %q: %w", lineNo, cell("Fecha"), err)
 		}
@@ -115,15 +116,16 @@ func parseBGAccount(data []byte) (File, error) {
 		}
 		l := Line{
 			LineNo:      lineNo,
-			BookedOn:    civil.Of(at),
-			BookedAt:    &at,
+			BookedOn:    bookedOn,
 			Amount:      amount,
 			Description: cell("Descripción"),
 			// BG's own Referencia is always "0"; the transaction code is the
-			// one reference-like field that carries information.
+			// one reference-like field that carries information, and it is
+			// the same in every export of the same movement.
 			BankRef:      cell("Transacción"),
 			BankCategory: cell("Transacción"),
-			Kind:         bankKind(amount),
+			Kind:         bgAccountKind(cell("Descripción"), amount),
+			BankTransfer: bgAccountTransfer(cell("Descripción")),
 			Raw:          raw,
 		}
 		if hasSaldo && cell("Saldo total") != "" {
@@ -153,18 +155,18 @@ func parseBGAccount(data []byte) (File, error) {
 }
 
 // chronological orders lines oldest first. A BG export can list newest first,
-// and two lines can share a timestamp; the file's own order between those is
-// kept only if it is the one the running balances agree with.
+// and lines of the same day carry no time; the file's own order between those
+// is kept only if it is the one the running balances agree with.
 func chronological(lines []Line) []Line {
 	out := append([]Line(nil), lines...)
-	// File order reversed is the other candidate for same-time lines: an
-	// export that lists newest first lists ties newest first too.
+	// File order reversed is the other candidate for same-day lines: an
+	// export that lists newest first lists them newest first too.
 	if newestFirst(lines) {
 		for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 			out[i], out[j] = out[j], out[i]
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].BookedAt.Before(*out[j].BookedAt) })
+	sort.SliceStable(out, func(i, j int) bool { return out[i].BookedOn.Before(out[j].BookedOn) })
 	return out
 }
 
@@ -187,17 +189,15 @@ func newestFirst(lines []Line) bool {
 	return backward > forward
 }
 
-// excelDateTime reads a date cell's serial as Panama wall-clock time, rounded
-// to the second to shed float noise.
-func excelDateTime(raw string) (time.Time, error) {
+// excelDate reads the day of a date cell's serial, rounded to the second
+// first so float noise cannot push a midnight into the day before.
+func excelDate(raw string) (civil.Date, error) {
 	serial, err := strconv.ParseFloat(raw, 64)
 	if err != nil {
-		return time.Time{}, fmt.Errorf("no es una fecha de Excel")
+		return civil.Date{}, fmt.Errorf("no es una fecha de Excel")
 	}
 	seconds := math.Round(serial * 24 * 60 * 60)
-	wall := excelEpoch.Add(time.Duration(seconds) * time.Second)
-	return time.Date(wall.Year(), wall.Month(), wall.Day(),
-		wall.Hour(), wall.Minute(), wall.Second(), 0, civil.Panama), nil
+	return civil.Of(excelEpoch.Add(time.Duration(seconds) * time.Second)), nil
 }
 
 // bgAccountLabel splits "Cuenta:<alias> <number>". The number is the last
@@ -227,6 +227,46 @@ func bankKind(amount money.Cents) Kind {
 		return KindIncome
 	}
 	return KindExpense
+}
+
+// bgAccountKind refines bankKind with what the BG account's description
+// already says:
+//
+//   - "… ENTRE CUENTAS" is the bank's own label for a transfer between two of
+//     the holder's accounts there.
+//   - "COMISION …" is the bank's fee.
+//   - "YAPPY BG DE <persona>" is someone sending money, which for a person is
+//     mostly their share of something the owner paid: a refund that lowers
+//     spending, not income. A real payment is the exception, and the owner
+//     can say so.
+//
+// A card payment ("PAGO VISA …") is left as spending: transfer matching pairs
+// it with the card's own "Pagos" line when the card is imported, and until
+// then it is the best record of what the card bought.
+func bgAccountKind(description string, amount money.Cents) Kind {
+	d := strings.ToUpper(description)
+	switch {
+	case strings.Contains(d, "ENTRE CUENTAS"):
+		return KindTransfer
+	case amount < 0 && strings.HasPrefix(d, "COMISION"):
+		return KindFee
+	case amount > 0 && strings.HasPrefix(d, "YAPPY BG DE "):
+		return KindRefund
+	}
+	return bankKind(amount)
+}
+
+// bgAccountTransfer reports whether a BG account line is money moved between
+// banks or accounts — an ACH, or a mobile-banking transfer — as opposed to a
+// Yappy, a card payment or a top-up, which can name the holder without being
+// a transfer between their accounts.
+func bgAccountTransfer(description string) bool {
+	d := strings.ToUpper(description)
+	if strings.HasPrefix(d, "ACH") {
+		return true
+	}
+	rest, ok := strings.CutPrefix(d, "BANCA MOVIL ")
+	return ok && !strings.HasPrefix(rest, "PAGO") && !strings.HasPrefix(rest, "RECARGA")
 }
 
 func hasCell(row []string, want string) bool {

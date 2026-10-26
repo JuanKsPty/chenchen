@@ -103,7 +103,8 @@ func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 
 func translate(r *http.Request, err error) error {
 	switch {
-	case errors.Is(err, statement.ErrUnrecognised), errors.Is(err, ErrUnreadable):
+	case errors.Is(err, statement.ErrUnrecognised), errors.Is(err, statement.ErrAccountNotStated),
+		errors.Is(err, ErrUnreadable):
 		// The same wording as the dry run: the line, when the parser names one,
 		// and what to do. The parser's own message stays in the log, at warn.
 		statement.LogParseProblem(r, err)

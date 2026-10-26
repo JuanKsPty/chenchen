@@ -109,11 +109,56 @@ func TestBGAccountKeepsTheBanksBalances(t *testing.T) {
 	}
 }
 
-func TestBGAccountReadsTimesAsPanama(t *testing.T) {
-	st := only(t, must(Parse("m.xlsx", bgAccountFile(t, bgFixture))))
-	at := *st.Lines[0].BookedAt
-	if at.Hour() != 9 || at.Format("-07:00") != "-05:00" {
-		t.Errorf("BookedAt = %v, want 09:00 at -05:00", at)
+// The time in a BG export's date cells is when the file was downloaded, the
+// same on every row. Two downloads of the same movements must be the same
+// movements, or importing both would count each one twice.
+func TestBGAccountKeysIgnoreTheDownloadTime(t *testing.T) {
+	at := func(hour int) []bgRow {
+		rows := append([]bgRow(nil), bgFixture...)
+		for i := range rows {
+			rows[i].hour = hour
+		}
+		return rows
+	}
+	morning := only(t, must(Parse("m.xlsx", bgAccountFile(t, at(9)))))
+	night := only(t, must(Parse("m.xlsx", bgAccountFile(t, at(23)))))
+	for i, l := range morning.Lines {
+		if l.BookedOn != night.Lines[i].BookedOn || DedupKey(morning.Identity, l) != DedupKey(night.Identity, night.Lines[i]) {
+			t.Errorf("line %d: downloaded at 09:00 and at 23:00, it is two different movements", l.LineNo)
+		}
+	}
+	if morning.Lines[0].BookedOn.String() != "2026-03-01" {
+		t.Errorf("BookedOn = %s, want the cell's day", morning.Lines[0].BookedOn)
+	}
+}
+
+func TestBGAccountKindsFromWhatTheDescriptionSays(t *testing.T) {
+	rows := []bgRow{
+		{day: 1, code: "253", desc: "YAPPY BG DE PERSONA DE PRUEBA", credit: 10, balance: 110},
+		{day: 1, code: "264", desc: "YAPPY BG A PERSONA DE PRUEBA", debit: -5, balance: 105},
+		{day: 2, code: "237", desc: "BANCA MOVIL TRANSFERENCIA A 0000000000000 TITULAR DE PRUEBA ENTRE CUENTAS", debit: -50, balance: 55},
+		{day: 2, code: "319", desc: "COMISION ANUAL BANCA EN LINEA", debit: -10, balance: 45},
+		{day: 3, code: "104", desc: "BANCA MOVIL PAGO VISA 0000-00XX-XXXX-0000 TITULAR DE PRUEBA", debit: -20, balance: 25},
+		{day: 3, code: "105", desc: "BANCA MOVIL RECARGA TRANSPORTE (000000)", debit: -5, balance: 20},
+		{day: 4, code: "253", desc: "ACH - TITULAR DE PRUEBA", credit: 30, balance: 50},
+		{day: 4, code: "123", desc: "BANCA MOVIL OTROBANCO 0000000000 Titular de Prueba", debit: -10, balance: 40},
+	}
+	st := only(t, must(Parse("m.xlsx", bgAccountFile(t, rows))))
+	want := []struct {
+		kind     Kind
+		transfer bool
+	}{
+		{KindRefund, false}, {KindExpense, false}, {KindTransfer, true}, {KindFee, false},
+		// The card payment stays spending until the card's own "Pagos" line
+		// is matched with it.
+		{KindExpense, false}, {KindExpense, false},
+		{KindIncome, true}, {KindExpense, true},
+	}
+	for i, l := range st.Lines {
+		if l.Kind != want[i].kind || l.BankTransfer != want[i].transfer {
+			t.Errorf("%q: kind %s, bank transfer %v; want %s, %v",
+				l.Description, l.Kind, l.BankTransfer, want[i].kind, want[i].transfer)
+		}
 	}
 }
 
@@ -229,6 +274,30 @@ func TestBACReadsQuotedThousandsAndRefusesUnquotedOnes(t *testing.T) {
 	}
 }
 
+func TestBACKindsFromTheTransactionCode(t *testing.T) {
+	detail := []string{
+		"15/06/2026, 1000002, 4A, ACH A OTRA PERSONA, 25.00, 0.00, 475.00",
+		"15/06/2026, 1000003, 59, COMISION ACH XPR, 0.54, 0.00, 474.46",
+		"16/06/2026, 1000004, CP, COMERCIO DE PRUEBA, 10.00, 0.00, 464.46",
+		"16/06/2026, 1000005, CM, COMERCIO DE PRUEBA, 0.00, 10.00, 474.46",
+		"17/06/2026, 1000006, TF, TEF DE:OTRA PERSONA, 0.00, 100.00, 574.46",
+	}
+	st := only(t, must(Parse("estado.csv", bacFile("500.00", "574.46", detail...))))
+	want := []struct {
+		kind     Kind
+		transfer bool
+	}{{KindExpense, true}, {KindFee, false}, {KindExpense, false}, {KindRefund, false}, {KindIncome, true}}
+	for i, l := range st.Lines {
+		if l.Kind != want[i].kind || l.BankTransfer != want[i].transfer {
+			t.Errorf("%s %q: kind %s, bank transfer %v; want %s, %v",
+				l.BankCategory, l.Description, l.Kind, l.BankTransfer, want[i].kind, want[i].transfer)
+		}
+	}
+	if st.Identity.Holder != "PERSONA DE PRUEBA" {
+		t.Errorf("Holder = %q, want the file's Nombre", st.Identity.Holder)
+	}
+}
+
 func TestBACWarnsWhenTheBalancesDoNotAddUp(t *testing.T) {
 	st := only(t, must(Parse("estado.csv", bacFile("0.00", "300.00", bacDetail...))))
 	if len(st.Warnings) == 0 || !strings.Contains(st.Warnings[0], "saldo en libros") {
@@ -319,6 +388,16 @@ func TestDedupKeysAreStableAndTellTwinsApart(t *testing.T) {
 func TestParseRejectsAnUnknownFile(t *testing.T) {
 	if _, err := Parse("otro.csv", []byte("a,b,c\n1,2,3")); !errors.Is(err, ErrUnrecognised) {
 		t.Errorf("err = %v, want ErrUnrecognised", err)
+	}
+}
+
+// The account's .txt export has the same movements as the .xlsx but not the
+// account they belong to, so it is refused with that reason.
+func TestParseRefusesTheAccountTextExportForWhatItLacks(t *testing.T) {
+	txt := "Fecha tran;Referencia;Descripcion;Cargos (Db);Pagos (Cr);Saldo total\r\n" +
+		"01/03/2026;452;YAPPY BG A PERSONA DE PRUEBA;-12.5;;87.5\r\n"
+	if _, err := Parse("movimientos.txt", []byte(txt)); !errors.Is(err, ErrAccountNotStated) {
+		t.Errorf("err = %v, want ErrAccountNotStated", err)
 	}
 }
 
