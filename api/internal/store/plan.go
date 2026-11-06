@@ -314,3 +314,65 @@ func (q *Queries) DeletePlanCap(ctx context.Context, userID, id uuid.UUID) error
 	return q.execOne(ctx, "store.DeletePlanCap",
 		`DELETE FROM plan_caps WHERE id = $1 AND user_id = $2`, id, userID)
 }
+
+// FoldRuleText folds text the way a rule and the text it is matched against
+// are compared: without case or Spanish accents. The plan recognises an
+// item's movements by its text exactly as a rule would, so the text the owner
+// already uses for a rule works for a payment too.
+func FoldRuleText(s string) string { return foldRuleText(s) }
+
+// planKinds are the effective kinds the plan reads: what counts as spending,
+// which it splits into what paid a planned item and what was free, and what
+// counts as income, which says whether a paycheck arrived. A transfer or a
+// trade is never either, so the plan never sees one.
+var planKinds = append(append([]string{}, SpendKinds...), IncomeKinds...)
+
+// PlanMovement is a movement as the plan reads it: what Gastos and the
+// month's flow add up, printed line or pending capture alike, with only what
+// recognising it and filing it into a bucket need. Kind is the effective kind.
+type PlanMovement struct {
+	ID uuid.UUID
+	// Origin is OriginStatement or OriginCapture.
+	Origin    string
+	AccountID uuid.UUID
+	BookedOn  civil.Date
+	// Amount is signed from the holder's view: spending is negative.
+	Amount       money.Cents
+	Kind         string
+	CategoryID   *uuid.UUID
+	BankCategory string
+	Description  string
+}
+
+// PlanMovements lists the user's spending and income booked from from to to,
+// both inclusive, oldest first: the same rows movementSource gives Gastos and
+// the month's flow, so the plan can never count a movement they do not. It
+// reads no raw columns, since three months of movements are read on every
+// look at the plan.
+func (q *Queries) PlanMovements(ctx context.Context, userID uuid.UUID, from, to civil.Date) ([]PlanMovement, error) {
+	where, args, err := EntryFilter{UserID: userID, From: from, To: to, Kinds: planKinds}.where()
+	if err != nil {
+		return nil, err
+	}
+	rows, err := q.q.Query(ctx, `
+		SELECT e.id, e.origin, e.account_id, e.booked_on, e.amount_cents, COALESCE(e.user_kind, e.kind)::text,
+		       e.category_id, e.bank_category, e.description
+		FROM `+movementSource+` WHERE `+where+`
+		ORDER BY e.booked_on, e.id`, args...)
+	if err != nil {
+		return nil, wrap("store.PlanMovements", err)
+	}
+	defer rows.Close()
+	var out []PlanMovement
+	for rows.Next() {
+		var m PlanMovement
+		var amount int64
+		if err := rows.Scan(&m.ID, &m.Origin, &m.AccountID, &m.BookedOn, &amount, &m.Kind,
+			&m.CategoryID, &m.BankCategory, &m.Description); err != nil {
+			return nil, wrap("store.PlanMovements", err)
+		}
+		m.Amount = money.Cents(amount)
+		out = append(out, m)
+	}
+	return out, wrap("store.PlanMovements", rows.Err())
+}

@@ -119,6 +119,32 @@ mismo filtro para Movimientos, el CSV, Gastos y el asistente.
 si quieres, a lo que ya importaste, pero **nunca pisa una categoría que elegiste a
 mano**.
 
+### El plan del mes
+
+> Ingreso esperado − pagos fijos − ahorro = **libre para gastar**
+
+`GET /api/plan?month=AAAA-MM` dice cuánto te queda para gastar en el mes y cuánto por
+día. Guardas lo que esperas (`PUT /api/plan/items/{id}` y `PUT /api/plan/caps/{categoría}`):
+cada sueldo con su día, los pagos que salen cada mes, lo que apartas y, si quieres, un
+tope por categoría. Lo real se calcula cada vez que se lee, con los mismos movimientos
+que suma Gastos, y nada de eso se guarda:
+
+- **Cada salida del mes cae en un solo lugar:** el pago fijo que pagó, o lo libre. Un
+  pago que ya salió cuesta lo que se pagó; uno que no ha salido guarda su monto.
+- **Un pago se reconoce** por su texto, comparado como una regla, por su monto (±25 %) y
+  por su mes. Un sueldo, por su texto, su monto y una semana alrededor de su día, aunque
+  llegue en el mes de al lado. El cargo chico que va al lado de un pago, en la misma
+  cuenta y el mismo día, como el impuesto de un seguro, se suma a ese pago.
+- **El ingreso extra nunca cambia lo libre** por sí solo, y el ahorro nunca cuenta como
+  gasto: llega a su cuenta como transferencia.
+- **Al 80 %** de lo libre, o de un tope, el plan dice que está cerca; un centavo más allá
+  del total, que va por encima. El día de hoy, el mes y los días que quedan los decide el
+  servidor, en hora de Panamá.
+- **Cada valor vale por tramos de meses.** Un mes pasado conserva el plan que tuvo, y una
+  edición vale desde un mes o solo para ese mes, hasta 24 meses adelante.
+
+Como todo lo demás, el plan nunca mueve un saldo ([ADR 0005](docs/adr/0005-plan-del-mes.md)).
+
 ---
 
 ## Imports
@@ -249,6 +275,7 @@ api/
   internal/accounts       saldos, anclas, conciliación
   internal/movements      búsqueda, filtros, categoría, nota, CSV
   internal/reports        gasto, ingreso y flujo
+  internal/plan           el plan del mes: lo que esperas al lado de lo que pasó
   internal/transfers      pares de transferencias entre tus cuentas
   internal/rules          reglas de categoría
   internal/proposals      lo que propone el asistente

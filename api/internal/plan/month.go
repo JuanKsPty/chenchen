@@ -12,6 +12,7 @@
 package plan
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -32,7 +33,9 @@ type Month struct {
 // ParseMonth reads the YYYY-MM form months travel in, as the web's ?mes= does.
 func ParseMonth(s string) (Month, error) {
 	t, err := time.Parse("2006-01", s)
-	if err != nil {
+	// Year 0 has no month before it a date can hold, and the plan of a month
+	// is read beside the months either side.
+	if err != nil || t.Year() < 1 {
 		return Month{}, fmt.Errorf("%w: %q", ErrInvalidMonth, s)
 	}
 	return Month{Year: t.Year(), Month: t.Month()}, nil
@@ -50,6 +53,15 @@ func (m Month) String() string {
 		return ""
 	}
 	return fmt.Sprintf("%04d-%02d", m.Year, m.Month)
+}
+
+// MarshalJSON writes YYYY-MM, the form months travel in, or null for the
+// zero Month: a version with no end, an item with no goal month.
+func (m Month) MarshalJSON() ([]byte, error) {
+	if m.IsZero() {
+		return []byte("null"), nil
+	}
+	return json.Marshal(m.String())
 }
 
 // First is the month's first day, the day the database stores a month as.

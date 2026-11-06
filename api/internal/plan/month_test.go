@@ -41,7 +41,7 @@ func TestAMonthTravelsAsYYYYMM(t *testing.T) {
 	if got := (plan.Month{}).String(); got != "" {
 		t.Errorf("the zero Month prints %q, want nothing", got)
 	}
-	for _, bad := range []string{"", "2026-1", "2026-13", "2026-00", "26-11", "2026-11-01", "2026/11", " 2026-11", "noviembre"} {
+	for _, bad := range []string{"", "2026-1", "2026-13", "2026-00", "26-11", "2026-11-01", "2026/11", " 2026-11", "noviembre", "0000-12"} {
 		if _, err := plan.ParseMonth(bad); !errors.Is(err, plan.ErrInvalidMonth) {
 			t.Errorf("ParseMonth(%q) = %v, want ErrInvalidMonth", bad, err)
 		}

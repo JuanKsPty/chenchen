@@ -63,8 +63,11 @@ func (f fixture) account(t *testing.T, user uuid.UUID, typ, number string) uuid.
 	t.Helper()
 	a := store.Account{ID: uuid.New(), UserID: user, Class: "asset", Type: typ, Institution: "bac",
 		ExternalNumber: number, Currency: "USD", DisplayName: number}
-	if typ == "brokerage" {
+	switch typ {
+	case "brokerage":
 		a.Institution = "ibkr"
+	case "credit_card":
+		a.Class = "liability"
 	}
 	got, _, err := f.db.Q().EnsureAccount(context.Background(), a)
 	if err != nil {

@@ -44,6 +44,10 @@ var (
 	ErrAccountNotGoal  = errors.New("plan: only a saving is tied to an account")
 	ErrTarget          = errors.New("plan: a goal must be more than zero")
 	ErrTargetNotGoal   = errors.New("plan: only a saving has a goal")
+	// ErrStartMonth and ErrFunding are a planned purchase's fields, which no
+	// item can have while purchases are not kept.
+	ErrStartMonth = errors.New("plan: only a planned purchase starts being set aside in a month")
+	ErrFunding    = errors.New("plan: only a planned purchase says how it is paid")
 )
 
 // fieldErrors are the errors about one request field, with what the owner is
@@ -68,6 +72,8 @@ var fieldErrors = []struct {
 	{ErrAccountNotGoal, "account_id", "Solo un ahorro va ligado a una cuenta."},
 	{ErrTarget, "target", "Indica una meta mayor que cero."},
 	{ErrTargetNotGoal, "target", "Solo un ahorro tiene una meta."},
+	{ErrStartMonth, "start_month", "Las compras planeadas todavía no se pueden guardar."},
+	{ErrFunding, "funding", "Las compras planeadas todavía no se pueden guardar."},
 }
 
 // FieldProblems is what err says about each request field, every field at

@@ -94,6 +94,11 @@ type ItemInput struct {
 	AccountID   *uuid.UUID
 	Target      *money.Cents
 	TargetMonth Month
+	// StartMonth and Funding are a planned purchase's: from when it is set
+	// aside, and how it is paid. No item has them while purchases are not
+	// kept.
+	StartMonth Month
+	Funding    string
 }
 
 // normalise cleans up what the owner typed and reports every field that is
@@ -143,6 +148,12 @@ func (in *ItemInput) normalise() error {
 		if in.Target != nil || !in.TargetMonth.IsZero() {
 			errs = append(errs, ErrTargetNotGoal)
 		}
+	}
+	if !in.StartMonth.IsZero() {
+		errs = append(errs, ErrStartMonth)
+	}
+	if in.Funding != "" {
+		errs = append(errs, ErrFunding)
 	}
 	return errors.Join(errs...)
 }
@@ -519,4 +530,106 @@ func monthOf(d civil.Date) Month {
 		return Month{}
 	}
 	return MonthOf(d)
+}
+
+// Month is month m's plan beside what happened in it, as the owner reads it
+// today in Panama; the zero Month is the current one. It reads only: the
+// items and caps that hold around m, the movements of m and the months either
+// side, and, when there are caps, the categories they count. Nothing of it is
+// written.
+func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, error) {
+	today := civil.Of(s.now().In(civil.Panama))
+	if m.IsZero() {
+		m = MonthOf(today)
+	}
+	before, after := m.AddMonths(-1), m.AddMonths(1)
+	q := s.db.Q()
+	versions, err := q.PlanVersionsBetween(ctx, userID, before.First(), after.First())
+	if err != nil {
+		return Plan{}, err
+	}
+	var items []store.PlanItem
+	if len(versions) > 0 {
+		if items, err = q.PlanItemsByUser(ctx, userID); err != nil {
+			return Plan{}, err
+		}
+	}
+	stored, err := q.PlanCapsBetween(ctx, userID, m.First(), m.First())
+	if err != nil {
+		return Plan{}, err
+	}
+	caps := make([]Cap, 0, len(stored))
+	for i, v := range capVersions(stored) {
+		caps = append(caps, Cap{CategoryID: stored[i].CategoryID, Version: v})
+	}
+	var parents map[uuid.UUID]uuid.UUID
+	if len(caps) > 0 {
+		if parents, err = categoryParents(ctx, q, userID); err != nil {
+			return Plan{}, err
+		}
+	}
+	movements, err := q.PlanMovements(ctx, userID, before.First(), after.Last())
+	if err != nil {
+		return Plan{}, err
+	}
+	instances := Instances(items, versions, before, after)
+	return Compute(Input{
+		Month: m, Today: today, Instances: instances, Caps: caps, Parents: parents,
+		Movements: movements, Recognition: Match(instances, movements),
+	}), nil
+}
+
+// categoryParents maps each of the user's categories that has a parent to
+// it, the tree categories.Service.Tree draws: two levels, so a cap on a
+// parent counts its children and nothing deeper.
+func categoryParents(ctx context.Context, q *store.Queries, userID uuid.UUID) (map[uuid.UUID]uuid.UUID, error) {
+	all, err := q.CategoriesByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	parents := make(map[uuid.UUID]uuid.UUID, len(all))
+	for _, c := range all {
+		if c.ParentID != nil {
+			parents[c.ID] = *c.ParentID
+		}
+	}
+	return parents, nil
+}
+
+// Item is month m of one of the user's items, with the values that hold for
+// it: what a save answers with.
+func (s *Service) Item(ctx context.Context, userID, id uuid.UUID, m Month) (Instance, error) {
+	q := s.db.Q()
+	item, err := q.PlanItemByID(ctx, userID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return Instance{}, fmt.Errorf("%w: %s", ErrItemNotFound, id)
+	}
+	if err != nil {
+		return Instance{}, err
+	}
+	stored, err := q.PlanItemVersions(ctx, userID, id)
+	if err != nil {
+		return Instance{}, err
+	}
+	for _, v := range itemVersions(stored) {
+		if v.Holds(m) {
+			return Instance{Item: &item, Month: m, Version: v}, nil
+		}
+	}
+	return Instance{}, fmt.Errorf("%w: %s has no version for %s", ErrItemNotFound, id, m)
+}
+
+// Cap is the cap on one of the user's categories that holds for month m:
+// what a save answers with.
+func (s *Service) Cap(ctx context.Context, userID, categoryID uuid.UUID, m Month) (Cap, error) {
+	stored, err := s.db.Q().PlanCategoryCaps(ctx, userID, categoryID)
+	if err != nil {
+		return Cap{}, err
+	}
+	for _, v := range capVersions(stored) {
+		if v.Holds(m) {
+			return Cap{CategoryID: categoryID, Version: v}, nil
+		}
+	}
+	return Cap{}, fmt.Errorf("%w: category %s has no cap for %s", store.ErrNotFound, categoryID, m)
 }
