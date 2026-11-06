@@ -3,6 +3,7 @@ package statement
 import (
 	"bytes"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -299,9 +300,41 @@ func TestBACKindsFromTheTransactionCode(t *testing.T) {
 }
 
 func TestBACWarnsWhenTheBalancesDoNotAddUp(t *testing.T) {
-	st := only(t, must(Parse("estado.csv", bacFile("0.00", "300.00", bacDetail...))))
+	// No balance on its lines says where the month ended, so the one in the
+	// heading is all there is, and the movements do not reach it.
+	detail := []string{
+		"15/06/2026, 1000002, 4A, TRANSFERENCIA DE PRUEBA, 25.00, 0.00, ",
+		"20/06/2026, 1000003, 4C, DEPOSITO DE PRUEBA, 0.00, 175.75, ",
+	}
+	st := only(t, must(Parse("estado.csv", bacFile("100.00", "300.00", detail...))))
 	if len(st.Warnings) == 0 || !strings.Contains(st.Warnings[0], "saldo en libros") {
 		t.Errorf("Warnings = %q", st.Warnings)
+	}
+	// Nor does a running balance that disagrees with the movements excuse it.
+	st = only(t, must(Parse("estado.csv", bacFile("0.00", "300.00", append(slices.Clone(bacDetail[:2]),
+		"20/06/2026, 1000003, 4C, DEPOSITO DE PRUEBA, 0.00, 175.75, 260.00")...))))
+	if len(st.Warnings) == 0 {
+		t.Errorf("Warnings = %q, want the heading's balance and the chain's break", st.Warnings)
+	}
+}
+
+// A month already over, filtered by month, is headed with the account's
+// balances on the day it was downloaded. The month ends where the bank's own
+// balance on its last line says, and today's available and held balances are
+// not stated for it.
+func TestBACReadsAPastMonthToWhereItsLastLineEnds(t *testing.T) {
+	st := only(t, must(Parse("estado.csv", bacFile("500.00", "640.00",
+		"15/06/2026, 1000002, 4A, TRANSFERENCIA DE PRUEBA, 25.00, 0.00, 475.00",
+		"20/06/2026, 1000003, 4C, DEPOSITO DE PRUEBA, 0.00, 175.75, 650.75",
+		"30/06/2026, 1000004, 4C, DEPOSITO DE PRUEBA, 0.00, 100.00, 750.75"))))
+	if *st.Opening != 50000 || st.Closing == nil || *st.Closing != 75075 {
+		t.Errorf("Opening = %v, Closing = %v; want 500.00 and 750.75", *st.Opening, st.Closing)
+	}
+	if len(st.Warnings) != 0 || st.ChainBreak != nil {
+		t.Errorf("Warnings = %q, ChainBreak = %+v", st.Warnings, st.ChainBreak)
+	}
+	if st.Available != nil || st.Held != nil {
+		t.Errorf("Available = %v, Held = %v; want neither for a month already over", st.Available, st.Held)
 	}
 }
 

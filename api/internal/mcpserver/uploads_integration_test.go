@@ -161,7 +161,7 @@ func TestAFileThatDoesNotAgreeWaitsForTheOwner(t *testing.T) {
 		{"a break in its own balances", "Los saldos del archivo dejan de cuadrar en la línea 5.",
 			bacFile(product, "750.75", "700.75", "31/07/2026", "03/07/2026, 3, CP, SUPERMERCADO DE PRUEBA, 50.00, 0.00, 600.00")},
 		{"a warning", "El archivo trae una advertencia: El saldo inicial (750.75) más los movimientos (-50.00) no da el saldo en libros que muestra el banco (650.75).",
-			bacFile(product, "750.75", "650.75", "31/07/2026", "03/07/2026, 3, CP, SUPERMERCADO DE PRUEBA, 50.00, 0.00, 700.75")},
+			bacFile(product, "750.75", "650.75", "31/07/2026", "03/07/2026, 3, CP, SUPERMERCADO DE PRUEBA, 50.00, 0.00, ")},
 	} {
 		st := r.send(t, cs, "julio.csv", tt.data)
 		if st.Status != store.UploadNeedsReview || st.Reason != tt.reason || st.Account == nil ||
