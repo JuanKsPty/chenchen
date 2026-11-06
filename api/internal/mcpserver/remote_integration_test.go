@@ -399,6 +399,58 @@ func TestFilingAndAnnotatingAMovement(t *testing.T) {
 	}
 }
 
+// What Gastos shows as Sin categoría Claude can list, each movement with the
+// text a rule for it would take.
+func TestClaudeListsWhatHasNoCategory(t *testing.T) {
+	r := newRig(t)
+	r.importAsOwner(t, r.owner, "junio.csv", june)
+	r.importAsOwner(t, r.owner, "julio.csv", july)
+	cs := r.client(t, first(r.connect(t, r.owner, oauth.ScopeRead)))
+	var out struct {
+		Movements []struct {
+			Description string `json:"description"`
+			Kind        string `json:"kind"`
+			Category    string `json:"category"`
+			RuleHint    string `json:"rule_hint"`
+		} `json:"movements"`
+	}
+	mustCall(t, cs, mcpserver.ToolListMovements, map[string]any{"uncategorized": true, "limit": 50}, &out)
+	found := false
+	for _, m := range out.Movements {
+		if m.Category != "" || !slices.Contains([]string{"expense", "refund", "fee", "interest"}, m.Kind) {
+			t.Errorf("listed as without a category: %+v", m)
+		}
+		if m.Description == "SUPERMERCADO DE PRUEBA" {
+			found = m.RuleHint == "SUPERMERCADO DE PRUEBA"
+		}
+	}
+	if !found {
+		t.Errorf("the supermarket is not listed with its rule text: %+v", out.Movements)
+	}
+}
+
+// The app shows the same: each movement with its rule text, and what a rule
+// with a text would reach before the owner makes it.
+func TestTheAppSuggestsARuleAndSaysWhatItWouldReach(t *testing.T) {
+	r := newRig(t)
+	r.importAsOwner(t, r.owner, "julio.csv", july)
+	res, raw := r.do(t, http.MethodGet, "/api/entries", r.session(t, r.owner), "", nil)
+	if res.StatusCode != http.StatusOK || !strings.Contains(string(raw), `"rule_hint":"SUPERMERCADO DE PRUEBA"`) {
+		t.Errorf("GET /api/entries = %d %s, want the supermarket's rule text", res.StatusCode, raw)
+	}
+	res, raw = r.do(t, http.MethodGet, "/api/category-rules/preview?text=supermercado", r.session(t, r.owner), "", nil)
+	var reach struct {
+		Matches       int `json:"matches"`
+		Uncategorized int `json:"uncategorized"`
+	}
+	if res.StatusCode != http.StatusOK || json.Unmarshal(raw, &reach) != nil || reach.Matches != 1 || reach.Uncategorized != 1 {
+		t.Errorf("GET /api/category-rules/preview = %d %s, want one match without a category", res.StatusCode, raw)
+	}
+	if res, _ := r.do(t, http.MethodGet, "/api/category-rules/preview?text=", r.session(t, r.owner), "", nil); res.StatusCode == http.StatusOK {
+		t.Error("a preview without text was answered")
+	}
+}
+
 // What Claude writes never anchors a balance or rewrites movements in bulk:
 // the stated balance and the rule stay proposals for the owner, and nothing
 // else it can call touches either.

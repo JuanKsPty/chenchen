@@ -623,3 +623,37 @@ func TestAProposalChangesNothingUntilTheOwnerAppliesIt(t *testing.T) {
 		t.Errorf("pending = %d, want 0", len(pending))
 	}
 }
+
+// Before making a rule the owner sees what its text would reach: everything it
+// matches, and how much of it is spending still waiting for a category.
+func TestARuleTextSaysWhatItWouldReach(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.importFile(t, "tarjeta.txt", []byte(cardFile))
+	e.importFile(t, "m.xlsx", bgFile(t, []bgRow{
+		{day: 1, desc: "PANADERÍA DE PRUEBA", debit: -3, balance: 97},
+		{day: 2, desc: "DEPOSITO DE PRUEBA", credit: 10, balance: 107},
+	}))
+	svc := rules.NewService(e.db, categories.NewService(e.db))
+	for _, tt := range []struct {
+		text                   string
+		matches, uncategorized int64
+	}{
+		// The café and the pharmacy are filed by the bank's category, the
+		// deposit is income: only the bakery waits.
+		{"de prueba", 4, 1},
+		{"Panaderia", 1, 1},
+		{"NADA ASI", 0, 0},
+	} {
+		got, err := svc.Reach(ctx, e.user, tt.text)
+		if err != nil {
+			t.Fatalf("Reach(%q): %v", tt.text, err)
+		}
+		if got.Matches != tt.matches || got.Uncategorized != tt.uncategorized {
+			t.Errorf("Reach(%q) = %+v, want %d matches, %d uncategorized", tt.text, got, tt.matches, tt.uncategorized)
+		}
+	}
+	if _, err := svc.Reach(ctx, e.user, "  "); !errors.Is(err, rules.ErrInvalid) {
+		t.Errorf("Reach of no text: %v, want ErrInvalid", err)
+	}
+}

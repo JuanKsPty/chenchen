@@ -18,6 +18,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/httpx"
 	"github.com/JuanKsPty/chenchen/api/internal/identity"
 	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/rules"
 	"github.com/JuanKsPty/chenchen/api/internal/store"
 )
 
@@ -275,6 +276,12 @@ type View struct {
 	// owner noted that was linked to it: what lets the line say what they
 	// called it, and undo the link (DELETE /api/captures/{capture_id}/link).
 	Noted *NotedView `json:"noted,omitempty"`
+	// RuleHint is the text a rule made from this movement would match: the
+	// shop its description names, without card, city or order number.
+	// RuleHintPerson says it names a person paid or paying by phone instead,
+	// whom a rule only fits for something fixed.
+	RuleHint       string `json:"rule_hint,omitempty"`
+	RuleHintPerson bool   `json:"rule_hint_person,omitempty"`
 }
 
 // NotedView is the noted purchase a printed line turned out to be. Source is
@@ -298,6 +305,7 @@ func NewView(e store.Entry) View {
 		b := e.BankBalance.Amount()
 		v.BankBalance = &b
 	}
+	v.RuleHint, v.RuleHintPerson = rules.SuggestText(e.Description)
 	if n := e.Noted; n != nil {
 		v.Noted = &NotedView{CaptureID: n.CaptureID, Merchant: n.Merchant, Source: n.Source, LinkedBy: n.LinkedBy}
 	}

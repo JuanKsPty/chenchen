@@ -51,7 +51,7 @@ type Input struct {
 
 func (s *Service) validate(ctx context.Context, userID uuid.UUID, in *Input) error {
 	in.MatchText = strings.TrimSpace(in.MatchText)
-	if in.MatchText == "" || utf8.RuneCountInString(in.MatchText) > 60 || (in.CategoryID == nil && !in.Transfer) {
+	if in.MatchText == "" || utf8.RuneCountInString(in.MatchText) > TextLimit || (in.CategoryID == nil && !in.Transfer) {
 		return ErrInvalid
 	}
 	if in.CategoryID != nil {
@@ -146,6 +146,16 @@ func (s *Service) Delete(ctx context.Context, userID, id uuid.UUID) error {
 	return nil
 }
 
+// Reach is what a rule with text would reach among the user's movements, for
+// the owner to see before making it.
+func (s *Service) Reach(ctx context.Context, userID uuid.UUID, text string) (store.RuleReach, error) {
+	text = strings.TrimSpace(text)
+	if text == "" || utf8.RuneCountInString(text) > TextLimit {
+		return store.RuleReach{}, ErrInvalid
+	}
+	return s.db.Q().RuleReach(ctx, userID, text)
+}
+
 // Handler serves /api/category-rules.
 type Handler struct {
 	svc *Service
@@ -157,6 +167,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 func (h *Handler) Routes() http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
+	r.Get("/preview", h.preview)
 	r.Post("/", h.create)
 	r.Put("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
@@ -204,6 +215,24 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		out = append(out, NewView(rule))
 	}
 	httpx.JSON(w, r, http.StatusOK, map[string]any{"rules": out})
+}
+
+// ReachView is what a rule's text would reach: Matches movements, of which
+// Uncategorized are spending with no category yet.
+type ReachView struct {
+	Matches       int64 `json:"matches"`
+	Uncategorized int64 `json:"uncategorized"`
+}
+
+// preview answers GET /api/category-rules/preview?text=: what a rule with that
+// text would reach, before it exists.
+func (h *Handler) preview(w http.ResponseWriter, r *http.Request) {
+	reach, err := h.svc.Reach(r.Context(), identity.MustFromContext(r.Context()), r.URL.Query().Get("text"))
+	if err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, ReachView{Matches: reach.Matches, Uncategorized: reach.Uncategorized})
 }
 
 func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
