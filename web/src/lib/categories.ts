@@ -1,5 +1,6 @@
 import {
   ArrowLeftRightIcon,
+  BanknoteIcon,
   BriefcaseIcon,
   CarIcon,
   CircleDashedIcon,
@@ -7,6 +8,7 @@ import {
   GraduationCapIcon,
   HeartPulseIcon,
   HouseIcon,
+  LandmarkIcon,
   RepeatIcon,
   ShoppingBagIcon,
   ShoppingBasketIcon,
@@ -93,6 +95,8 @@ const ICONS: Record<string, LucideIcon> = {
   compras: ShoppingBagIcon,
   educacion: GraduationCapIcon,
   suscripciones: RepeatIcon,
+  comisiones: LandmarkIcon,
+  efectivo: BanknoteIcon,
   transferencia: ArrowLeftRightIcon,
   salario: BriefcaseIcon,
   freelance: BriefcaseIcon,

@@ -443,6 +443,67 @@ func TestARuleFilesWhatIsAlreadyImportedButNotWhatTheOwnerChose(t *testing.T) {
 	}
 }
 
+// A bank's own charge has no shop and no bank category to file it by; it falls
+// to Comisiones, unless one of the owner's rules says otherwise.
+func TestAChargeNoRulePlacedFallsToComisiones(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cats := categories.NewService(e.db)
+	comisiones, found, err := cats.FindByName(ctx, e.user, "Comisiones")
+	if err != nil || !found {
+		t.Fatalf("Comisiones category: %v %v", found, err)
+	}
+	servicios, _, _ := cats.FindByName(ctx, e.user, "Servicios")
+	id := servicios.ID
+	if _, _, err := rules.NewService(e.db, cats).Create(ctx, e.user, rules.Input{
+		MatchText: "DESGRAVAMEN", CategoryID: &id,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.importFile(t, "tarjeta.txt", []byte(cardFile))
+	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]store.Entry{}
+	for _, l := range list {
+		// A line of the additional card carries its number first.
+		got[l.Description[strings.Index(l.Description, "]")+1:]] = l
+	}
+	if l := got["ITBMS CARGO POR SEGURO"]; l.CategoryID == nil || *l.CategoryID != comisiones.ID ||
+		l.CategorySource == nil || *l.CategorySource != "rule" {
+		t.Errorf("a charge no rule placed is filed %v by %v, want Comisiones by rule", l.CategoryID, l.CategorySource)
+	}
+	if l := got["SEGURO DE DESGRAVAMEN"]; l.CategoryID == nil || *l.CategoryID != servicios.ID {
+		t.Errorf("a charge the owner has a rule for is filed %v, want Servicios", l.CategoryID)
+	}
+	if l := got["GRACIAS POR SU PAGO - BANCA MOVIL"]; l.CategoryID != nil {
+		t.Errorf("the card payment is filed %v; a transfer is no charge", l.CategoryID)
+	}
+	if l := got[" CAFE DE PRUEBA PANAMA"]; l.CategoryID == nil || *l.CategoryID == comisiones.ID {
+		t.Errorf("a purchase is filed %v, want it where the bank's category puts it", l.CategoryID)
+	}
+}
+
+func TestWithoutComisionesAChargeWaitsForTheOwner(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cats := categories.NewService(e.db)
+	comisiones, _, _ := cats.FindByName(ctx, e.user, "Comisiones")
+	if err := cats.Delete(ctx, e.user, comisiones.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.importFile(t, "tarjeta.txt", []byte(cardFile))
+	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user, Search: "ITBMS"})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("the ITBMS line: %v %v", list, err)
+	}
+	if list[0].CategoryID != nil {
+		t.Errorf("with Comisiones deleted a charge is filed %v, want it left for the owner", list[0].CategoryID)
+	}
+}
+
 func TestMoneyBetweenTheOwnersAccountsIsNeitherIncomeNorSpending(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
