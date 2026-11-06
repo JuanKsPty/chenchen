@@ -85,6 +85,67 @@ También se consideró guardar el estado de cada compra en una columna que el im
 actualiza. Se descartó porque deja huecos donde la compra y su línea cuentan a la vez,
 por ejemplo una compra anotada después del import o un par ambiguo.
 
+### Una compra, por cuantos lados llegue
+
+Una misma compra puede llegar por varios lados, cada uno una **señal**: el Atajo, a mano,
+el asistente (`agent`, lo que lee mientras el estado no llega) y, cuando se lean los
+avisos del banco, un correo o una notificación. Un pago con Apple Pay puede generar dos:
+el Atajo y el correo del banco. La regla de duplicados del Atajo (mismo monto y comercio
+dentro de dos minutos) no sirve entre canales, porque el teléfono y el banco nombran distinto la
+misma tienda.
+
+Por eso cada compra anotada guarda sus señales en **`capture_signals`** (migración
+00017), con una fila por canal:
+
+- Toda compra tiene al menos una, la del canal que la anotó primero, y **nunca dos del
+  mismo canal**: dos señales de un canal son dos compras, aunque sean del mismo monto y
+  del mismo día.
+- Antes de anotar nada, `captures.JoinSignal` busca la compra de la que habla la señal
+  nueva: de la misma cuenta, con el mismo monto en centavos y sin señal de ese canal.
+  1. Un canal con hora (el Atajo, el correo o la notificación) busca primero una que otro
+     canal con hora oyó a una hora o menos (`JoinWindow`). Gana la más cercana en el
+     tiempo.
+  2. Después, y a mano o desde el asistente solo así, porque su hora es la de quien la
+     escribe y no la de la compra, busca una anotada a un día o menos (`JoinDays`). Gana
+     el día más cercano y luego la hora más cercana.
+
+  Un canal con hora se une a una compra **en cualquier estado**: el correo de un pago
+  rechazado que la persona descartó es ese mismo pago. A mano o desde el asistente,
+  **nunca a una descartada**: si la persona descartó lo que mandó el Atajo y después
+  escribe una compra del mismo monto ese día, está diciendo que sí pasó, y unida a la
+  descartada no contaría.
+- Si la encuentra, agrega la señal. **Nunca cambia el monto, el día ni el estado de la
+  compra**: una unida a su línea o descartada sigue así y no vuelve a contar. Si no, la
+  anota con esa señal como primera.
+- Lo escrito a mano o por el asistente (comercio, categoría y nota) queda en la señal, y
+  completa lo que a la compra le falte mientras siga abierta: la nota, si no tiene, y la
+  categoría, si la suya vino de una regla o no tiene, con la misma precedencia de las
+  reglas (lo que alguien eligió gana a una regla). Una unida a su línea no cambia: la
+  línea es la compra ahora.
+- A mano, la respuesta lo dice (`already_noted`) y devuelve la compra que ya estaba. Si el
+  formulario repite el intento con el mismo id, la encuentra por ese id (`caller_id` de
+  la señal, único por persona) en vez de anotarla. Al Atajo nunca se le dice: su
+  respuesta es la misma byte a byte, para que quien tenga la clave no pueda preguntar qué
+  compras ya existen. Por lo mismo, su regla de duplicados lee sus señales, no las
+  compras.
+- Solo un canal con hora le da hora a la compra en las listas; a mano o desde el
+  asistente, no.
+
+Cuando se equivoca, **cuenta de menos**: dos compras reales del mismo monto, el mismo día
+y en la misma cuenta se unen solo si a cada una la contó un canal que a la otra le falta.
+La segunda queda sin contar hasta que llega el estado, cuyas líneas cuentan solas. Lo
+contrario, contar dos veces una compra porque dos canales la contaron a horas distintas,
+es justo lo que esto evita. Así se mantiene «nunca contar doble».
+
+Esto vale también para los canales con hora, y es a propósito. Un ejemplo: un café de
+$3.50 a las 8:00 que solo mandó el Atajo y otro de $3.50 a las 15:00 en la misma tarjeta
+que solo contó el correo del banco. El correo de las 15:00 no encuentra nada a una hora
+o menos, pero por el día se une al café de las 8:00: chenchén cuenta $3.50 en vez de $7.00
+hasta que llega el estado, que trae las dos líneas y cuenta las dos. Sin esa
+regla del día, el correo de una sola compra que llega más de una hora tarde, cosa que
+pasa, la anotaría otra vez y la contaría dos veces. Entre contar de menos hasta el estado
+y contar doble, se elige contar de menos.
+
 ### Una tarjeta que paga otra persona
 
 Una tarjeta que la persona usa y otra persona paga (la de su papá, por ejemplo) es la
@@ -114,5 +175,8 @@ agrega la persona, con un alias y sus últimos 4 dígitos (`institution = 'manua
   lo descarte.
 - La ventana (un día antes, cinco después) y la espera de tres días se calibraron con
   ejemplos, no con datos reales. Hay que revisarlas después de un mes de compras
-  anotadas.
+  anotadas. Lo mismo vale para la hora y el día dentro de los que dos señales son una
+  compra (`JoinWindow`, `JoinDays`), que un test fija.
+- Ninguna señal toca un saldo, y `TestBalancesNeverSeeSignals` lo fija igual que
+  `TestBalancesNeverSeeCaptures`.
 - Lo anotado puede corregirse o descartarse; lo impreso sigue sin poder editarse.

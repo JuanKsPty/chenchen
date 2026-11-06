@@ -248,8 +248,11 @@ export interface Entry {
    * Optional: older APIs do not send it, and absent means a printed line.
    */
   origin?: 'statement' | 'capture'
-  /** How a capture was noted: by the phone's shortcut, or by hand. */
-  capture_source?: 'shortcut' | 'manual'
+  /**
+   * How a capture was noted first: by the phone's shortcut, by hand, or by the
+   * assistant from what it read.
+   */
+  capture_source?: CaptureSource
   /**
    * On a printed line from the movement lists, the purchase the owner noted that was
    * linked to it. Absent on any other movement, and from older APIs.
@@ -257,12 +260,15 @@ export interface Entry {
   noted?: NotedPurchase
 }
 
+/** The way a noted purchase reached chenchén first. */
+export type CaptureSource = 'shortcut' | 'manual' | 'agent'
+
 /** The noted purchase a printed line turned out to be. */
 export interface NotedPurchase {
   capture_id: string
   /** What the owner called it: "Café Unido". */
   merchant: string
-  source: 'shortcut' | 'manual'
+  source: CaptureSource
   /** Whether chenchén linked them on its own or the owner did. */
   linked_by: 'auto' | 'user'
 }
@@ -281,6 +287,13 @@ export interface Capture extends Entry {
   linked_by?: 'auto' | 'user'
   /** Once linked, the printed line it turned out to be. */
   line?: Entry
+  /**
+   * On the answer to noting a purchase (a 200, not a 201): another way, the shortcut
+   * say, had noted it already, so nothing new counts. It is that purchase, with its
+   * own amount, day and merchant; what was typed only filled in a note or a category
+   * it lacked. Absent otherwise.
+   */
+  already_noted?: boolean
 }
 
 /**

@@ -1,8 +1,9 @@
-// Package captures pairs each purchase the owner noted — by hand, or with the
-// phone's shortcut — with the line its statement printed for it, and lets the
-// owner note, correct, link, discard and review them. The shortcut sends each
-// purchase with a key that can note purchases in one account and do nothing
-// else (shortcut.go).
+// Package captures pairs each purchase the owner noted — by hand, with the
+// phone's shortcut, or through the assistant — with the line its statement
+// printed for it, and lets the owner note, correct, link, discard and review
+// them. The shortcut sends each purchase with a key that can note purchases
+// in one account and do nothing else (shortcut.go). A purchase that arrives
+// more than one way is noted once, with a signal for each way (signals.go).
 //
 // A noted purchase is never a row of entries and never reaches a balance
 // (ADR-0002). Whether it counts as spending is derived when read: pending

@@ -271,10 +271,14 @@ export function useUpdateEntry() {
  * "Pendiente" line and in Gastos; one its statement already printed changes how
  * much is pending to review. Either way, money.
  *
- * Sending it again is not safe: the server makes a new purchase each time. So a
- * failure refreshes money too, unless the server said no (a 4xx, which saved
- * nothing). With no answer, or a 5xx, the first one may have been saved, and the
- * account should show it before the owner notes it again.
+ * The answer may be a purchase already noted another way (`already_noted`): nothing
+ * new counts, but what was typed may have filled in its note or category, so money
+ * is refreshed then too. The caller says it was already there, never that it is new.
+ *
+ * Sending it again without the same id is not safe: the server makes a new purchase
+ * each time. So a failure refreshes money too, unless the server said no (a 4xx,
+ * which saved nothing). With no answer, or a 5xx, the first one may have been saved,
+ * and the account should show it before the owner notes it again.
  */
 export function useAddCapture() {
   const invalidate = useMoneyInvalidation()

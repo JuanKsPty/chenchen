@@ -90,7 +90,14 @@ func (h *Handler) add(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, r, TranslateError(err))
 		return
 	}
-	httpx.JSON(w, r, http.StatusCreated, NewView(c))
+	// A purchase already noted another way is not created by this request:
+	// it comes back saying so, changed at most by a note or a category it
+	// lacked.
+	status := http.StatusCreated
+	if c.AlreadyNoted {
+		status = http.StatusOK
+	}
+	httpx.JSON(w, r, status, NewView(c))
 }
 
 // editRequest corrects a purchase; an absent or null field stays as it is.
@@ -302,6 +309,9 @@ func TranslateError(err error) error {
 			"Esa línea no es un gasto: no puede ser esta compra.").WithCause(err)
 	case errors.Is(err, ErrLineTaken):
 		return httpx.Conflict("line_taken", "Esa línea ya está unida a otra compra.").WithCause(err)
+	case errors.Is(err, ErrChannel):
+		return httpx.Unprocessable("capture_channel",
+			"Una compra se anota a mano o desde el asistente.").WithCause(err)
 	case errors.Is(err, ErrIDTaken):
 		return httpx.Conflict("capture_id_taken", "Esa compra ya existe. Ábrela de nuevo y anótala otra vez.").WithCause(err)
 	default:
@@ -313,17 +323,19 @@ func TranslateError(err error) error {
 
 // View is a noted purchase on the wire: the movement it reads as, with origin
 // "capture"; what it is now (pending, printed, missing, linked or discarded;
-// only pending counts as spending); and, once linked, its line.
+// only pending counts as spending); once linked, its line; and, when noting
+// it found it already noted another way, already_noted.
 type View struct {
 	movements.View
-	State    string          `json:"state"`
-	LinkedBy string          `json:"linked_by,omitempty"`
-	Line     *movements.View `json:"line,omitempty"`
+	State        string          `json:"state"`
+	LinkedBy     string          `json:"linked_by,omitempty"`
+	Line         *movements.View `json:"line,omitempty"`
+	AlreadyNoted bool            `json:"already_noted,omitempty"`
 }
 
 // NewView builds a noted purchase's wire shape.
 func NewView(c Capture) View {
-	v := View{View: movements.NewView(c.AsEntry()), State: c.State}
+	v := View{View: movements.NewView(c.AsEntry()), State: c.State, AlreadyNoted: c.AlreadyNoted}
 	if c.LinkedBy != nil {
 		v.LinkedBy = *c.LinkedBy
 	}

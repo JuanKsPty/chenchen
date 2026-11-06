@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestSharedWordsOnlyCountsRealWords(t *testing.T) {
 	tests := []struct {
@@ -20,5 +23,21 @@ func TestSharedWordsOnlyCountsRealWords(t *testing.T) {
 		if got := sharedWords(tt.merchant, tt.text); got != tt.want {
 			t.Errorf("sharedWords(%q, %q) = %d, want %d", tt.merchant, tt.text, got, tt.want)
 		}
+	}
+}
+
+// captureAsEntryColumns gives a movement its time for the channels in
+// timedChannelsSQL, which SQL cannot read from Go: moving a channel in or out
+// of timedChannels without the SQL, or the other way round, fails here.
+func TestTimedChannelsReadTheSameInSQL(t *testing.T) {
+	quoted := make([]string, len(timedChannels))
+	for i, c := range timedChannels {
+		quoted[i] = "'" + c + "'"
+	}
+	if got := strings.Join(quoted, ", "); got != timedChannelsSQL {
+		t.Errorf("timedChannelsSQL = %s, want %s", timedChannelsSQL, got)
+	}
+	if !strings.Contains(captureAsEntryColumns, "source IN ("+timedChannelsSQL+")") {
+		t.Errorf("captureAsEntryColumns does not read timedChannelsSQL: %s", captureAsEntryColumns)
 	}
 }

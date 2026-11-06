@@ -71,10 +71,11 @@ type Entry struct {
 	// Origin is OriginStatement for a printed line and OriginCapture for a
 	// noted purchase. A capture is always an expense, dated by the day it was
 	// noted, with no statement, posting day or bank fields; its Description is
-	// the merchant and its BookedAt when the shortcut sent it.
+	// the merchant and its BookedAt when a timed channel, such as the
+	// shortcut, sent it.
 	Origin string
-	// CaptureSource is how a capture was noted (shortcut | manual); empty for
-	// a printed line.
+	// CaptureSource is how a capture was noted (shortcut | manual | agent);
+	// empty for a printed line.
 	CaptureSource string
 	// Noted is, on a printed line, the purchase the owner noted that was
 	// linked to it. Only the movement lists fill it (with NotedPurchases):
@@ -101,10 +102,11 @@ const movementColumns = entryColumns + `, origin, capture_source`
 // captureAsEntryColumns maps a capture onto movementColumns, column by column. A
 // capture is an expense on the day it was noted, which is also the day it
 // would reach the balance; it has no statement, run, posting day or bank
-// fields, and its time is only known when the shortcut sent it the moment the
-// card was tapped. It reads from captures or capture_states alike.
+// fields, and its time is only known when a timed channel (timedChannelsSQL)
+// noted it the moment the card was tapped: never when it was typed by hand or
+// noted by the assistant. It reads from captures or capture_states alike.
 const captureAsEntryColumns = `id, user_id, account_id, NULL::uuid, NULL::uuid, booked_on,
-	CASE WHEN source = 'shortcut' THEN received_at END, NULL::date, booked_on, 0, amount_cents,
+	CASE WHEN source IN (` + timedChannelsSQL + `) THEN received_at END, NULL::date, booked_on, 0, amount_cents,
 	'expense'::entry_kind, NULL::entry_kind, merchant, '', '', NULL::bigint, category_id, category_source,
 	note, '', raw, created_at, 'capture', source`
 

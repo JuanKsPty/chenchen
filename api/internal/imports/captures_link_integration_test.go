@@ -267,53 +267,7 @@ func TestLinkingNeverTouchesBalancesDriftReconcileOrTransfers(t *testing.T) {
 		t.Fatalf("the bait = %s, want printed and not linked", c.State)
 	}
 
-	read := func() balanceFacts {
-		t.Helper()
-		var f balanceFacts
-		all, err := e.accounts.List(ctx, e.user)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, a := range all {
-			f.Accounts = append(f.Accounts, accountFacts{a.ID, a.Balance, a.Anchored, a.Drift, a.Movements, a.LastDay})
-			rec, err := e.accounts.Reconcile(ctx, e.user, a.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			f.Opening = append(f.Opening, rec.Opening)
-			f.Checks = append(f.Checks, rec.Checks...)
-			f.FirstBreaks = append(f.FirstBreaks, rec.FirstBreak)
-			for _, l := range rec.Lines {
-				f.Lines = append(f.Lines, reconciledLine{lineFactsOf(l.Entry), l.Computed, l.Difference})
-			}
-			ordered, err := e.db.Q().AccountEntriesInOrder(ctx, e.user, a.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			for _, l := range ordered {
-				f.Ordered = append(f.Ordered, lineFactsOf(l))
-			}
-		}
-		f.Assets, f.Debts, f.Holdings = accounts.NetWorth(all)
-		if f.Sums, err = e.db.Q().SumsByAccount(ctx, e.user); err != nil {
-			t.Fatal(err)
-		}
-		if f.Suggestions, err = transfers.NewService(e.db).Suggestions(ctx, e.user); err != nil {
-			t.Fatal(err)
-		}
-		if f.Candidates, err = e.db.Q().TransferCandidates(ctx, e.user, transfers.Window, civil.Date{}, civil.Date{}); err != nil {
-			t.Fatal(err)
-		}
-		for i := range f.Candidates {
-			f.Candidates[i].Out, f.Candidates[i].In = withoutNotes(f.Candidates[i].Out), withoutNotes(f.Candidates[i].In)
-		}
-		p, err := e.db.Q().EntryByID(ctx, e.user, payment)
-		if err != nil {
-			t.Fatal(err)
-		}
-		f.PaymentKind = p.EffectiveKind()
-		return f
-	}
+	read := func() balanceFacts { return e.balanceFacts(t, payment) }
 	before := read()
 	if before.PaymentKind != store.KindTransfer || len(before.Suggestions) != 0 {
 		t.Fatalf("the fixture is not what this test assumes: %+v", before)
@@ -359,14 +313,16 @@ func TestLinkingNeverTouchesBalancesDriftReconcileOrTransfers(t *testing.T) {
 
 // --- fixtures ----------------------------------------------------------------
 
-// balanceFacts is everything a balance, a drift, a reconciliation or a
-// transfer is built from, without what the owner says about a line.
+// balanceFacts is everything a balance, a drift, a reconciliation, a
+// checkpoint or a transfer is built from, without what the owner says about a
+// line.
 type balanceFacts struct {
 	Accounts                []accountFacts
 	Assets, Debts, Holdings money.Cents
 	Sums                    map[uuid.UUID]store.AccountSums
 	Opening                 []money.Cents
 	Checks                  []accounts.Check
+	Checkpoints             []store.Checkpoint
 	FirstBreaks             []*uuid.UUID
 	Lines                   []reconciledLine
 	Ordered                 []lineFacts
@@ -412,6 +368,63 @@ func lineFactsOf(e store.Entry) lineFacts {
 func withoutNotes(e store.Entry) store.Entry {
 	e.CategoryID, e.CategorySource, e.Note = nil, nil, ""
 	return e
+}
+
+// balanceFacts reads everything a balance, a drift, a reconciliation, a
+// checkpoint or a transfer is built from, with payment the line whose kind a
+// transfer match decides.
+func (e env) balanceFacts(t *testing.T, payment uuid.UUID) balanceFacts {
+	t.Helper()
+	ctx := context.Background()
+	var f balanceFacts
+	all, err := e.accounts.List(ctx, e.user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range all {
+		f.Accounts = append(f.Accounts, accountFacts{a.ID, a.Balance, a.Anchored, a.Drift, a.Movements, a.LastDay})
+		rec, err := e.accounts.Reconcile(ctx, e.user, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Opening = append(f.Opening, rec.Opening)
+		f.Checks = append(f.Checks, rec.Checks...)
+		checkpoints, err := e.accounts.Checkpoints(ctx, e.user, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Checkpoints = append(f.Checkpoints, checkpoints...)
+		f.FirstBreaks = append(f.FirstBreaks, rec.FirstBreak)
+		for _, l := range rec.Lines {
+			f.Lines = append(f.Lines, reconciledLine{lineFactsOf(l.Entry), l.Computed, l.Difference})
+		}
+		ordered, err := e.db.Q().AccountEntriesInOrder(ctx, e.user, a.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, l := range ordered {
+			f.Ordered = append(f.Ordered, lineFactsOf(l))
+		}
+	}
+	f.Assets, f.Debts, f.Holdings = accounts.NetWorth(all)
+	if f.Sums, err = e.db.Q().SumsByAccount(ctx, e.user); err != nil {
+		t.Fatal(err)
+	}
+	if f.Suggestions, err = transfers.NewService(e.db).Suggestions(ctx, e.user); err != nil {
+		t.Fatal(err)
+	}
+	if f.Candidates, err = e.db.Q().TransferCandidates(ctx, e.user, transfers.Window, civil.Date{}, civil.Date{}); err != nil {
+		t.Fatal(err)
+	}
+	for i := range f.Candidates {
+		f.Candidates[i].Out, f.Candidates[i].In = withoutNotes(f.Candidates[i].Out), withoutNotes(f.Candidates[i].In)
+	}
+	p, err := e.db.Q().EntryByID(ctx, e.user, payment)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.PaymentKind = p.EffectiveKind()
+	return f
 }
 
 // bacFileOn is bacFile downloaded on another day: the day its balances are as

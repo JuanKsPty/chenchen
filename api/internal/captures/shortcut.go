@@ -41,10 +41,12 @@ const (
 	// IngestDuplicate is a purchase already noted moments ago.
 	IngestDuplicate = "duplicate"
 	// IngestNoted is a purchase noted: counting as spending until its line
-	// arrives, or linked to it at once when the line was already imported.
-	// The reply never says which. Whoever holds the key could otherwise learn
-	// what the owner's statements contain by sending amounts and reading back
-	// which ones were already there.
+	// arrives, or linked to it at once when the line was already imported,
+	// or joined to the same purchase noted another way, by hand or by the
+	// bank's email, which it then only says it heard of too. The reply never
+	// says which. Whoever holds the key could otherwise learn what the
+	// owner's statements, or the purchases they noted, contain by sending
+	// amounts and reading back which ones were already there.
 	IngestNoted = "noted"
 )
 
@@ -68,11 +70,16 @@ type Ingested struct {
 	// Status is one of the Ingest* outcomes.
 	Status  string
 	Account store.Account
-	// Capture is the purchase noted, or the one it repeats; zero for a test.
+	// Capture is the purchase noted, the one it joined, or the one it
+	// repeats; zero for a test. Only its id may reach the shortcut: what it
+	// holds may have been noted another way.
 	Capture store.Capture
-	// Amount is what was paid, positive, and Merchant where, as noted.
+	// Amount is what was paid, positive, Merchant where, tidied as a new
+	// purchase's would be, and Day the day it was filed under: what the
+	// shortcut is told, joined or not.
 	Amount   money.Cents
 	Merchant string
+	Day      civil.Date
 	// OtherCard is the card the purchase came from when it is not the one
 	// the key first saw.
 	OtherCard string
@@ -85,9 +92,11 @@ type Ingested struct {
 //
 // An empty amount and merchant is the owner running the shortcut by hand to
 // test it: the key remembers it and nothing is noted. The same purchase sent
-// twice within duplicateWindow is noted once. Otherwise it is filed by the
-// user's rules, noted, and linked at once if its line is already imported and
-// could be no other purchase — so it never counts twice.
+// twice within duplicateWindow is noted once. One already noted another way —
+// typed by the owner, or told of by the bank's email (JoinSignal) — is only
+// told of again, and keeps counting once. Otherwise it is filed by the user's
+// rules, noted, and linked at once if its line is already imported and could
+// be no other purchase — so it never counts twice.
 //
 // Everything happens under the user's lock, like any other write to their
 // money, and only while the key is live: a key revoked while its purchase was
@@ -117,7 +126,8 @@ func (s *Service) Ingest(ctx context.Context, scope auth.CaptureScope, p Purchas
 		return err
 	}
 
-	out := Ingested{Amount: amount, Merchant: merchant}
+	day := civil.Of(now.In(civil.Panama))
+	out := Ingested{Amount: amount, Merchant: merchant, Day: day}
 	err := s.db.InTx(ctx, func(q *store.Queries) error {
 		if err := q.LockUser(ctx, scope.UserID); err != nil {
 			return keyGone(err)
@@ -137,8 +147,8 @@ func (s *Service) Ingest(ctx context.Context, scope auth.CaptureScope, p Purchas
 			return keyGone(q.MarkCaptureKeyTested(ctx, scope.UserID, scope.KeyID, now))
 		}
 
-		dup, found, err := q.RecentDuplicateCapture(ctx, scope.UserID, account.ID, -amount, merchant,
-			now.Add(-duplicateWindow))
+		dup, found, err := q.RecentDuplicateCapture(ctx, scope.UserID, account.ID, store.ChannelShortcut, -amount,
+			raw["merchant"], now.Add(-duplicateWindow))
 		if err != nil {
 			return err
 		}
@@ -147,25 +157,36 @@ func (s *Service) Ingest(ctx context.Context, scope auth.CaptureScope, p Purchas
 			return nil
 		}
 
-		c := store.Capture{ID: uuid.New(), UserID: scope.UserID, AccountID: account.ID,
-			Source: store.CaptureSourceShortcut, KeyID: &scope.KeyID, ReceivedAt: now,
-			BookedOn: civil.Of(now.In(civil.Panama)), Amount: -amount, Merchant: merchant, Raw: raw}
-		if c.CategoryID, err = ruleCategory(ctx, q, scope.UserID, merchant); err != nil {
-			return err
-		} else if c.CategoryID != nil {
-			src := "rule"
-			c.CategorySource = &src
-		}
-		if err := q.InsertCapture(ctx, c); err != nil {
+		joined, found, err := JoinSignal(ctx, q, scope.UserID, account.ID, amount, day,
+			store.CaptureSignal{Channel: store.ChannelShortcut, At: now, Raw: raw})
+		if err != nil {
 			return err
 		}
+		id := joined.ID
+		if !found {
+			c := store.Capture{ID: uuid.New(), UserID: scope.UserID, AccountID: account.ID,
+				Source: store.CaptureSourceShortcut, KeyID: &scope.KeyID, ReceivedAt: now,
+				BookedOn: day, Amount: -amount, Merchant: merchant, Raw: raw}
+			if c.CategoryID, err = ruleCategory(ctx, q, scope.UserID, merchant); err != nil {
+				return err
+			} else if c.CategoryID != nil {
+				src := "rule"
+				c.CategorySource = &src
+			}
+			if err := q.InsertCapture(ctx, c); err != nil {
+				return err
+			}
+			id = c.ID
+		}
+		// Joined or not, the same steps follow, so the two take the same
+		// course and the reply says the same.
 		if _, err := AutoLink(ctx, q, scope.UserID, []uuid.UUID{account.ID}); err != nil {
 			return err
 		}
 		if err := keyGone(q.TouchCaptureKey(ctx, scope.UserID, scope.KeyID, now, card)); err != nil {
 			return err
 		}
-		if out.Capture, err = q.CaptureByID(ctx, scope.UserID, c.ID); err != nil {
+		if out.Capture, err = q.CaptureByID(ctx, scope.UserID, id); err != nil {
 			return err
 		}
 		out.Status = IngestNoted
@@ -256,8 +277,11 @@ func (h *ShortcutHandler) purchase(w http.ResponseWriter, r *http.Request) {
 		out.Message, status = msgNoted(got.Amount, got.Merchant), http.StatusCreated
 	}
 	if status == http.StatusCreated {
-		c := got.Capture
-		out.Capture = &ShortcutCaptureView{ID: c.ID, Amount: c.Amount.Amount(), Merchant: c.Merchant, BookedOn: c.BookedOn}
+		// Built from what the shortcut sent, never from the purchase noted:
+		// one it joined may have been noted on another day or under another
+		// name, and saying so would tell that it was already there.
+		out.Capture = &ShortcutCaptureView{ID: got.Capture.ID, Amount: (-got.Amount).Amount(), Merchant: got.Merchant,
+			BookedOn: got.Day}
 		if got.OtherCard != "" {
 			out.Message += msgOtherCard(got.OtherCard)
 		}
@@ -311,7 +335,8 @@ type shortcutErrorBody struct {
 
 // ShortcutCaptureView is a purchase as the shortcut is told it was noted:
 // only what it sent, the day it was filed under and its id. Nothing else of
-// the account's leaves through a key.
+// the account's leaves through a key, not even whether the purchase was
+// already noted another way.
 type ShortcutCaptureView struct {
 	ID       uuid.UUID    `json:"id"`
 	Amount   money.Amount `json:"amount"`

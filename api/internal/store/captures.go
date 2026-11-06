@@ -17,10 +17,43 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/money"
 )
 
-// Where a capture came from.
+// The ways a purchase reaches chenchén. Each capture is told of by one or more
+// of them, its signals, and by each at most once: the phone's shortcut, the
+// owner typing it, the assistant noting what it read, and, once the bank's
+// alerts are read, an email or a notification. Migration 00017 lists them in
+// capture_signals.
 const (
-	CaptureSourceShortcut = "shortcut"
-	CaptureSourceManual   = "manual"
+	ChannelShortcut     = "shortcut"
+	ChannelManual       = "manual"
+	ChannelAgent        = "agent"
+	ChannelEmail        = "email"
+	ChannelNotification = "notification"
+)
+
+// timedChannels hear of a purchase the moment it happens, so the time of
+// their signal is the purchase's time. Typed by hand or noted by the
+// assistant, a purchase's time is only when someone wrote it down.
+// captureAsEntryColumns spells the same list in SQL as timedChannelsSQL; a
+// test pins the two together.
+var timedChannels = []string{ChannelShortcut, ChannelEmail, ChannelNotification}
+
+const timedChannelsSQL = `'shortcut', 'email', 'notification'`
+
+// IsTimedChannel reports whether a channel hears of a purchase as it happens.
+func IsTimedChannel(channel string) bool {
+	for _, c := range timedChannels {
+		if c == channel {
+			return true
+		}
+	}
+	return false
+}
+
+// Where a capture came from: the channel of its first signal.
+const (
+	CaptureSourceShortcut = ChannelShortcut
+	CaptureSourceManual   = ChannelManual
+	CaptureSourceAgent    = ChannelAgent
 )
 
 // What a capture is now, as capture_states derives it when read. Only a
@@ -64,12 +97,13 @@ type Capture struct {
 	ID        uuid.UUID
 	UserID    uuid.UUID
 	AccountID uuid.UUID
-	Source    string // shortcut | manual
-	// KeyID is the shortcut key that sent it; nil when typed by hand.
+	// Source is the channel that noted it first: shortcut, manual or agent.
+	Source string
+	// KeyID is the shortcut key that sent it; nil unless the shortcut noted it.
 	KeyID      *uuid.UUID
 	ReceivedAt time.Time
 	// BookedOn is the purchase's day: the day in Panama the shortcut's call
-	// arrived, or the day the owner typed.
+	// arrived, or the day the owner or the assistant gave.
 	BookedOn civil.Date
 	// Amount is signed from the holder's view, like an entry's: always negative.
 	Amount         money.Cents
@@ -90,13 +124,14 @@ type Capture struct {
 }
 
 // AsEntry is the capture in a movement's shape, whatever its state: the same
-// mapping captureAsEntryColumns makes in SQL, for a capture already read.
+// mapping captureAsEntryColumns makes in SQL, for a capture already read. It
+// has a time of day only when a timed channel noted it.
 func (c Capture) AsEntry() Entry {
 	e := Entry{ID: c.ID, UserID: c.UserID, AccountID: c.AccountID, BookedOn: c.BookedOn, BalanceOn: c.BookedOn,
 		Amount: c.Amount, Kind: KindExpense, Description: c.Merchant, CategoryID: c.CategoryID,
 		CategorySource: c.CategorySource, Note: c.Note, Raw: c.Raw, CreatedAt: c.CreatedAt,
 		Origin: OriginCapture, CaptureSource: c.Source}
-	if c.Source == CaptureSourceShortcut {
+	if IsTimedChannel(c.Source) {
 		at := c.ReceivedAt
 		e.BookedAt = &at
 	}
@@ -107,8 +142,11 @@ const captureColumns = `id, user_id, account_id, source, key_id, received_at, bo
 	merchant, category_id, category_source, note, entry_id, linked_by, discarded_at, raw,
 	created_at, updated_at, state`
 
-// InsertCapture stores a new, unlinked capture. A zero ReceivedAt means now.
-// Linking and discarding happen afterwards, never on insert.
+// InsertCapture stores a new, unlinked capture with its first signal: the
+// channel it came from (its Source), at the moment it was received, with what
+// that channel sent (its Raw). Both are one statement, so no capture ever
+// lacks a signal. A zero ReceivedAt means now. Linking and discarding happen
+// afterwards, never on insert.
 func (q *Queries) InsertCapture(ctx context.Context, c Capture) error {
 	raw := []byte("{}")
 	if c.Raw != nil {
@@ -122,9 +160,13 @@ func (q *Queries) InsertCapture(ctx context.Context, c Capture) error {
 		receivedAt = &c.ReceivedAt
 	}
 	_, err := q.q.Exec(ctx, `
-		INSERT INTO captures (id, user_id, account_id, source, key_id, received_at, booked_on, amount_cents,
-		                      merchant, category_id, category_source, note, raw)
-		VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), $7, $8, $9, $10, $11, $12, $13)`,
+		WITH c AS (
+			INSERT INTO captures (id, user_id, account_id, source, key_id, received_at, booked_on, amount_cents,
+			                      merchant, category_id, category_source, note, raw)
+			VALUES ($1, $2, $3, $4, $5, COALESCE($6, now()), $7, $8, $9, $10, $11, $12, $13)
+			RETURNING id, user_id, source, received_at, raw)
+		INSERT INTO capture_signals (capture_id, user_id, channel, at, raw)
+		SELECT id, user_id, source, received_at, raw FROM c`,
 		c.ID, c.UserID, c.AccountID, c.Source, c.KeyID, receivedAt, c.BookedOn, int64(c.Amount),
 		c.Merchant, c.CategoryID, c.CategorySource, c.Note, raw)
 	return wrap("store.InsertCapture", err)
@@ -159,19 +201,143 @@ func (q *Queries) CapturesByAccount(ctx context.Context, userID, accountID uuid.
 	return out, wrap("store.CapturesByAccount", rows.Err())
 }
 
-// RecentDuplicateCapture finds the latest capture of one of the user's
-// accounts with this amount and merchant received at or after since, in any
-// state: the same tap sent twice — a terminal repeating its signal, an
-// automation that runs on two devices — which must be noted once. Merchants
-// are compared ignoring case and runs of whitespace. ok is false when there is
-// none.
-func (q *Queries) RecentDuplicateCapture(ctx context.Context, userID, accountID uuid.UUID, amount money.Cents,
-	merchant string, since time.Time) (c Capture, ok bool, err error) {
-	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+captureColumns+` FROM capture_states
-		WHERE user_id = $1 AND account_id = $2 AND amount_cents = $3 AND received_at >= $5
-		  AND lower(btrim(regexp_replace(merchant, '\s+', ' ', 'g'))) = lower(btrim(regexp_replace($4, '\s+', ' ', 'g')))
-		ORDER BY received_at DESC, id DESC LIMIT 1`, userID, accountID, int64(amount), merchant, since))
-	err = wrap("store.RecentDuplicateCapture", err)
+// RecentDuplicateCapture finds the capture of one of the user's accounts
+// that a channel most recently brought a purchase of this amount and merchant
+// to, at or after since, in any state: the same tap sent twice — a terminal
+// repeating its signal, an automation that runs on two devices — which must
+// count once. It reads the channel's signals rather than the captures, so a
+// repeat is found whether the first copy noted a purchase or joined one
+// another channel had noted. merchant is compared with the one the channel
+// sent, as it sent it, ignoring case and runs of whitespace. ok is false when
+// there is none.
+func (q *Queries) RecentDuplicateCapture(ctx context.Context, userID, accountID uuid.UUID, channel string,
+	amount money.Cents, merchant string, since time.Time) (c Capture, ok bool, err error) {
+	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+prefixed("c.", captureColumns)+`
+		FROM capture_states c JOIN capture_signals s ON s.capture_id = c.id
+		WHERE c.user_id = $1 AND c.account_id = $2 AND c.amount_cents = $3 AND s.channel = $4 AND s.at >= $6
+		  AND lower(btrim(regexp_replace(s.raw->>'merchant', '\s+', ' ', 'g'))) = lower(btrim(regexp_replace($5, '\s+', ' ', 'g')))
+		ORDER BY s.at DESC, c.id DESC LIMIT 1`, userID, accountID, int64(amount), channel, merchant, since))
+	return maybeCapture("store.RecentDuplicateCapture", c, err)
+}
+
+// CaptureSignal is one way a purchase reached chenchén: a capture's first
+// signal is the channel that noted it, and every other is a channel that told
+// of the same purchase later (ADR-0002).
+type CaptureSignal struct {
+	CaptureID uuid.UUID
+	UserID    uuid.UUID
+	Channel   string
+	// At is when the channel heard of the purchase: its time for a timed
+	// channel, when it was noted for any other.
+	At time.Time
+	// AlertID is the bank alert the signal was read from, if any.
+	AlertID *uuid.UUID
+	Raw     map[string]string
+	// CallerID is the id a caller chose for a new purchase when this signal
+	// joined one already noted instead (CaptureJoinedAs); nil otherwise. One
+	// per user.
+	CallerID *uuid.UUID
+}
+
+// InsertCaptureSignal records that another channel told of one of the user's
+// captures. A channel it already has is a ConstraintError on
+// capture_signals_pkey, a caller id the user already gave another signal one
+// on capture_signals_caller_idx, and someone else's capture one on the
+// foreign key. The capture itself is never touched.
+func (q *Queries) InsertCaptureSignal(ctx context.Context, s CaptureSignal) error {
+	raw := []byte("{}")
+	if s.Raw != nil {
+		var err error
+		if raw, err = json.Marshal(s.Raw); err != nil {
+			return fmt.Errorf("store.InsertCaptureSignal: %w", err)
+		}
+	}
+	_, err := q.q.Exec(ctx, `INSERT INTO capture_signals (capture_id, user_id, channel, at, alert_id, raw, caller_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)`, s.CaptureID, s.UserID, s.Channel, s.At, s.AlertID, raw, s.CallerID)
+	return wrap("store.InsertCaptureSignal", err)
+}
+
+// CaptureSignals lists the signals of one of the user's captures, the first
+// one first. Someone else's capture has none.
+func (q *Queries) CaptureSignals(ctx context.Context, userID, captureID uuid.UUID) ([]CaptureSignal, error) {
+	rows, err := q.q.Query(ctx, `SELECT capture_id, user_id, channel, at, alert_id, raw, caller_id FROM capture_signals
+		WHERE capture_id = $1 AND user_id = $2 ORDER BY at, channel`, captureID, userID)
+	if err != nil {
+		return nil, wrap("store.CaptureSignals", err)
+	}
+	defer rows.Close()
+	var out []CaptureSignal
+	for rows.Next() {
+		var (
+			s   CaptureSignal
+			raw []byte
+		)
+		if err := rows.Scan(&s.CaptureID, &s.UserID, &s.Channel, &s.At, &s.AlertID, &raw, &s.CallerID); err != nil {
+			return nil, wrap("store.CaptureSignals", err)
+		}
+		if len(raw) > 0 {
+			_ = json.Unmarshal(raw, &s.Raw)
+		}
+		out = append(out, s)
+	}
+	return out, wrap("store.CaptureSignals", rows.Err())
+}
+
+// CaptureToJoinNear finds the capture of one of the user's accounts that a
+// new signal of a timed channel, heard at at, most likely tells of: one with
+// this amount, in any state, with no signal of this channel yet, that a timed
+// channel heard of within window of at. The closest in time wins. ok is false
+// when there is none.
+func (q *Queries) CaptureToJoinNear(ctx context.Context, userID, accountID uuid.UUID, amount money.Cents,
+	channel string, at time.Time, window time.Duration) (c Capture, ok bool, err error) {
+	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+prefixed("c.", captureColumns)+`
+		FROM capture_states c
+		CROSS JOIN LATERAL (SELECT min(abs(extract(epoch FROM s.at - $5::timestamptz))) AS gap
+		                      FROM capture_signals s WHERE s.capture_id = c.id AND s.channel = ANY($7)) t
+		WHERE c.user_id = $1 AND c.account_id = $2 AND c.amount_cents = $3 AND t.gap <= $6::numeric
+		  AND NOT EXISTS (SELECT 1 FROM capture_signals s WHERE s.capture_id = c.id AND s.channel = $4)
+		ORDER BY t.gap, c.created_at, c.id LIMIT 1`,
+		userID, accountID, int64(amount), channel, at, int64(window/time.Second), timedChannels))
+	return maybeCapture("store.CaptureToJoinNear", c, err)
+}
+
+// CaptureToJoinOn finds the capture of one of the user's accounts that a new
+// signal most likely tells of by its day: one with this amount, with no signal
+// of this channel yet, booked from days before day to days after, in any state
+// but discarded unless withDiscarded. The closest day wins, then the signal
+// closest in time to at. ok is false when there is none.
+func (q *Queries) CaptureToJoinOn(ctx context.Context, userID, accountID uuid.UUID, amount money.Cents,
+	channel string, day civil.Date, days int, at time.Time, withDiscarded bool) (c Capture, ok bool, err error) {
+	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+prefixed("c.", captureColumns)+`
+		FROM capture_states c
+		CROSS JOIN LATERAL (SELECT min(abs(extract(epoch FROM s.at - $7::timestamptz))) AS gap
+		                      FROM capture_signals s WHERE s.capture_id = c.id) t
+		WHERE c.user_id = $1 AND c.account_id = $2 AND c.amount_cents = $3
+		  AND c.booked_on BETWEEN $5::date - $6::int AND $5::date + $6::int
+		  AND ($8 OR c.discarded_at IS NULL)
+		  AND NOT EXISTS (SELECT 1 FROM capture_signals s WHERE s.capture_id = c.id AND s.channel = $4)
+		ORDER BY abs(c.booked_on - $5::date), t.gap NULLS LAST, c.created_at, c.id LIMIT 1`,
+		userID, accountID, int64(amount), channel, day, days, at, withDiscarded))
+	return maybeCapture("store.CaptureToJoinOn", c, err)
+}
+
+// CaptureJoinedAs finds the user's capture that a signal sent with this id —
+// the id its caller chose for a new purchase — joined instead of noting one:
+// a repeat of that call must find the same purchase, not note it after all.
+// The id is the signal's caller_id, which names one purchase of the user's
+// whatever account the repeat names, as a purchase noted under it would. ok
+// is false when there is none.
+func (q *Queries) CaptureJoinedAs(ctx context.Context, userID, id uuid.UUID) (c Capture, ok bool, err error) {
+	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+prefixed("c.", captureColumns)+`
+		FROM capture_signals s JOIN capture_states c ON c.id = s.capture_id
+		WHERE s.user_id = $1 AND s.caller_id = $2`, userID, id))
+	return maybeCapture("store.CaptureJoinedAs", c, err)
+}
+
+// maybeCapture reads a lookup that may find nothing: ok is false then, with
+// no error.
+func maybeCapture(op string, c Capture, err error) (Capture, bool, error) {
+	err = wrap(op, err)
 	if errors.Is(err, ErrNotFound) {
 		return Capture{}, false, nil
 	}
@@ -227,6 +393,31 @@ func (q *Queries) FileCaptureByRule(ctx context.Context, userID, id uuid.UUID, c
 		WHERE id = $1 AND user_id = $2 AND entry_id IS NULL AND discarded_at IS NULL
 		  AND (category_source IS NULL OR category_source = 'rule')`, id, userID, categoryID, src)
 	return wrap("store.FileCaptureByRule", err)
+}
+
+// FillCapture gives one of the user's open captures what a channel that
+// joined it typed and it lacks: note, when it has none, and categoryID,
+// chosen by source, when its own is empty or a rule's and source is someone's
+// choice — the precedence ApplyCategoryRule and LinkCapture keep, where a
+// choice outranks a rule and a rule outranks nothing. Its amount, day,
+// merchant and state are never touched. The checks are in the statement, so a
+// choice made a moment earlier is never overwritten. A capture it leaves
+// alone, or that is not open — a linked one is its line now, a discarded one
+// counts for nothing — is no error.
+func (q *Queries) FillCapture(ctx context.Context, userID, id uuid.UUID, categoryID *uuid.UUID, source, note string) error {
+	// Spelled once for SET and WHERE, both of which read the row as updated.
+	const fileIt = `($3::uuid IS NOT NULL AND $4 IN ('user', 'assistant')
+		AND (category_source IS NULL OR category_source = 'rule'))`
+	_, err := q.q.Exec(ctx, `
+		UPDATE captures
+		   SET category_id = CASE WHEN `+fileIt+` THEN $3 ELSE category_id END,
+		       category_source = CASE WHEN `+fileIt+` THEN $4 ELSE category_source END,
+		       note = CASE WHEN note = '' THEN $5 ELSE note END,
+		       updated_at = now()
+		 WHERE id = $1 AND user_id = $2 AND entry_id IS NULL AND discarded_at IS NULL
+		   AND ((note = '' AND $5 <> '') OR `+fileIt+`)`,
+		id, userID, categoryID, source, note)
+	return wrap("store.FillCapture", err)
 }
 
 // SetCaptureNote sets an open capture's note, as SetEntryNote does for a
@@ -452,8 +643,8 @@ func (q *Queries) UnlinkCapture(ctx context.Context, userID, captureID uuid.UUID
 }
 
 // NotedPurchase is the purchase the owner noted that a printed line turned
-// out to be: what they called it, how they noted it (shortcut | manual) and
-// who linked the two (auto | user).
+// out to be: what they called it, how it was noted first (shortcut | manual |
+// agent) and who linked the two (auto | user).
 type NotedPurchase struct {
 	CaptureID uuid.UUID
 	Merchant  string

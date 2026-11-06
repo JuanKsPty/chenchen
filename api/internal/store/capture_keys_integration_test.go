@@ -131,6 +131,8 @@ func TestUsingACaptureKeyNeedsItLive(t *testing.T) {
 	}
 }
 
+// A repeat is found by what the channel sent, through its signals: on a
+// purchase it noted, or on one it joined that another channel had noted.
 func TestRecentDuplicateCapture(t *testing.T) {
 	db := storetest.New(t)
 	ctx := context.Background()
@@ -138,7 +140,8 @@ func TestRecentDuplicateCapture(t *testing.T) {
 	card, checking := newCard(t, db, u.ID), newChecking(t, db, u.ID)
 	at := time.Date(2026, time.October, 15, 12, 41, 0, 0, civil.Panama)
 	first := store.Capture{ID: uuid.New(), UserID: u.ID, AccountID: card.ID, Source: store.CaptureSourceShortcut,
-		ReceivedAt: at, BookedOn: day, Amount: -450, Merchant: "Café  Unido"}
+		ReceivedAt: at, BookedOn: day, Amount: -450, Merchant: "Café Unido",
+		Raw: map[string]string{"amount": "$4.50", "merchant": "Café  Unido"}}
 	if err := db.Q().InsertCapture(ctx, first); err != nil {
 		t.Fatal(err)
 	}
@@ -146,25 +149,27 @@ func TestRecentDuplicateCapture(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
 		account  store.Account
+		channel  string
 		amount   money.Cents
 		merchant string
 		since    time.Time
 		want     bool
 	}{
-		{"the same purchase", card, -450, "Café  Unido", at, true},
-		{"its merchant in another case and spacing", card, -450, " CAFÉ unido ", at.Add(-time.Minute), true},
-		{"received before since", card, -450, "Café Unido", at.Add(time.Second), false},
-		{"another amount", card, -451, "Café Unido", at, false},
-		{"another merchant", card, -450, "Café Durán", at, false},
-		{"another account", checking, -450, "Café Unido", at, false},
+		{"the same purchase", card, store.ChannelShortcut, -450, "Café  Unido", at, true},
+		{"its merchant in another case and spacing", card, store.ChannelShortcut, -450, " CAFÉ\tunido ", at.Add(-time.Minute), true},
+		{"received before since", card, store.ChannelShortcut, -450, "Café Unido", at.Add(time.Second), false},
+		{"another amount", card, store.ChannelShortcut, -451, "Café Unido", at, false},
+		{"another merchant", card, store.ChannelShortcut, -450, "Café Durán", at, false},
+		{"another account", checking, store.ChannelShortcut, -450, "Café Unido", at, false},
+		{"another channel", card, store.ChannelNotification, -450, "Café Unido", at, false},
 	} {
-		got, found, err := db.Q().RecentDuplicateCapture(ctx, u.ID, tt.account.ID, tt.amount, tt.merchant, tt.since)
+		got, found, err := db.Q().RecentDuplicateCapture(ctx, u.ID, tt.account.ID, tt.channel, tt.amount, tt.merchant, tt.since)
 		if err != nil || found != tt.want || (found && got.ID != first.ID) {
 			t.Errorf("%s: RecentDuplicateCapture = %v, %v, %v; want %v", tt.name, got.ID, found, err, tt.want)
 		}
 	}
 	other := newUser(t, db, "other@example.com")
-	if _, found, err := db.Q().RecentDuplicateCapture(ctx, other.ID, card.ID, -450, "Café Unido", at); err != nil || found {
+	if _, found, err := db.Q().RecentDuplicateCapture(ctx, other.ID, card.ID, store.ChannelShortcut, -450, "Café Unido", at); err != nil || found {
 		t.Errorf("another user found the purchase: %v, %v", found, err)
 	}
 
@@ -172,7 +177,24 @@ func TestRecentDuplicateCapture(t *testing.T) {
 	if err := discard(t, db, first.ID); err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := db.Q().RecentDuplicateCapture(ctx, u.ID, card.ID, -450, "Café Unido", at); err != nil || !found {
+	if _, found, err := db.Q().RecentDuplicateCapture(ctx, u.ID, card.ID, store.ChannelShortcut, -450, "Café Unido", at); err != nil || !found {
 		t.Errorf("a discarded purchase: %v, %v; want found", found, err)
+	}
+
+	// A purchase typed by hand, later told of by the shortcut: the
+	// shortcut's repeat finds it by what the shortcut sent, not by the name
+	// the owner typed, and it is the shortcut's time that counts.
+	typed := addCapture(t, db, checking, day, -1200)
+	later := at.Add(time.Hour)
+	if err := db.Q().InsertCaptureSignal(ctx, store.CaptureSignal{CaptureID: typed, UserID: u.ID,
+		Channel: store.ChannelShortcut, At: later, Raw: map[string]string{"merchant": "Super 99"}}); err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := db.Q().RecentDuplicateCapture(ctx, u.ID, checking.ID, store.ChannelShortcut, -1200, "super 99", later)
+	if err != nil || !found || got.ID != typed {
+		t.Errorf("a repeat of a joined purchase = %v, %v, %v; want %s", got.ID, found, err, typed)
+	}
+	if _, found, err := db.Q().RecentDuplicateCapture(ctx, u.ID, checking.ID, store.ChannelShortcut, -1200, "Café Unido", later); err != nil || found {
+		t.Errorf("the typed name matched: %v, %v", found, err)
 	}
 }

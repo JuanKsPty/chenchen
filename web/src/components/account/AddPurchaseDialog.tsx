@@ -20,6 +20,12 @@
  * compra" again after a send that got no answer never counts the purchase twice: the
  * server returns the one the first try noted.
  *
+ * When another way had noted it already (the shortcut, say), the server answers with
+ * that purchase and `already_noted`. Nothing new counts, so the toast says it was
+ * already there and how it arrived ("Ya la teníamos: llegó por Atajos el 26 oct a
+ * las 12:41."), never that a new one was noted. What was typed fills in only a note
+ * or a category it lacked.
+ *
  * It also holds what "Corregir" in Categorizar shares with it: PurchaseFields (Monto,
  * ¿Dónde?, Día), purchaseProblems, purchaseAmount, serverProblems and purchaseToast.
  */
@@ -44,7 +50,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { paidByOther } from '@/lib/account'
 import { categoryOptions } from '@/lib/categories'
 import { useReturnFocus } from '@/lib/focus'
-import { signedMoney, todayCivil } from '@/lib/format'
+import { formatDayAndTime, signedMoney, todayCivil } from '@/lib/format'
 import { useAddCapture, useCategories } from '@/lib/queries'
 import { amountProblem, isClean, type Errors } from '@/lib/validate'
 
@@ -131,6 +137,26 @@ export function purchaseToast(capture: Capture, done: string) {
       return
     default:
       toast(done)
+  }
+}
+
+/**
+ * What to say when the purchase typed was already noted another way: that it was
+ * there, and how it arrived. "Ya la teníamos: llegó por Atajos el 26 oct a las
+ * 12:41." for the shortcut, which knows the moment; just "Ya la teníamos." when there
+ * is nothing more to say. It is never one noted by hand first: two typed are two
+ * purchases.
+ */
+function alreadyNotedMessage(capture: Capture): string {
+  switch (capture.capture_source) {
+    case 'shortcut':
+      return capture.booked_at
+        ? `Ya la teníamos: llegó por Atajos el ${formatDayAndTime(capture.booked_at)}.`
+        : 'Ya la teníamos: llegó por Atajos.'
+    case 'agent':
+      return 'Ya la teníamos: la anotó el asistente.'
+    default:
+      return 'Ya la teníamos.'
   }
 }
 
@@ -304,10 +330,12 @@ function PurchaseForm({
       },
       {
         onSuccess: (capture) => {
-          purchaseToast(
-            capture,
-            `Listo: ${signedMoney(capture.amount)} en ${capture.description}`,
-          )
+          if (capture.already_noted) toast(alreadyNotedMessage(capture))
+          else
+            purchaseToast(
+              capture,
+              `Listo: ${signedMoney(capture.amount)} en ${capture.description}`,
+            )
           onDone()
         },
         onError: (error) => {

@@ -268,7 +268,7 @@ type View struct {
 	// Origin is "statement" for a printed line and "capture" for a purchase
 	// the owner noted that no statement has printed yet: it counts as
 	// spending but is not in the balance. CaptureSource says how it was
-	// noted, "shortcut" or "manual".
+	// noted first: "shortcut", "manual" or "agent".
 	Origin        string `json:"origin,omitempty"`
 	CaptureSource string `json:"capture_source,omitempty"`
 	// Noted is, on a printed line from the movement lists, the purchase the
@@ -278,7 +278,7 @@ type View struct {
 }
 
 // NotedView is the noted purchase a printed line turned out to be. Source is
-// "shortcut" or "manual"; LinkedBy is "auto" or "user".
+// "shortcut", "manual" or "agent"; LinkedBy is "auto" or "user".
 type NotedView struct {
 	CaptureID uuid.UUID `json:"capture_id"`
 	Merchant  string    `json:"merchant"`

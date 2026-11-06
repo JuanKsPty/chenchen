@@ -55,6 +55,9 @@ var (
 	// ErrIDTaken means the id a caller chose for a new purchase is another
 	// user's purchase.
 	ErrIDTaken = errors.New("captures: the id belongs to another purchase")
+	// ErrChannel means a purchase was to be noted through Add by a channel
+	// other than the owner's hand or the assistant: the caller's mistake.
+	ErrChannel = errors.New("captures: purchases are added by hand or by the assistant")
 )
 
 const (
@@ -63,6 +66,10 @@ const (
 	maxMerchantRunes = 140
 	maxNoteRunes     = 500
 )
+
+// categoryChosen is the category_source of a category Add was given: the
+// owner chose it, or the assistant for them, so it outranks a rule's.
+const categoryChosen = "user"
 
 // maxAmount is the most one noted purchase can be. No card purchase comes
 // close; a card number pasted into the amount does, and would count as
@@ -87,15 +94,24 @@ func NewService(db *store.DB, cats *categories.Service) *Service {
 type Capture struct {
 	store.Capture
 	Line *store.Entry
+	// AlreadyNoted says Add found the purchase already noted another way — by
+	// the shortcut, say — and only recorded that it was told of this way too:
+	// nothing new counts, and the purchase is as it was but for a note or a
+	// category it lacked, which what was typed fills in.
+	AlreadyNoted bool
 }
 
-// AddInput is a purchase the owner types.
+// AddInput is a purchase the owner types, or the assistant notes for them.
 type AddInput struct {
 	// ID, when the caller chooses one, makes noting safe to repeat: a second
-	// Add with the same ID returns the purchase the first one noted instead
-	// of noting it twice. A form that lost the answer to its first try can
-	// send it again. Zero means a new id.
-	ID        uuid.UUID
+	// Add with the same ID returns the purchase the first one noted, or the
+	// one it found already noted, instead of noting it twice. A form that
+	// lost the answer to its first try can send it again. Zero means a new id.
+	ID uuid.UUID
+	// Channel is who is noting it: store.ChannelManual, the owner by hand,
+	// which is the default, or store.ChannelAgent, the assistant from what it
+	// read. Neither knows the purchase's time.
+	Channel   string
 	AccountID uuid.UUID
 	// Amount is what was paid, positive; it is stored with the holder's sign.
 	Amount   money.Cents
@@ -106,11 +122,25 @@ type AddInput struct {
 	Note       string
 }
 
-// Add notes a purchase by hand in one of the user's accounts. Without a
-// category, the user's rules file it by merchant, as they would its line. If
-// its line is already imported and could be no other purchase, it is linked
-// at once and never counts twice.
+// Add notes a purchase by hand, or for the assistant, in one of the user's
+// accounts. If another channel already noted it — the same amount in the
+// account, booked within JoinDays of its day, not discarded, with no signal of
+// this channel yet — that purchase is returned with AlreadyNoted, and nothing
+// new counts. What was typed is kept in the signal, and fills in what the
+// purchase lacks while it is open: the note when it has none, and the category
+// when its own came from a rule or it has none (FillCapture). Its amount, day
+// and state stay as they were. Otherwise it is noted: without a category, the
+// user's rules file it by merchant, as they would its line, and if its line is
+// already imported and could be no other purchase, it is linked at once and
+// never counts twice.
 func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Capture, error) {
+	channel := in.Channel
+	if channel == "" {
+		channel = store.ChannelManual
+	}
+	if channel != store.ChannelManual && channel != store.ChannelAgent {
+		return Capture{}, ErrChannel
+	}
 	merchant, err := cleanMerchant(in.Merchant)
 	if err != nil {
 		return Capture{}, err
@@ -149,21 +179,56 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Captu
 		if account.Type == "brokerage" {
 			return ErrBrokerage
 		}
+		if in.ID != uuid.Nil {
+			// Noted already, by an earlier try whose answer was lost. The
+			// user's lock makes this check and the insert below one step.
+			noted, found, err := notedAs(ctx, q, userID, in.ID)
+			if err != nil || found {
+				out = noted
+				return err
+			}
+		}
+
+		now := s.now()
+		// What was typed, as the signal's raw: kept if it joins a purchase
+		// already noted, whose own merchant stays.
+		raw := map[string]string{"merchant": merchant}
+		if in.CategoryID != nil {
+			raw["category_id"] = in.CategoryID.String()
+		}
+		if note != "" {
+			raw["note"] = note
+		}
+		signal := store.CaptureSignal{Channel: channel, At: now, Raw: raw}
+		if in.ID != uuid.Nil {
+			// So that a repeat finds the purchase this joins (notedAs).
+			id := in.ID
+			signal.CallerID = &id
+			raw["id"] = id.String()
+		}
+		joined, found, err := JoinSignal(ctx, q, userID, account.ID, in.Amount, day, signal)
+		if err != nil {
+			return err
+		}
+		if found {
+			if err := q.FillCapture(ctx, userID, joined.ID, in.CategoryID, categoryChosen, note); err != nil {
+				return err
+			}
+			if out, err = load(ctx, q, userID, joined.ID); err != nil {
+				return err
+			}
+			out.AlreadyNoted = true
+			return nil
+		}
+
 		id := in.ID
 		if id == uuid.Nil {
 			id = uuid.New()
-		} else if noted, err := load(ctx, q, userID, id); err == nil {
-			// Noted already, by an earlier try whose answer was lost. The
-			// user's lock makes this check and the insert below one step.
-			out = noted
-			return nil
-		} else if !errors.Is(err, ErrNotFound) {
-			return err
 		}
-		c := store.Capture{ID: id, UserID: userID, AccountID: account.ID, Source: store.CaptureSourceManual,
+		c := store.Capture{ID: id, UserID: userID, AccountID: account.ID, Source: channel, ReceivedAt: now,
 			BookedOn: day, Amount: -in.Amount, Merchant: merchant, Note: note}
 		if in.CategoryID != nil {
-			src := "user"
+			src := categoryChosen
 			c.CategoryID, c.CategorySource = in.CategoryID, &src
 		} else if c.CategoryID, err = ruleCategory(ctx, q, userID, merchant); err != nil {
 			return err
@@ -482,6 +547,28 @@ func ruleCategory(ctx context.Context, q *store.Queries, userID uuid.UUID, merch
 		return nil, err
 	}
 	return store.MatchRule(merchant, rules).CategoryID, nil
+}
+
+// notedAs finds the purchase an earlier Add with this id noted, whatever its
+// state: the one with the id, or the one its signal joined instead, which is
+// AlreadyNoted again. found is false when there is neither.
+func notedAs(ctx context.Context, q *store.Queries, userID, id uuid.UUID) (c Capture, found bool, err error) {
+	c, err = load(ctx, q, userID, id)
+	if err == nil {
+		return c, true, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Capture{}, false, err
+	}
+	joined, found, err := q.CaptureJoinedAs(ctx, userID, id)
+	if err != nil || !found {
+		return Capture{}, false, err
+	}
+	if c, err = load(ctx, q, userID, joined.ID); err != nil {
+		return Capture{}, false, err
+	}
+	c.AlreadyNoted = true
+	return c, true, nil
 }
 
 // capture reads one of the user's purchases, whatever its state.
