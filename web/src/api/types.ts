@@ -18,7 +18,8 @@ export interface Amount {
 
 export type AccountClass = 'asset' | 'liability'
 export type AccountType = 'checking' | 'savings' | 'credit_card' | 'brokerage'
-export type Institution = 'banco_general' | 'bac' | 'ibkr'
+/** 'manual': a card someone else pays, which the owner added by hand (`paid_by_other`). */
+export type Institution = 'banco_general' | 'bac' | 'ibkr' | 'manual'
 
 /**
  * A real-world account: a bank account, a card or a brokerage account, keyed the
@@ -40,8 +41,24 @@ export interface Account {
    * Only meaningful when `anchored`.
    */
   balance: Amount
-  /** A card's balance as the bank prints it: a positive amount owed. */
+  /**
+   * A card's balance as the bank prints it: a positive amount owed. Absent for a card
+   * someone else pays, whose debt is not the owner's.
+   */
   owed?: Amount
+  /**
+   * A card someone else pays: the owner added it by hand and uses it, someone else
+   * gets its statements and pays it. Its purchases count in the owner's spending,
+   * but not in what they owe nor in their net worth. It never has movements of its
+   * own, a statement or a starting balance, so it never lacks one or fails to match:
+   * its `balance` is always zero and `anchored` false. Absent for every other account.
+   */
+  paid_by_other?: boolean
+  /**
+   * What a card someone else pays was used for this calendar month, positive: what it
+   * shows in place of what is owed. Present, zero included, only for such a card.
+   */
+  this_month?: Amount
   /**
    * Whether a stated balance — a statement's opening, IBKR's cash report, or one
    * the owner entered — fixes where the account started. Without one the balance
@@ -64,6 +81,54 @@ export interface Account {
    * reason; absent or null means unknown or never.
    */
   last_synced_at?: string | null
+  /**
+   * What the purchases the owner noted, and no statement has printed yet, come to.
+   * Signed like the balance (negative) and never in it. Absent when there are none.
+   */
+  pending?: PendingPurchases
+  /**
+   * The balance with the pending purchases in it. Only for an anchored account that
+   * has some: an unanchored balance is not the bank's to begin with.
+   */
+  estimated_balance?: Amount
+  /** How many noted purchases the owner should look at; absent when none. */
+  to_review?: number
+  /** The account's shortcut key as the owner may know it; absent for a brokerage account. */
+  shortcut?: ShortcutStatus
+}
+
+/** An account's noted purchases that count as spending until their line arrives. */
+export interface PendingPurchases {
+  /** Negative, like the balance. */
+  amount: Amount
+  count: number
+}
+
+/** Whether an account has a working shortcut key, and what can be shown of it: never the key. */
+export interface ShortcutStatus {
+  configured: boolean
+  /** The key's last four characters. */
+  hint?: string
+  created_at?: string
+  /** The last run by hand, which tests the shortcut and notes nothing. */
+  tested_at?: string
+  /** The last purchase the key noted. */
+  last_capture_at?: string
+  /** The first card name the shortcut sent. */
+  card_label?: string
+}
+
+/**
+ * A shortcut key just made (POST /api/captures/keys/{accountID}): the one answer that
+ * ever carries the key itself. Show it once and keep it nowhere; the server only
+ * keeps its hash, so it cannot be shown again.
+ */
+export interface NewShortcutKey {
+  /** "chn_…": what the shortcut sends as its Authorization. */
+  key: string
+  /** Its last four characters, all the owner sees of it afterwards. */
+  hint: string
+  created_at: string
 }
 
 /** What a card's statement says is due. Dates are civil (YYYY-MM-DD). */
@@ -152,13 +217,17 @@ export interface SecurityStatus {
 export type EntryKind =
   'income' | 'expense' | 'refund' | 'fee' | 'interest' | 'transfer' | 'trade'
 
-/** One line a statement or IBKR printed. */
+/**
+ * One line a statement or IBKR printed, or a purchase the owner noted that no
+ * statement has printed yet (`origin: 'capture'`).
+ */
 export interface Entry {
   id: string
   account_id: string
   /** The day the bank printed (YYYY-MM-DD), with no time zone to shift it. */
   booked_on: string
   posted_on?: string
+  /** For a purchase the shortcut noted, the moment it arrived. */
   booked_at?: string
   /** Signed from the owner's point of view: negative is money leaving. */
   amount: Amount
@@ -173,6 +242,73 @@ export interface Entry {
   category_id?: string
   category_source?: 'rule' | 'user' | 'assistant'
   note?: string
+  /**
+   * 'statement' for a printed line; 'capture' for a purchase the owner noted that no
+   * statement has printed yet, which counts as spending but is not in the balance.
+   * Optional: older APIs do not send it, and absent means a printed line.
+   */
+  origin?: 'statement' | 'capture'
+  /**
+   * How a capture was noted first: by the phone's shortcut, by hand, or by the
+   * assistant from what it read.
+   */
+  capture_source?: CaptureSource
+  /**
+   * On a printed line from the movement lists, the purchase the owner noted that was
+   * linked to it. Absent on any other movement, and from older APIs.
+   */
+  noted?: NotedPurchase
+}
+
+/** The way a noted purchase reached chenchén first. */
+export type CaptureSource = 'shortcut' | 'manual' | 'agent'
+
+/** The noted purchase a printed line turned out to be. */
+export interface NotedPurchase {
+  capture_id: string
+  /** What the owner called it: "Café Unido". */
+  merchant: string
+  source: CaptureSource
+  /** Whether chenchén linked them on its own or the owner did. */
+  linked_by: 'auto' | 'user'
+}
+
+/**
+ * Where a noted purchase stands, derived by the server whenever it is read. Only
+ * `pending` counts as spending: `printed` (a line of the same amount covers it),
+ * `linked` (joined to its line) and `missing` (a statement passed its day without
+ * it) leave the counting to the statement, and `discarded` never happened.
+ */
+export type CaptureState = 'pending' | 'printed' | 'missing' | 'linked' | 'discarded'
+
+/** A purchase the owner noted, as /api/captures returns it: the movement it reads as. */
+export interface Capture extends Entry {
+  state: CaptureState
+  linked_by?: 'auto' | 'user'
+  /** Once linked, the printed line it turned out to be. */
+  line?: Entry
+  /**
+   * On the answer to noting a purchase (a 200, not a 201): another way, the shortcut
+   * say, had noted it already, so nothing new counts. It is that purchase, with its
+   * own amount, day and merchant; what was typed only filled in a note or a category
+   * it lacked. Absent otherwise.
+   */
+  already_noted?: boolean
+}
+
+/**
+ * A noted purchase the owner should look at (GET /api/captures/review). Neither state
+ * counts as spending, so answering is about getting the record right, not the totals.
+ *   printed  lines of the same amount could be it and the choice was not obvious:
+ *            `candidates`, oldest first.
+ *   missing  a statement went past its day without it: `near` holds the lines that
+ *            come close (a tip, a late charge), best first, at most five.
+ * Both lists are always there, empty when there is nothing in them.
+ */
+export interface CaptureReviewItem extends Capture {
+  state: 'printed' | 'missing'
+  candidates: Entry[]
+  near: Entry[]
 }
 
 export interface EntryPage {
@@ -284,6 +420,12 @@ export interface InvestmentTrade {
 
 // --- imports -------------------------------------------------------------------
 
+/**
+ * The format of a statement file. bg_card_statement is a card's closed statement as a
+ * PDF: no lines and no opening, only the balance at its cut.
+ */
+export type StatementSource = 'bg_account' | 'bac_account' | 'bg_card' | 'bg_card_statement'
+
 /** What one statement in an uploaded file did to its account. */
 export interface ImportAccountResult {
   account_id: string
@@ -301,10 +443,17 @@ export interface ImportAccountResult {
   warnings: string[]
   /** A card whose file prints no balance, with no starting balance yet. */
   needs_opening: boolean
+  /** Purchases the owner noted that this file linked to their lines; absent when none. */
+  captures_linked?: number
+  /**
+   * Noted purchases this is the first statement to pass without printing; absent
+   * when none.
+   */
+  captures_missing?: number
 }
 
 export interface ImportResult {
-  source: 'bg_account' | 'bac_account' | 'bg_card'
+  source: StatementSource
   /** The exact same file was already imported; nothing changed. */
   unchanged: boolean
   accounts: ImportAccountResult[]
@@ -313,7 +462,7 @@ export interface ImportResult {
 /** One import or IBKR sync, as recorded. */
 export interface ImportRun {
   id: string
-  source: 'bg_account' | 'bac_account' | 'bg_card' | 'ibkr_flex'
+  source: StatementSource | 'ibkr_flex'
   status: 'ok' | 'unchanged' | 'error'
   filename?: string
   period_start: string | null
@@ -325,6 +474,72 @@ export interface ImportRun {
   details: { warnings?: string[]; missing_sections?: string[] }
   error?: string
   created_at: string
+}
+
+/**
+ * Where a statement Claude sent stands. `needs_review` waits for the owner with its
+ * file: it did not continue an account cleanly enough to enter on its own.
+ */
+export type StatementUploadStatus =
+  | 'pending'
+  | 'imported'
+  | 'unchanged'
+  | 'needs_review'
+  | 'unreadable'
+  | 'dismissed'
+  | 'expired'
+
+/** A statement Claude sent (GET /api/imports/uploads), oldest first. */
+export interface StatementUpload {
+  id: string
+  filename: string
+  status: StatementUploadStatus
+  /** Why it did not enter on its own, in Spanish, ready to show. */
+  reason?: string
+  created_at: string
+  /** The account it is for, when chenchén already has it; never the bank's name. */
+  account?: { id: string; last4?: string; name: string }
+}
+
+// --- Claude ----------------------------------------------------------------------
+
+/**
+ * A connection Claude asked for, as the consent page shows it (GET
+ * /api/oauth/requests/:id). Opening it is what lets the owner answer it.
+ */
+export interface ConnectRequest {
+  /** "Claude" or "Claude Code". */
+  client_name: string
+  /** Where the answer goes: "claude.ai", or "localhost" for Claude Code. */
+  redirect_host: string
+  /** What the client asked for; the owner decides on writing either way. */
+  scopes: string[]
+  expires_at: string
+}
+
+/** Where the consent page sends the browser after the owner answers. */
+export interface ConnectAnswer {
+  redirect_to: string
+}
+
+/**
+ * The MCP endpoint's protected-resource metadata (GET
+ * /.well-known/oauth-protected-resource/api/mcp), as far as the app reads it.
+ */
+export interface McpResource {
+  /** Where Claude reaches chenchén's tools: the API's PUBLIC_URL and /api/mcp. */
+  resource?: string
+}
+
+/** One of the owner's live connections with Claude (GET /api/oauth/grants). */
+export interface ClaudeConnection {
+  id: string
+  client_name: string
+  /** 'read', and 'write' when the owner let it note and file too. */
+  scopes: string[]
+  created_at: string
+  /** Null until Claude first uses it. */
+  last_used_at: string | null
 }
 
 // --- categories ------------------------------------------------------------------
@@ -372,7 +587,10 @@ export interface StatementReport {
   /** Civil dates (YYYY-MM-DD). */
   period_start: string | null
   period_end: string | null
-  /** The bank's own balances; absent when the format prints none (a card). */
+  /**
+   * The bank's own balances; absent when the format prints none (a card's exports).
+   * A card's closed statement brings the closing alone, its balance at the cut.
+   */
   opening?: Amount
   closing?: Amount
   available?: Amount
@@ -386,7 +604,7 @@ export interface StatementReport {
 }
 
 export interface StatementFileReport {
-  source: 'bg_account' | 'bac_account' | 'bg_card'
+  source: StatementSource
   statements: StatementReport[]
 }
 

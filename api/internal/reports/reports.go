@@ -5,6 +5,11 @@
 // refunds (a refund reducing it); income is income. Transfers between the
 // owner's own accounts and trades are never either, which is what keeps paying
 // the card from counting as spending twice.
+//
+// A purchase the owner noted counts as an expense while it is pending. It
+// stops counting once a printed line of the exact amount could be it, or once
+// a statement passes its day without one. The one double count is a line the
+// bank charged at a different amount, such as a tip (ADR-0002).
 package reports
 
 import (

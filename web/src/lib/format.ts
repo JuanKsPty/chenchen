@@ -1,4 +1,4 @@
-import type { Account, Amount, EntryKind } from '@/api/types'
+import type { Account, Amount, EntryKind, Institution } from '@/api/types'
 
 /**
  * Rendering money and dates.
@@ -27,6 +27,9 @@ import type { Account, Amount, EntryKind } from '@/api/types'
  *
  * Instants (ISO timestamps):
  *   formatDate(iso)       "24 oct 2026"
+ *   formatDay(iso)        "26 oct" (the year when it is not this one)
+ *   formatDayAndTime(iso) "26 oct a las 12:41", "26 oct a la 1:05" (the year when
+ *                         it is not this one)
  *   relativeTime(iso)     "hace un momento", "hace 5 min", "hace 2 h", "ayer",
  *                         "hace 3 días", "el 05 oct"
  *
@@ -93,6 +96,11 @@ const dateFormat = new Intl.DateTimeFormat('es', {
   year: 'numeric',
 })
 const dayMonthFormat = new Intl.DateTimeFormat('es', { day: '2-digit', month: 'short' })
+const timeFormat = new Intl.DateTimeFormat('es', {
+  hour: 'numeric',
+  minute: '2-digit',
+  hourCycle: 'h23',
+})
 const monthNameFormat = new Intl.DateTimeFormat('es', { month: 'long' })
 const weekdayFormat = new Intl.DateTimeFormat('es', { weekday: 'long' })
 
@@ -113,6 +121,23 @@ function ymdOf(date: Date): string {
 /** "24 oct 2026" for an instant. */
 export function formatDate(iso: string): string {
   return dateFormat.format(new Date(iso))
+}
+
+/** "26 oct" for an instant; "26 oct 2025" when it is not this year. */
+export function formatDay(iso: string, now: Date = new Date()): string {
+  const at = new Date(iso)
+  return at.getFullYear() === now.getFullYear()
+    ? dayMonthFormat.format(at)
+    : dateFormat.format(at)
+}
+
+/**
+ * "26 oct a las 12:41" for an instant, on the 24-hour clock; "a la 1:05" when the
+ * hour is one, as it is said. The year only when it is not this one.
+ */
+export function formatDayAndTime(iso: string, now: Date = new Date()): string {
+  const at = new Date(iso)
+  return `${formatDay(iso, now)} ${at.getHours() === 1 ? 'a la' : 'a las'} ${timeFormat.format(at)}`
 }
 
 /** "03 oct 2026" for a civil date. */
@@ -162,6 +187,13 @@ export function currentMonth(): string {
 export function shiftMonth(ym: string, delta: number): string {
   const [year = 0, month = 1] = ym.split('-').map(Number)
   return ymdOf(new Date(year, month - 1 + delta, 1)).slice(0, 7)
+}
+
+/** The civil day `delta` days away from `ymd` (YYYY-MM-DD). */
+export function shiftDay(ymd: string, delta: number): string {
+  const date = civil(ymd)
+  date.setDate(date.getDate() + delta)
+  return ymdOf(date)
 }
 
 /** The first and last civil day of a month (YYYY-MM), for report and movement filters. */
@@ -236,14 +268,19 @@ export function accountTypeLabel(type: string): string {
   return ACCOUNT_TYPES[type] ?? type
 }
 
-const INSTITUTIONS: Record<string, string> = {
+const INSTITUTIONS: Record<Institution, string> = {
   banco_general: 'Banco General',
   bac: 'BAC',
   ibkr: 'Interactive Brokers',
+  // A card someone else pays has no bank of the owner's: what tells it apart is who
+  // pays it. Its row reads "Otra persona ···1234" under the owner's name for it. Kept
+  // short: beside "Este mes $312.40" a phone has room for little more than a bank's
+  // name, and what is cut must still read as itself ("Otra per… ···1234").
+  manual: 'Otra persona',
 }
 
-export function institutionLabel(institution: string): string {
-  return INSTITUTIONS[institution] ?? institution
+export function institutionLabel(institution: Institution | string): string {
+  return INSTITUTIONS[institution as Institution] ?? institution
 }
 
 /**

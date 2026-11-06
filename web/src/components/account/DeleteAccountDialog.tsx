@@ -6,6 +6,10 @@
  * "Eliminar cuenta" button beside "Cancelar". Never orange. On success it says so
  * in a toast and goes back to Cuentas (lib/queries' useDeleteAccount drops the
  * deleted account from the cache first, so the page never refetches it).
+ *
+ * A card someone else pays is named as the owner named it ("¿Eliminar Tarjeta de
+ * papá?"), and what goes with it is what they noted: "Se borran sus compras anotadas.
+ * No se puede deshacer." No bank holds a copy of those.
  */
 import { CircleAlertIcon } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -23,7 +27,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Spinner } from '@/components/ui/spinner'
-import { shortAccountLabel } from '@/lib/account'
+import { accountRowTitle, paidByOther, shortAccountLabel } from '@/lib/account'
 import { useReturnFocus } from '@/lib/focus'
 import { ACCOUNTS_PATH } from '@/lib/nav'
 import { useDeleteAccount } from '@/lib/queries'
@@ -39,11 +43,10 @@ export function DeleteAccountDialog({
 }) {
   const navigate = useNavigate()
   const returnFocus = useReturnFocus()
-  const name = shortAccountLabel(account)
+  // A card someone else pays by its own name: it has no bank's, and "Tarjeta ···1234"
+  // could as well be one of the owner's.
+  const name = paidByOther(account) ? accountRowTitle(account) : shortAccountLabel(account)
   const remove = useDeleteAccount()
-  const movements =
-    account.movements === 1 ? 'su único movimiento' : `sus ${account.movements} movimientos`
-  const brokerage = account.type === 'brokerage'
 
   const confirm = () =>
     remove.mutate(account.id, {
@@ -65,15 +68,7 @@ export function DeleteAccountDialog({
       <DialogContent className="sm:max-w-104" {...returnFocus}>
         <DialogHeader>
           <DialogTitle>¿Eliminar {name}?</DialogTitle>
-          <DialogDescription>
-            {account.movements === 0
-              ? brokerage
-                ? 'Se borra su conexión con Interactive Brokers; tu cuenta allá no cambia.'
-                : 'Tu cuenta en el banco no cambia.'
-              : brokerage
-                ? `Se borran ${movements} de chenchén y su conexión con Interactive Brokers; tu cuenta allá no cambia.`
-                : `Se borran ${movements} de chenchén; tu cuenta en el banco no cambia.`}
-          </DialogDescription>
+          <DialogDescription>{whatGoes(account)}</DialogDescription>
         </DialogHeader>
 
         {remove.isError && (
@@ -103,4 +98,24 @@ export function DeleteAccountDialog({
       </DialogContent>
     </Dialog>
   )
+}
+
+/** What deleting the account takes with it, and what it leaves alone. */
+function whatGoes(account: Account): string {
+  if (paidByOther(account)) {
+    return account.pending?.count
+      ? 'Se borran sus compras anotadas. No se puede deshacer.'
+      : 'Todavía no tiene compras anotadas.'
+  }
+  const brokerage = account.type === 'brokerage'
+  if (account.movements === 0) {
+    return brokerage
+      ? 'Se borra su conexión con Interactive Brokers; tu cuenta allá no cambia.'
+      : 'Tu cuenta en el banco no cambia.'
+  }
+  const movements =
+    account.movements === 1 ? 'su único movimiento' : `sus ${account.movements} movimientos`
+  return brokerage
+    ? `Se borran ${movements} de chenchén y su conexión con Interactive Brokers; tu cuenta allá no cambia.`
+    : `Se borran ${movements} de chenchén; tu cuenta en el banco no cambia.`
 }

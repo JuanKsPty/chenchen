@@ -51,7 +51,8 @@ const LazyCalendar = lazy(async () => {
 })
 
 /**
- * <DateField label value onChange onIncompleteChange? min? max? className? />
+ * <DateField label value onChange onIncompleteChange? min? max? maxProblem? error?
+ *            className? />
  *
  *   label     the visible label ("Desde", "Hasta")
  *   value     ISO yyyy-mm-dd, or ""
@@ -60,6 +61,10 @@ const LazyCalendar = lazy(async () => {
  *   onIncompleteChange  true while the text is not a real date (half-typed, or a day
  *             that does not exist), when `value` is no longer what the field shows
  *   min, max  ISO bounds: they explain a rejected date and grey it out in the calendar
+ *   maxProblem  what a date after `max` is called ("El día no puede ser después de
+ *             hoy."); a range's "Es posterior a la fecha final." by default
+ *   error     a problem found elsewhere (a form's check, the server's message for this
+ *             field), shown when the field has none of its own
  *
  * A pill field (48px on mobile, 44 from md) with the placeholder "dd/mm/aaaa" and a
  * calendar button inside it (44px below lg, where it may be a finger; 36 from lg,
@@ -87,6 +92,8 @@ export function DateField({
   onIncompleteChange,
   min,
   max,
+  maxProblem = 'Es posterior a la fecha final.',
+  error,
   className,
 }: {
   label: string
@@ -103,6 +110,10 @@ export function DateField({
   /** ISO bounds. They explain a rejected date, and they grey it out in the calendar. */
   min?: string
   max?: string
+  /** What a date after `max` is called; the default fits a range's end. */
+  maxProblem?: string
+  /** A problem found outside the field, shown when it has none of its own. */
+  error?: string
   className?: string
 }) {
   const id = useId()
@@ -130,7 +141,9 @@ export function DateField({
   } else if (iso && min && iso < min) {
     problem = 'Es anterior a la fecha inicial.'
   } else if (iso && max && iso > max) {
-    problem = 'Es posterior a la fecha final.'
+    problem = maxProblem
+  } else {
+    problem = error
   }
 
   const handleText = (next: string) => {

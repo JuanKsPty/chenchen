@@ -20,6 +20,7 @@ import (
 
 	"github.com/JuanKsPty/chenchen/api/internal/accounts"
 	"github.com/JuanKsPty/chenchen/api/internal/auth"
+	"github.com/JuanKsPty/chenchen/api/internal/captures"
 	"github.com/JuanKsPty/chenchen/api/internal/categories"
 	"github.com/JuanKsPty/chenchen/api/internal/chat"
 	"github.com/JuanKsPty/chenchen/api/internal/config"
@@ -27,10 +28,12 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/imports"
 	"github.com/JuanKsPty/chenchen/api/internal/investments"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/oauth"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
 	"github.com/JuanKsPty/chenchen/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/uploads"
 )
 
 // Deps are the collaborators the routing table needs. It grows as features land;
@@ -55,6 +58,19 @@ type Deps struct {
 	Rules       *rules.Handler
 	Proposals   *proposals.Handler
 	Chat        *chat.Handler
+	Captures    *captures.Handler
+	Shortcut    *captures.ShortcutHandler
+	// OAuth is how Claude signs in. Nil without PUBLIC_URL, and then none of
+	// its routes exist: discovery, authorize and token all answer 404.
+	OAuth *oauth.Handler
+	// MCP is the endpoint Claude's tools answer at, behind Claude's own
+	// tokens. Nil without PUBLIC_URL, like OAuth, and then neither it nor the
+	// address statements are sent to exists.
+	MCP http.Handler
+	// Uploads serves the statements Claude sends: the address they arrive
+	// at, mounted only with MCP, and the owner's list of the ones that wait,
+	// behind a session.
+	Uploads *uploads.Handler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -74,10 +90,42 @@ func NewRouter(d Deps) http.Handler {
 	// any orchestrator have no credentials.
 	r.Get("/healthz", httpx.Health(Version(), d.Health))
 
+	// Beside it, and for the same reason: Claude discovers how to sign in
+	// before it has any credential, at the addresses RFC 8414 and RFC 9728
+	// derive from the issuer and the resource, which are not under /api.
+	if d.OAuth != nil {
+		r.Mount("/.well-known", d.OAuth.WellKnownRoutes())
+	}
+
 	r.Route("/api", func(r chi.Router) {
 		// Public: issuing and ending sessions. Rate limiting lives inside the
 		// auth router, which knows which of its endpoints are worth guessing at.
 		r.Mount("/auth", d.Auth.Routes())
+
+		// Public as well, though no session: the phone's shortcut posts a
+		// purchase with one account's capture key, which its handler checks
+		// and which can do nothing else. Outside the group below on purpose: a
+		// key is never read as an access token, so it reaches nothing a
+		// session reaches, and an access token is no key.
+		r.Mount("/shortcut", d.Shortcut.Routes())
+
+		// Claude signing in. Authorize and token take no session; the
+		// owner's answer and their list of connections are behind Require
+		// inside the oauth router. Nothing Claude is issued is ever read as
+		// a session, here or below: Require refuses its tokens by name.
+		if d.OAuth != nil {
+			r.Mount("/oauth", d.OAuth.Routes())
+		}
+
+		// Claude's tools. Outside Require like the shortcut: the endpoint
+		// takes only Claude's access tokens, checked by the handler itself,
+		// and a session's token is no such thing. The address a statement is
+		// sent to takes no token at all: the address is the credential, good
+		// for one file, and its path never reaches the access log.
+		if d.MCP != nil {
+			r.Handle("/mcp", d.MCP)
+			r.Mount("/mcp/uploads", d.Uploads.AddressRoutes())
+		}
 
 		// Everything past here requires a verified access token. Grouping it
 		// under one middleware, rather than applying it per handler, is what
@@ -92,11 +140,15 @@ func NewRouter(d Deps) http.Handler {
 			r.Mount("/categories", d.Categories.Routes())
 			r.Mount("/investments", d.Investments.Routes())
 			r.Mount("/imports", d.Imports.Routes())
+			if d.Uploads != nil {
+				r.Mount("/imports/uploads", d.Uploads.Routes())
+			}
 			r.Mount("/reports", d.Reports.Routes())
 			r.Mount("/transfers", d.Transfers.Routes())
 			r.Mount("/category-rules", d.Rules.Routes())
 			r.Mount("/proposals", d.Proposals.Routes())
 			r.Mount("/chat", d.Chat.Routes())
+			r.Mount("/captures", d.Captures.Routes())
 		})
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {

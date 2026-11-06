@@ -16,12 +16,16 @@ import {
   type LucideIcon,
 } from 'lucide-react'
 
-import type { CategoryNode, Entry } from '@/api/types'
+import type { Category, CategoryNode, Entry } from '@/api/types'
 
 /**
  * Categories as the app shows them.
  *
  *   categoryNames(tree)       Map id → name; a child reads "Padre › Hija"
+ *   categoryOptions(tree, kind)
+ *                             the categories of one kind ('expense' | 'income') as
+ *                             [{ id, name }] for a <select>, children as "Padre › Hija",
+ *                             sorted by name
  *   categoryIcon(name)        the lucide icon for a category name (spec iconStyle),
  *                             circle-dashed when the name is not one we know
  *   UNCATEGORIZED_ICON        circle-help: "Sin categoría", a to-do, not an error
@@ -46,6 +50,32 @@ export function categoryNames(tree: CategoryNode[] | undefined): Map<string, str
     for (const child of node.children) names.set(child.id, `${node.name} › ${child.name}`)
   }
   return names
+}
+
+/** A category as one choice in a picker. */
+export interface CategoryOption {
+  id: string
+  name: string
+}
+
+/**
+ * The categories of one kind as picker choices, sorted by name. A child takes its
+ * parent's kind and reads "Padre › Hija".
+ */
+export function categoryOptions(
+  tree: CategoryNode[] | undefined,
+  kind: Category['kind'],
+): CategoryOption[] {
+  const names = categoryNames(tree)
+  const options: CategoryOption[] = []
+  for (const node of tree ?? []) {
+    if (node.kind !== kind) continue
+    options.push({ id: node.id, name: names.get(node.id) ?? node.name })
+    for (const child of node.children) {
+      options.push({ id: child.id, name: names.get(child.id) ?? child.name })
+    }
+  }
+  return options.sort((a, b) => a.name.localeCompare(b.name, 'es'))
 }
 
 /** Lower case, no accents, so "Alimentacion" and "ALIMENTACIÓN" find the same icon. */

@@ -4,12 +4,15 @@
  *   <ImportedOutcome result accounts onNavigate />
  *       After "Importar": spec voice.importResult. "Listo: 12 movimientos nuevos",
  *       "En Ahorros ···4417 (01–30 sept). 3 ya estaban y no los repetimos.", the
- *       bank's opening and closing balance, and the account's chip once the list
+ *       bank's opening and closing balance (or the closing alone, "Saldo al corte",
+ *       for a card's closed statement), and the account's chip once the list
  *       has refreshed (Cuadra, No cuadra · $25.00 with "Revisar", Sin saldo
  *       inicial). A card file with no balance asks for "Saldo según tu banco"
  *       right there (CheckpointDialog, as the starting balance). One account is
  *       laid out like the brand sheet (illustration, centred); several get a
- *       block each.
+ *       block each. Purchases the owner noted get a line each way: "Unimos 3
+ *       compras que anotaste con tu estado." and "1 compra no aparece en este
+ *       estado. Revísala.", which links to Gastos#compras.
  *   <CheckedOutcome report accounts lockedTo? />
  *       After "Solo revisar" (the dialog titles it "Esto dice el archivo"): what
  *       the file says, written nowhere. Period,
@@ -22,13 +25,20 @@
  *       step is done: the box goes, the account's chip shows and "Listo" is the
  *       primary again.
  *   importHeadline(result)
- *       "Listo: 12 movimientos nuevos", also used for the toast when the dialog
- *       was closed before the import finished.
+ *       "Listo: 12 movimientos nuevos", or "Listo: saldo al corte" for a closed
+ *       statement read only for its balance at the cut; also used for the toast
+ *       when the dialog was closed before the import finished.
  *   accountName(account)
  *       "Gastos del mes ···0932" (the owner's alias) or "Ahorros ···4417": how the
  *       whole flow names an account, so it matches the row on Cuentas.
  */
-import { ArrowRightIcon, CircleAlertIcon, CircleCheckIcon, InfoIcon } from 'lucide-react'
+import {
+  ArrowRightIcon,
+  CircleAlertIcon,
+  CircleCheckIcon,
+  InfoIcon,
+  ReceiptIcon,
+} from 'lucide-react'
 import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -48,7 +58,7 @@ import { Button } from '@/components/ui/button'
 import { DialogTitle } from '@/components/ui/dialog'
 import { accountStatus, accountWithNumber } from '@/lib/account'
 import { accountTypeLabel, formatRange, institutionLabel, numberShort } from '@/lib/format'
-import { accountHref } from '@/lib/nav'
+import { CAPTURES_HREF, accountHref } from '@/lib/nav'
 import { cn } from '@/lib/utils'
 
 function plural(count: number, one: string, many: string): string {
@@ -62,9 +72,16 @@ function sum(result: ImportResult, pick: (a: ImportAccountResult) => number): nu
 export function importHeadline(result: ImportResult): string {
   if (result.unchanged) return 'Ya tenías este archivo'
   const fresh = sum(result, (a) => a.new)
-  return fresh === 0
-    ? 'No había nada nuevo'
-    : `Listo: ${plural(fresh, 'movimiento nuevo', 'movimientos nuevos')}`
+  if (fresh > 0) return `Listo: ${plural(fresh, 'movimiento nuevo', 'movimientos nuevos')}`
+  return result.accounts.some(cutOnly) ? 'Listo: saldo al corte' : 'No había nada nuevo'
+}
+
+/**
+ * A closed statement read only for its balance (a card's PDF): it brings what the
+ * account owed at the cut, and leaves the movements to the other files.
+ */
+function cutOnly(result: ImportAccountResult): boolean {
+  return result.lines === 0 && Boolean(result.closing)
 }
 
 export function importNeedsStep(result: ImportResult, accounts: Account[]): boolean {
@@ -128,7 +145,7 @@ export function ImportedOutcome({
   if (result.accounts.length === 1) {
     const only = result.accounts[0]!
     const account = find(only.account_id)
-    const balance = only.opening && only.closing && (
+    const balance = only.closing && (
       <BankBalance opening={only.opening} closing={only.closing} centered />
     )
     // "Anota lo que debes" below already says it has no starting balance.
@@ -150,7 +167,7 @@ export function ImportedOutcome({
             )
           }
         />
-        <Follow result={only} account={account} />
+        <Follow result={only} account={account} onNavigate={onNavigate} />
       </div>
     )
   }
@@ -186,10 +203,8 @@ export function ImportedOutcome({
                 <AccountChip account={account} onNavigate={onNavigate} />
               )}
             </div>
-            {one.opening && one.closing && (
-              <BankBalance opening={one.opening} closing={one.closing} />
-            )}
-            <Follow result={one} account={account} />
+            {one.closing && <BankBalance opening={one.opening} closing={one.closing} />}
+            <Follow result={one} account={account} onNavigate={onNavigate} />
           </section>
         )
       })}
@@ -207,6 +222,9 @@ function sentence(result: ImportAccountResult, account: Account | undefined): st
   const where = name(result, account)
   const when = period(result.period_start, result.period_end)
   const place = when ? `${where} (${when})` : where
+  if (cutOnly(result)) {
+    return result.created ? `Agregamos ${place} a tus cuentas.` : `En ${place}.`
+  }
   if (result.new === 0) {
     return result.duplicates > 0
       ? `${result.duplicates === 1 ? 'El movimiento' : `Los ${result.duplicates} movimientos`} de ${place} ya ${result.duplicates === 1 ? 'estaba' : 'estaban'}.`
@@ -250,13 +268,18 @@ function AccountChip({
   )
 }
 
-/** What still needs doing after the import: a starting balance, a break, warnings. */
+/**
+ * What still needs doing after the import, and what it did to noted purchases: a
+ * starting balance, a break, the purchases, warnings.
+ */
 function Follow({
   result,
   account,
+  onNavigate,
 }: {
   result: ImportAccountResult
   account: Account | undefined
+  onNavigate: () => void
 }) {
   return (
     <>
@@ -283,8 +306,62 @@ function Follow({
         </div>
       )}
       {result.chain_break && <LineBreak line={result.chain_break} />}
+      <NotedPurchases result={result} onNavigate={onNavigate} />
       {result.warnings.length > 0 && <Warnings warnings={result.warnings} />}
     </>
+  )
+}
+
+/**
+ * What the file did to purchases the owner noted: those it linked to their lines,
+ * which count once, as the line; and those it is the first statement to pass without
+ * printing, which stop counting and wait in Gastos#compras ("Revísala" goes there and
+ * closes the dialog). Laid out like the warnings, never as an alert: nothing is wrong.
+ */
+function NotedPurchases({
+  result,
+  onNavigate,
+}: {
+  result: ImportAccountResult
+  onNavigate: () => void
+}) {
+  const linked = result.captures_linked ?? 0
+  const missing = result.captures_missing ?? 0
+  if (linked === 0 && missing === 0) return null
+  const row =
+    'grid grid-cols-[1.25rem_minmax(0,1fr)] gap-2 text-small font-medium text-pretty text-foreground'
+  const icon = (
+    <ReceiptIcon aria-hidden="true" className="mt-0.5 size-4 text-muted-foreground" />
+  )
+  return (
+    <ul className="flex flex-col gap-2">
+      {linked > 0 && (
+        <li className={row}>
+          {icon}
+          <span>
+            Unimos {plural(linked, 'compra', 'compras')} que anotaste con tu estado.
+          </span>
+        </li>
+      )}
+      {missing > 0 && (
+        <li className={row}>
+          {icon}
+          <span>
+            {missing === 1
+              ? '1 compra no aparece en este estado. '
+              : `${missing} compras no aparecen en este estado. `}
+            <Link
+              to={CAPTURES_HREF}
+              onClick={onNavigate}
+              className="font-semibold text-primary-text underline underline-offset-4"
+            >
+              {missing === 1 ? 'Revísala' : 'Revísalas'}
+            </Link>
+            .
+          </span>
+        </li>
+      )}
+    </ul>
   )
 }
 
@@ -336,7 +413,12 @@ function StatementSummary({
     ? accountName(account)
     : `${accountTypeLabel(statement.type)} ${numberShort(statement.external_number)}`
   const elsewhere = lockedTo && account?.id !== lockedTo.id
-  const balanced = statement.opening && statement.closing && !statement.chain_break
+  // A file with no movements has nothing to add up, only the bank's balances.
+  const balanced =
+    statement.line_count > 0 &&
+    statement.opening &&
+    statement.closing &&
+    !statement.chain_break
 
   return (
     <section aria-label={title} className="flex flex-col gap-3 rounded-2xl bg-muted p-4">
@@ -359,13 +441,19 @@ function StatementSummary({
         <Fact label="Salidas">
           <Amount amount={-statement.money_out.cents} signed />
         </Fact>
-        <Fact label="Saldo del banco">
-          {statement.opening && statement.closing ? (
-            <BalancePair opening={statement.opening} closing={statement.closing} />
-          ) : (
-            <span className="text-muted-foreground">No lo trae</span>
-          )}
-        </Fact>
+        {statement.closing && !statement.opening ? (
+          <Fact label="Saldo al corte">
+            <Amount amount={statement.closing} size="inline" />
+          </Fact>
+        ) : (
+          <Fact label="Saldo del banco">
+            {statement.opening && statement.closing ? (
+              <BalancePair opening={statement.opening} closing={statement.closing} />
+            ) : (
+              <span className="text-muted-foreground">No lo trae</span>
+            )}
+          </Fact>
+        )}
       </dl>
 
       {balanced && (
@@ -374,7 +462,7 @@ function StatementSummary({
           Los movimientos cuadran con el saldo del banco.
         </p>
       )}
-      {statement.class === 'liability' && !statement.opening && (
+      {statement.class === 'liability' && !statement.opening && !statement.closing && (
         <p className="text-small font-medium text-pretty text-muted-foreground">
           Este archivo no trae saldo. Al importarlo, anota lo que debes según tu estado de
           cuenta.
@@ -407,15 +495,17 @@ function Fact({ label, children }: { label: string; children: ReactNode }) {
 // --- shared pieces -------------------------------------------------------------
 
 /**
- * "Saldo del banco" and "$16,868.02 → $18,240.15" (a lucide arrow, not the glyph):
- * stacked and centred under the headline, or label and figures on one line.
+ * "Saldo del banco" and "$16,868.02 → $18,240.15" (a lucide arrow, not the glyph),
+ * or "Saldo al corte" and its one figure for a statement that brings no opening (a
+ * card's closed statement): stacked and centred under the headline, or label and
+ * figures on one line.
  */
 function BankBalance({
   opening,
   closing,
   centered = false,
 }: {
-  opening: AmountValue
+  opening?: AmountValue
   closing: AmountValue
   centered?: boolean
 }) {
@@ -428,8 +518,16 @@ function BankBalance({
           : 'flex-wrap items-baseline justify-between gap-x-4',
       )}
     >
-      <span className="text-small font-medium text-muted-foreground">Saldo del banco</span>
-      <BalancePair opening={opening} closing={closing} />
+      <span className="text-small font-medium text-muted-foreground">
+        {opening ? 'Saldo del banco' : 'Saldo al corte'}
+      </span>
+      {opening ? (
+        <BalancePair opening={opening} closing={closing} />
+      ) : (
+        <span className="text-body font-semibold">
+          <Amount amount={closing} size="inline" />
+        </span>
+      )}
     </div>
   )
 }

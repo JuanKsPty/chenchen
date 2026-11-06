@@ -19,12 +19,12 @@ teléfono, más el asistente y los ajustes:
 
 | Sección | Qué ves |
 |---|---|
-| **Inicio** (`/inicio`) | Tu patrimonio neto —lo que tienes, lo que debes y tus inversiones—, los avisos que piden algo de ti (una cuenta que no cuadra, cuentas sin saldo inicial, transferencias por confirmar), el mes en curso y lo más reciente. |
+| **Inicio** (`/inicio`) | Tu patrimonio neto —lo que tienes, lo que debes y tus inversiones—, los avisos que piden algo de ti (una cuenta que no cuadra, cuentas sin saldo inicial, transferencias por confirmar, archivos que Claude subió y no entraron solos), el mes en curso y lo más reciente. |
 | **Cuentas** (`/cuentas`) | Cuentas, tarjetas e inversiones con su saldo. Desde aquí importas un estado de cuenta o conectas Interactive Brokers. Cada cuenta abre su detalle: saldo, conciliación línea por línea, corte y pago mínimo de la tarjeta, posiciones. |
 | **Movimientos** (`/movimientos`) | Todo lo importado, con búsqueda por comercio, monto o nota, filtros por cuenta, categoría, fechas y tipo, y exportación a CSV. Tocar un movimiento abre Categorizar. |
 | **Gastos** (`/gastos`) | En qué se te va el mes por categoría, entradas y salidas por mes, las transferencias que esperan un sí o un no y las reglas (`/gastos/reglas`). |
 | **Asistente** | Un panel a la derecha en escritorio y una hoja en el teléfono. Le preguntas por tu dinero; propone cambios y tú decides cuáles aplicar. |
-| **Ajustes** (`/ajustes`) | Modo claro, oscuro o el del sistema; el PIN y este dispositivo; la conexión con Interactive Brokers; y tus reglas. |
+| **Ajustes** (`/ajustes`) | Modo claro, oscuro o el del sistema; el PIN y este dispositivo; las conexiones con Interactive Brokers, con los atajos del iPhone que anotan tus compras y con Claude; y tus reglas. |
 
 En un dispositivo de confianza entras con un PIN de 6 dígitos, y la app trae manifiesto
 e íconos para agregarla a la pantalla de inicio del teléfono.
@@ -63,7 +63,7 @@ leer.
 
 | Tabla | Qué guarda |
 |---|---|
-| `accounts` | Una por cuenta real, identificada como la identifica su banco: institución, número y moneda. Si el estado de cuenta trae número de cliente y de producto, cuenta el del producto. |
+| `accounts` | Una por cuenta real, identificada como la identifica su banco: institución, número y moneda. Si el estado de cuenta trae número de cliente y de producto, cuenta el del producto. La excepción es una tarjeta que paga otra persona: la agregas tú, con un alias y sus últimos 4 dígitos (`manual`, `paid_by_other`), y nada impreso entra en ella. Sus compras anotadas cuentan como gasto tuyo; su deuda no entra en lo que debes ni en tu patrimonio. |
 | `entries` | Una por línea impresa. Monto con signo desde tu punto de vista: un cargo de tarjeta es negativo, y una tarjeta que debe $14.30 tiene saldo −14.30. Fecha civil de Panamá, sin zona horaria que la corra un día. |
 | `statements` | Período y saldos del estado de cuenta: inicial, final, disponible, retenido. |
 | `balance_checkpoints` | «Al cierre de este día el saldo era X», del estado de cuenta, del Cash Report de IBKR o ingresado a mano. Uno por cuenta es el **ancla**. |
@@ -130,7 +130,8 @@ su contenido:
 |---|---|---|
 | Cuenta bancaria | `.xlsx` | Movimientos, saldo corrido por línea y el saldo total. Las fechas traen la hora de la descarga, no la del movimiento, así que solo se lee el día. La versión `.txt` de la misma exportación no dice de qué cuenta es y se rechaza (`account_not_stated`). |
 | Cuenta bancaria | `.csv` (Latin-1) | Producto, saldo inicial, en libros y disponible, con el resumen de débitos y créditos como control. |
-| Tarjeta de crédito | `.txt` | Movimientos y fecha de proceso. No trae saldos: la tarjeta queda **sin saldo inicial** hasta que anotas lo que debías al corte de un estado en PDF. |
+| Tarjeta de crédito | `.txt` o `.xlsx` | Movimientos y fecha de proceso. El mismo movimiento bajado en texto y en Excel es uno solo. No traen saldos: la tarjeta queda **sin saldo inicial** hasta que subes su estado cerrado en PDF o anotas lo que debías al corte. |
+| Estado cerrado de la tarjeta | `.pdf` | Solo el resumen: la fecha de corte y la deuda al corte, que queda como el saldo de la tarjeta ese día. La deuda anterior es la del corte previo y solo sirve para comprobar que el resumen cuadra. Sus movimientos se ignoran a propósito: no traen referencia, y llegan con el `.txt` o el `.xlsx`. Un PDF sin ese título y ese resumen no se reconoce (`unrecognised_format`). |
 | Interactive Brokers | Flex Web Service | Cash Transactions, Trades (Execution), Open Positions y Cash Report. |
 
 - **Reimportar es seguro.** La clave de dedup sale solo de la identidad externa de la
@@ -182,6 +183,15 @@ aplicar se vuelve a comprobar, y un `UPDATE` condicional hace que dos clics la a
 una sola vez. Nada de lo que puede proponer cambia un saldo, y ninguna herramienta mueve
 dinero.
 
+**Claude, desde fuera.** Con `PUBLIC_URL`, el mismo servidor responde en `/api/mcp` a
+Claude (claude.ai, su app y Claude Code), con un token propio por OAuth
+([ADR 0004](docs/adr/0004-claude-por-mcp.md)). Ahí lee lo mismo, más
+`list_pending_purchases`, `sync_plan` e `import_status`. Si la persona lo permite, además
+anota compras (`note_purchase`), pone categoría y nota (`set_category`, `set_note`) y
+entrega estados de cuenta (`prepare_import`). Nada de eso mueve un saldo, salvo el archivo
+que generó el propio banco, que entra solo si continúa una cuenta que ya existe y cuadra
+con ella; si no, queda por revisar en la app.
+
 **Ninguna herramienta acepta un `user_id`.** La identidad viene del token de la petición
 y queda fijada en el servidor MCP antes de que el modelo diga nada, así que no hay
 argumento que falsificar. Las descripciones de los movimientos entran al contexto del
@@ -219,7 +229,10 @@ Todo tiene un default que funciona; ver `.env.example`.
 | `AI_BUDGET_USD` / `AI_DAILY_BUDGET_USD` / `AI_USER_DAILY_BUDGET_USD` | `4.00` / `1.00` / `0.30` | Techos de gasto del asistente. |
 | `AI_MAX_TOOL_TURNS` | `4` | Vueltas de herramientas por mensaje. |
 | `IBKR_TOKEN_ENCRYPTION_KEY` | *(vacío)* | 32 bytes en base64 (`openssl rand -base64 32`). Cifra el token de IBKR. Vacío, vincular IBKR se rechaza. Cambiarlo invalida el token guardado. |
+| `PUBLIC_URL` | *(vacío)* | La dirección de la app, sin path (`https://chenchen.example.com`). Con ella, Claude puede conectarse a chenchén por OAuth y MCP ([ADR 0004](docs/adr/0004-claude-por-mcp.md)). Vacía, esas rutas responden 404 y todo lo demás sigue igual. Solo `localhost` admite `http`. Déjala vacía hasta que estén desplegados el endpoint del MCP y la página `/conectar`. |
+| `OAUTH_RATE_LIMIT` | `30` | Pedidos por minuto y por dirección a `/api/oauth/authorize` y a `/api/oauth/token`, contados por separado. |
 | `ENV` / `LOG_LEVEL` | `development` / `info` | `production` pasa los logs a JSON. |
+| `VITE_SHORTCUT_URL` | *(vacío)* | Opcional, al construir la imagen de la web: el enlace https de iCloud a un atajo listo para anotar compras desde el iPhone. Vacío, la web muestra solo los pasos para armarlo. Cambiarlo pide reconstruir la imagen; nunca es un secreto. |
 
 ---
 
@@ -230,7 +243,7 @@ api/
   cmd/api                 la API
   cmd/import              importa un archivo a mano contra la base
   cmd/ibkrsync            sincroniza todas las cuentas de IBKR, una pasada
-  internal/statement      parsers puros: cuenta .xlsx, cuenta .csv y tarjeta .txt
+  internal/statement      parsers puros: cuenta .xlsx, cuenta .csv, tarjeta .txt y .xlsx, estado .pdf
   internal/ibkr           cliente y parser del Flex Web Service
   internal/imports        un archivo → una transacción
   internal/accounts       saldos, anclas, conciliación

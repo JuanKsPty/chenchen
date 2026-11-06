@@ -58,7 +58,7 @@ func TestDryRunRejectsAnUnknownFormat(t *testing.T) {
 		t.Errorf("status = %d, want 422", rec.Code)
 	}
 	code, message := problem(t, rec)
-	if code != "unrecognised_format" || !strings.Contains(message, "(.csv, .txt o .xlsx)") {
+	if code != "unrecognised_format" || !strings.Contains(message, "(.csv, .txt, .xlsx o .pdf)") {
 		t.Errorf("problem = %s %q", code, message)
 	}
 }
@@ -69,6 +69,47 @@ func TestDryRunAsksForTheExportThatNamesTheAccount(t *testing.T) {
 	rec := upload(t, "movimientos.txt", []byte(txt))
 	code, message := problem(t, rec)
 	if rec.Code != http.StatusUnprocessableEntity || code != "account_not_stated" || !strings.Contains(message, ".xlsx") {
+		t.Errorf("status %d, problem = %s %q", rec.Code, code, message)
+	}
+}
+
+// A card's closed statement, as a PDF, reports what it printed: no lines, and
+// the debt at the cut as the holder's balance. The debt before it is the
+// previous cut's, so it is no opening.
+func TestDryRunReadsACardStatementPDF(t *testing.T) {
+	rec := upload(t, "estado.pdf", cardStatementPDF(t, owedAndPaid, ""))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", rec.Code, rec.Body)
+	}
+	var got FileView
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	s := got.Statements[0]
+	if got.Source != SourceBGCardStatement || s.ExternalNumber != "**** 1111" || s.LineCount != 0 {
+		t.Errorf("report = %+v", got)
+	}
+	if s.Opening != nil || s.Closing == nil || s.Closing.Formatted != "4.10" {
+		t.Errorf("opening/closing = %+v / %+v, want none / 4.10", s.Opening, s.Closing)
+	}
+}
+
+// A PDF that needs a password cannot be read, and says so like any other
+// unreadable statement.
+func TestDryRunCallsAnEncryptedPDFUnreadable(t *testing.T) {
+	rec := upload(t, "estado.pdf", cardStatementPDF(t, owedAndPaid, "secreto"))
+	code, message := problem(t, rec)
+	if rec.Code != http.StatusUnprocessableEntity || code != "unreadable_statement" {
+		t.Errorf("status %d, problem = %s %q", rec.Code, code, message)
+	}
+}
+
+// A PDF that opens but is not a card's closed statement is a file we do not
+// know, the same answer as any other file we do not know.
+func TestDryRunCallsAnotherPDFUnrecognised(t *testing.T) {
+	rec := upload(t, "factura.pdf", placedPDF([]placed{{20, 65, 12, "Factura 0001"}}))
+	code, message := problem(t, rec)
+	if rec.Code != http.StatusUnprocessableEntity || code != "unrecognised_format" {
 		t.Errorf("status %d, problem = %s %q", rec.Code, code, message)
 	}
 }

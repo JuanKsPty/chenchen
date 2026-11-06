@@ -1,11 +1,13 @@
 /**
  * <AccountGroup title total? accounts? headingLevel? className? children? />
  *
- *   title         "Cuentas", "Tarjetas" or "Inversiones"
- *   total         the group's total, right of the title (600, tabular, text colour)
+ *   title         "Cuentas", "Tarjetas", "Inversiones" or "Tarjetas de otros"
+ *   total         the group's total, right of the title (600, tabular, text colour);
+ *                 none for Tarjetas de otros
  *   accounts      rendered as <AccountRow>s, in the order given
  *   children      extra rows after the accounts, e.g. a ghost "Conectar Interactive
- *                 Brokers" button in Inversiones
+ *                 Brokers" button in Inversiones, "Agregar tarjeta de otra persona"
+ *                 in Tarjetas de otros
  *   headingLevel  2 (default) or 3
  *
  * With lib/account `groupAccounts(accounts)`:

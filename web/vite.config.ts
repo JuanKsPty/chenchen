@@ -25,6 +25,12 @@ export default defineConfig({
         target: 'http://localhost:8080',
         changeOrigin: true,
       },
+      // Claude's discovery documents, which live at the root of the domain (see
+      // nginx.conf), so a connection to a local API can be tried from here too.
+      '/.well-known/oauth-': {
+        target: 'http://localhost:8080',
+        changeOrigin: true,
+      },
     },
   },
   build: {

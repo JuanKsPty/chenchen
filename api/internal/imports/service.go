@@ -16,6 +16,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/JuanKsPty/chenchen/api/internal/captures"
 	"github.com/JuanKsPty/chenchen/api/internal/categories"
 	"github.com/JuanKsPty/chenchen/api/internal/civil"
 	"github.com/JuanKsPty/chenchen/api/internal/logging"
@@ -58,11 +59,30 @@ type AccountResult struct {
 	Warnings     []string
 	NeedsOpening bool
 	RunID        uuid.UUID
+	// CapturesLinked counts the purchases the owner noted that this import
+	// linked to their lines, and CapturesMissing those it is the first
+	// statement to pass without printing: they stop counting and wait in
+	// review.
+	CapturesLinked  int
+	CapturesMissing int
 }
 
 // ErrAccountMismatch means the caller imported from one account's page a file
 // that belongs to a different account.
 var ErrAccountMismatch = errors.New("imports: the file belongs to a different account")
+
+// ErrPaidByOther means the file holds a statement for a card someone else
+// pays. That card is kept by hand, on the purchases the owner notes; its
+// statement, filed as a card of its own, would count each of them twice and
+// make another person's debt the owner's.
+var ErrPaidByOther = errors.New("imports: the statement is for a card someone else pays")
+
+// paidByOtherError is ErrPaidByOther for the card ending in last4, which the
+// message names: one file can hold several cards' statements.
+type paidByOtherError struct{ last4 string }
+
+func (e paidByOtherError) Error() string        { return ErrPaidByOther.Error() + ", ending in " + e.last4 }
+func (e paidByOtherError) Is(target error) bool { return target == ErrPaidByOther }
 
 // ErrUnreadable wraps a structural problem in the file, such as an unreadable
 // date or a missing column. Unwrap it for the parser's own message.
@@ -79,17 +99,52 @@ var ErrUnreadable = errors.New("imports: unreadable statement")
 // import started from an account's own page — a file for any other account is
 // refused rather than silently filed elsewhere.
 func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string, data []byte, expect *uuid.UUID) (Result, error) {
-	sum := sha256.Sum256(data)
-	sha := hex.EncodeToString(sum[:])
+	parsed, err := Parse(filename, data)
+	if err != nil {
+		return Result{}, err
+	}
+	return s.store(ctx, userID, filename, data, parsed, expect, nil)
+}
 
+// Parse reads a file as Import does, with Import's errors: one it cannot read
+// is ErrUnreadable, statement.ErrUnrecognised or statement.ErrAccountNotStated.
+func Parse(filename string, data []byte) (statement.File, error) {
 	parsed, err := statement.Parse(filename, data)
 	if err != nil {
 		if errors.Is(err, statement.ErrUnrecognised) || errors.Is(err, statement.ErrAccountNotStated) {
-			return Result{}, err
+			return statement.File{}, err
 		}
-		return Result{}, unreadableError{err}
+		return statement.File{}, unreadableError{err}
 	}
+	return parsed, nil
+}
+
+// Gate decides, for each statement of a file, whether it may be stored. It
+// runs inside the import's transaction, under the user's lock, once the
+// statement's account is known — created is true when the import itself just
+// created it — and before anything of the statement is written. An error
+// stops the whole file: the transaction rolls back, the account just created
+// with it, and Import returns the error as it is.
+type Gate func(ctx context.Context, q *store.Queries, account store.Account, created bool, st statement.Statement) error
+
+// ImportGated stores a file already parsed (Parse) from data, as Import does,
+// asking gate about each statement first.
+func (s *Service) ImportGated(ctx context.Context, userID uuid.UUID, filename string, data []byte, parsed statement.File,
+	expect *uuid.UUID, gate Gate) (Result, error) {
+	return s.store(ctx, userID, filename, data, parsed, expect, gate)
+}
+
+func (s *Service) store(ctx context.Context, userID uuid.UUID, filename string, data []byte, parsed statement.File,
+	expect *uuid.UUID, gate Gate) (Result, error) {
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
 	result := Result{Source: parsed.Source}
+	// A format whose bytes differ on every download (the time is printed in
+	// it) is recognised by what it says instead, so a second download of the
+	// same statement is nothing new rather than a second, identical import.
+	if key, ok := parsed.ContentKey(); ok {
+		sha = key
+	}
 
 	if prior, err := s.db.Q().ImportRunByContent(ctx, userID, sha); err == nil {
 		result.Unchanged = true
@@ -101,7 +156,7 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		return Result{}, err
 	}
 
-	err = s.db.InTx(ctx, func(q *store.Queries) error {
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
 		if err := q.LockUser(ctx, userID); err != nil {
 			return err
 		}
@@ -116,10 +171,14 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		if err != nil {
 			return err
 		}
+		missingBefore, err := q.MissingCaptures(ctx, userID)
+		if err != nil {
+			return err
+		}
 		var from, to civil.Date
 		for _, st := range parsed.Statements {
 			holders := holderNames(owner.FullName, st.Identity.Holder)
-			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, holders, expect)
+			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, holders, expect, gate)
 			if err != nil {
 				return err
 			}
@@ -133,8 +192,13 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		}
 		// A card payment and its bank debit are one transfer; matched now,
 		// neither counts as spending.
-		_, err = transfers.AutoMatch(ctx, q, userID, from, to)
-		return err
+		if _, err := transfers.AutoMatch(ctx, q, userID, from, to); err != nil {
+			return err
+		}
+		// Then the purchases the owner noted find their lines: after the
+		// transfers, so a line just found to be one is not taken for a
+		// purchase.
+		return linkCaptures(ctx, q, userID, missingBefore, result.Accounts)
 	})
 	if err != nil {
 		return Result{}, err
@@ -143,14 +207,15 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 	for _, a := range result.Accounts {
 		logging.FromContext(ctx).Info("statement imported", "account_id", a.AccountID,
 			"source", parsed.Source, "period_start", a.PeriodStart.String(), "period_end", a.PeriodEnd.String(),
-			"new", a.New, "duplicates", a.Duplicates, "warnings", len(a.Warnings))
+			"new", a.New, "duplicates", a.Duplicates, "warnings", len(a.Warnings),
+			"captures_linked", a.CapturesLinked, "captures_missing", a.CapturesMissing)
 	}
 	return result, nil
 }
 
 func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID uuid.UUID, source statement.Source,
 	filename, sha string, st statement.Statement, rules []store.CategoryRule, holders []holderName,
-	expect *uuid.UUID) (AccountResult, error) {
+	expect *uuid.UUID, gate Gate) (AccountResult, error) {
 	id := st.Identity
 	if st.PeriodStart.IsZero() || st.PeriodEnd.IsZero() {
 		// Only possible for a file with no movements and no stated date,
@@ -166,8 +231,19 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 	if err != nil {
 		return AccountResult{}, err
 	}
+	if gate != nil {
+		if err := gate(ctx, q, account, created, st); err != nil {
+			return AccountResult{}, err
+		}
+	}
 	if expect != nil && account.ID != *expect {
 		return AccountResult{}, fmt.Errorf("%w: %s %s", ErrAccountMismatch, id.Institution, id.ExternalNumber)
+	}
+	// The account just created, if any, goes with the transaction.
+	if last4, err := paidByOther(ctx, q, userID, st); err != nil {
+		return AccountResult{}, err
+	} else if last4 != "" {
+		return AccountResult{}, paidByOtherError{last4}
 	}
 
 	run := store.ImportRun{
@@ -200,12 +276,12 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 			Raw: l.Raw,
 		}
 		m := matchRules(l, rules)
-		if m.categoryID != nil {
+		if m.CategoryID != nil {
 			src := "rule"
-			e.CategoryID, e.CategorySource = m.categoryID, &src
+			e.CategoryID, e.CategorySource = m.CategoryID, &src
 		}
-		if m.setKind != nil && *m.setKind != e.Kind {
-			e.UserKind = m.setKind
+		if m.SetKind != nil && *m.SetKind != e.Kind {
+			e.UserKind = m.SetKind
 		}
 		entries = append(entries, e)
 	}
@@ -274,6 +350,71 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 		res.NeedsOpening = len(cps) == 0
 	}
 	return res, nil
+}
+
+// paidByOther returns the last four digits of the card someone else pays that
+// st is a statement of, or that one of its lines was made with, or "" when it
+// is neither. One account's statement can carry several cards, and the one the
+// owner uses may be any of them.
+func paidByOther(ctx context.Context, q *store.Queries, userID uuid.UUID, st statement.Statement) (string, error) {
+	if st.Identity.Type != "credit_card" {
+		return "", nil
+	}
+	accounts, err := q.AccountsByUser(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	byHand := map[string]bool{}
+	for _, a := range accounts {
+		if a.KeptByHand() {
+			byHand[store.LastFour(a.ExternalNumber)] = true
+		}
+	}
+	if len(byHand) == 0 {
+		return "", nil
+	}
+	numbers := []string{st.Identity.ExternalNumber}
+	for _, l := range st.Lines {
+		numbers = append(numbers, l.Raw["Tarjeta"])
+	}
+	for _, n := range numbers {
+		if last4 := store.LastFour(n); last4 != "" && byHand[last4] {
+			return last4, nil
+		}
+	}
+	return "", nil
+}
+
+// linkCaptures links each imported account's noted purchases to their lines
+// and counts, per account, the purchases this import linked and those it made
+// missing: missing now and not before it.
+func linkCaptures(ctx context.Context, q *store.Queries, userID uuid.UUID, missingBefore map[uuid.UUID]uuid.UUID,
+	results []AccountResult) error {
+	at := map[uuid.UUID]int{}
+	for i := range results {
+		if _, seen := at[results[i].AccountID]; seen {
+			continue
+		}
+		at[results[i].AccountID] = i
+		n, err := captures.AutoLink(ctx, q, userID, []uuid.UUID{results[i].AccountID})
+		if err != nil {
+			return err
+		}
+		results[i].CapturesLinked = n
+	}
+	missing, err := q.MissingCaptures(ctx, userID)
+	if err != nil {
+		return err
+	}
+	for id, account := range missing {
+		if _, was := missingBefore[id]; was {
+			continue
+		}
+		if i, ok := at[account]; ok {
+			results[i].CapturesMissing++
+		}
+	}
+	return nil
 }
 
 // seedDefaultRules gives the user the default card rules the first time they

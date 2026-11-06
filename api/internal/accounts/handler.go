@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -29,6 +30,7 @@ func NewHandler(svc *Service) *Handler { return &Handler{svc: svc} }
 func (h *Handler) Routes(entries http.HandlerFunc) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
+	r.Post("/", h.addHandCard)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
@@ -72,6 +74,34 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, NewView(a))
+}
+
+type handCardRequest struct {
+	// ID, when the form chooses one, makes adding safe to send again.
+	ID    *uuid.UUID `json:"id"`
+	Alias string     `json:"alias"`
+	// Last4 is the card's last four digits, as Wallet shows them.
+	Last4 string `json:"last4"`
+}
+
+// addHandCard adds a card someone else pays. Every other account comes from a
+// statement or a sync; this one only from the owner.
+func (h *Handler) addHandCard(w http.ResponseWriter, r *http.Request) {
+	var body handCardRequest
+	if err := httpx.Decode(w, r, &body); err != nil {
+		httpx.Fail(w, r, err)
+		return
+	}
+	id := uuid.Nil
+	if body.ID != nil {
+		id = *body.ID
+	}
+	a, err := h.svc.AddHandCard(r.Context(), identity.MustFromContext(r.Context()), id, body.Alias, strings.TrimSpace(body.Last4))
+	if err != nil {
+		httpx.Fail(w, r, TranslateError(err))
+		return
+	}
+	httpx.JSON(w, r, http.StatusCreated, NewView(a))
 }
 
 type updateRequest struct {
@@ -255,8 +285,36 @@ func (h *Handler) reconciliation(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, newReconciliationView(rec))
 }
 
+// fieldErrors are the errors about one request field, with what the owner is
+// told about it.
+var fieldErrors = []struct {
+	err            error
+	field, message string
+}{
+	{ErrAliasTooLong, "alias", fmt.Sprintf("El alias admite como máximo %d caracteres.", maxAliasRunes)},
+	{ErrAliasInvalid, "alias", "El alias tiene caracteres que no se pueden mostrar."},
+	{ErrAliasRequired, "alias", "Ponle un nombre a la tarjeta."},
+	{ErrLast4Invalid, "last4", "Escribe los últimos 4 dígitos de la tarjeta."},
+}
+
+// fieldProblems is what err says about each request field: every field at
+// once when err joins several, so a form hears of all its mistakes together.
+func fieldProblems(err error) map[string]string {
+	problems := map[string]string{}
+	for _, f := range fieldErrors {
+		if _, seen := problems[f.field]; !seen && errors.Is(err, f.err) {
+			problems[f.field] = f.message
+		}
+	}
+	return problems
+}
+
 // TranslateError maps this package's errors to HTTP responses.
 func TranslateError(err error) error {
+	if problems := fieldProblems(err); len(problems) > 0 {
+		return httpx.Invalid(problems).WithCause(err)
+	}
+	var taken HandCardTakenError
 	switch {
 	case errors.Is(err, ErrNotFound):
 		return httpx.NotFound("account_not_found", "La cuenta no existe.").WithCause(err)
@@ -265,14 +323,16 @@ func TranslateError(err error) error {
 	case errors.Is(err, ErrNotRelabelable):
 		return httpx.Unprocessable("not_relabelable",
 			"Solo una cuenta bancaria puede marcarse como corriente o de ahorros.").WithCause(err)
-	case errors.Is(err, ErrAliasTooLong):
-		return httpx.Invalid(map[string]string{
-			"alias": fmt.Sprintf("El alias admite como máximo %d caracteres.", maxAliasRunes),
-		}).WithCause(err)
-	case errors.Is(err, ErrAliasInvalid):
-		return httpx.Invalid(map[string]string{
-			"alias": "El alias tiene caracteres que no se pueden mostrar.",
-		}).WithCause(err)
+	case errors.As(err, &taken) && taken.Printed:
+		return httpx.Conflict("card_imported",
+			fmt.Sprintf("Ya importas los estados de una tarjeta que termina en %s.", taken.Last4)).WithCause(err)
+	case errors.As(err, &taken):
+		return httpx.Conflict("hand_card_taken",
+			fmt.Sprintf("Ya tienes una tarjeta de otra persona que termina en %s.", taken.Last4)).WithCause(err)
+	case errors.Is(err, ErrIDTaken):
+		return httpx.Conflict("account_id_taken", "Esa tarjeta ya existe. Abre el formulario de nuevo y agrégala otra vez.").WithCause(err)
+	case errors.Is(err, ErrKeptByHand):
+		return httpx.Unprocessable("kept_by_hand", "Esta tarjeta la paga otra persona: no lleva saldo.").WithCause(err)
 	default:
 		return err
 	}
@@ -291,7 +351,11 @@ type View struct {
 	Alias          string       `json:"alias,omitempty"`
 	Currency       string       `json:"currency"`
 	Balance        money.Amount `json:"balance"`
+	// PaidByOther marks a card someone else pays: its purchases count as the
+	// owner's spending, its debt is not theirs. Absent for every other account.
+	PaidByOther bool `json:"paid_by_other,omitempty"`
 	// Owed is a card's balance as the bank prints it: a positive amount owed.
+	// Absent for a card someone else pays, whose debt the owner does not owe.
 	Owed      *money.Amount `json:"owed,omitempty"`
 	Anchored  bool          `json:"anchored"`
 	Holdings  *money.Amount `json:"holdings,omitempty"`
@@ -303,6 +367,42 @@ type View struct {
 	Statement *CardStatementView `json:"statement,omitempty"`
 	// LastSyncedAt is a brokerage account's last successful IBKR sync.
 	LastSyncedAt *time.Time `json:"last_synced_at,omitempty"`
+	// Pending is what purchases noted but not yet printed come to; absent
+	// when there are none. They are not in Balance.
+	Pending *PendingView `json:"pending,omitempty"`
+	// EstimatedBalance is Balance with the pending purchases in it: only for
+	// an anchored account that has some, since an unanchored balance is not
+	// the bank's to begin with.
+	EstimatedBalance *money.Amount `json:"estimated_balance,omitempty"`
+	// ToReview counts the noted purchases the owner should look at.
+	ToReview int `json:"to_review,omitempty"`
+	// Shortcut is the account's shortcut key as the owner sees it; absent
+	// for a brokerage account, which takes no purchases.
+	Shortcut *ShortcutView `json:"shortcut,omitempty"`
+	// ThisMonth is what a card someone else pays was used for this calendar
+	// month, positive: what the owner sees in place of what it owes. Present,
+	// zero included, only for such a card.
+	ThisMonth *money.Amount `json:"this_month,omitempty"`
+}
+
+// ShortcutView is an account's shortcut key on the wire: whether it has one
+// that works and what the owner may know of it, never the key. Hint is its
+// last four characters. LastCaptureAt is the last purchase it noted, and
+// TestedAt the last run by hand; CardLabel the first card name it sent.
+type ShortcutView struct {
+	Configured    bool       `json:"configured"`
+	Hint          string     `json:"hint,omitempty"`
+	CreatedAt     *time.Time `json:"created_at,omitempty"`
+	TestedAt      *time.Time `json:"tested_at,omitempty"`
+	LastCaptureAt *time.Time `json:"last_capture_at,omitempty"`
+	CardLabel     string     `json:"card_label,omitempty"`
+}
+
+// PendingView is an account's pending purchases on the wire. Amount is signed
+// like the balance: negative.
+type PendingView struct {
+	Amount money.Amount `json:"amount"`
+	Count  int          `json:"count"`
 }
 
 // CardStatementView is a CardStatement on the wire. DueOn and MinimumPayment
@@ -328,21 +428,42 @@ func NewView(a Account) View {
 		ID: a.ID, Class: a.Class, Type: a.Type, Institution: a.Institution, ExternalNumber: a.ExternalNumber,
 		DisplayName: a.DisplayName, Alias: a.Alias, Currency: a.Currency, Balance: a.Balance.Amount(),
 		Anchored: a.Anchored, Movements: a.Movements, LastDay: a.LastDay, LastSyncedAt: a.LastSyncedAt,
+		ToReview: a.ToReview, PaidByOther: a.PaidByOther,
 	}
-	if st := a.Statement; st != nil {
+	if a.PendingCount > 0 {
+		v.Pending = &PendingView{Amount: a.Pending.Amount(), Count: a.PendingCount}
+		if a.Anchored {
+			estimated := (a.Balance + a.Pending).Amount()
+			v.EstimatedBalance = &estimated
+		}
+	}
+	// A card someone else pays has no debt of the owner's, nor a statement
+	// they must act on: only what it was used for this month.
+	if a.PaidByOther {
+		month := a.ThisMonth.Amount()
+		v.ThisMonth = &month
+	}
+	if st := a.Statement; st != nil && !a.PaidByOther {
 		v.Statement = &CardStatementView{ClosingOn: st.ClosingOn, DueOn: st.DueOn}
 		if st.MinimumPayment != nil {
 			m := st.MinimumPayment.Amount()
 			v.Statement.MinimumPayment = &m
 		}
 	}
-	if a.Class == "liability" {
+	if a.Class == "liability" && !a.PaidByOther {
 		owed := (-a.Balance).Amount()
 		v.Owed = &owed
 	}
 	if a.Type == "brokerage" {
 		h := a.Holdings.Amount()
 		v.Holdings = &h
+	} else {
+		v.Shortcut = &ShortcutView{}
+		if k := a.CaptureKey; k != nil {
+			created := k.CreatedAt
+			v.Shortcut = &ShortcutView{Configured: true, Hint: k.Hint, CreatedAt: &created, TestedAt: k.TestedAt,
+				LastCaptureAt: k.LastUsedAt, CardLabel: k.CardLabel}
+		}
 	}
 	if d := a.Drift; d != nil {
 		v.Drift = &DriftView{AsOf: d.AsOf, Stated: d.Stated.Amount(), Computed: d.Computed.Amount(),
@@ -368,13 +489,14 @@ type NetWorthView struct {
 	Unanchored int          `json:"unanchored"`
 }
 
-// NewListView builds the account list.
+// NewListView builds the account list. A card someone else pays never makes
+// the net worth incomplete: it is not part of it.
 func NewListView(list []Account) ListView {
 	views := make([]View, 0, len(list))
 	unanchored := 0
 	for _, a := range list {
 		views = append(views, NewView(a))
-		if !a.Anchored && a.Movements > 0 {
+		if !a.Anchored && a.Movements > 0 && !a.PaidByOther {
 			unanchored++
 		}
 	}

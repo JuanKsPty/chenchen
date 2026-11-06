@@ -9,13 +9,14 @@
  *     "Entradas y salidas" for the four months ending with this one
  *   - "Por categoría": every category by amount, "Sin categoría" last, "Ver reglas"
  *   - "Entradas de octubre" by category, and beside it (or under it) the transfers
- *     waiting for a yes or no, #transferencias
+ *     waiting for a yes or no, #transferencias, and the purchases the owner noted that
+ *     their statement does not confirm, #compras
  *
  * One column below lg; 16px between cards on mobile, 24 from lg. With no accounts
  * yet, the page is the empty state with the import action.
  *
- * #transferencias appears only once its data loads, so the shell cannot scroll to it
- * on arrival: the page does, once everything above it has its final height.
+ * #transferencias and #compras appear only once their data loads, so the shell cannot
+ * scroll to them on arrival: the page does, once everything above has its final height.
  */
 import { FileUpIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
@@ -23,6 +24,7 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 
 import { useImport } from '@/components/import/ImportProvider'
 import { EmptyState, PageHeader } from '@/components/kit'
+import { CAPTURES_ID, CaptureReview } from '@/components/spending/CaptureReview'
 import { IncomeByCategory, SpendingByCategory } from '@/components/spending/CategoryCards'
 import { MonthPicker } from '@/components/spending/MonthPicker'
 import { OutflowCard } from '@/components/spending/OutflowCard'
@@ -35,6 +37,7 @@ import { monthBounds, shiftMonth } from '@/lib/format'
 import { parseSpendingMonth } from '@/lib/nav'
 import {
   useAccounts,
+  useCaptureReview,
   useCategories,
   useCategoryTotals,
   useFlow,
@@ -48,9 +51,14 @@ export function SpendingPage() {
   const period = spendingPeriod(parseSpendingMonth(params))
   const accounts = useAccounts()
   const { openImport } = useImport()
-  const wantsTransfers = useLocation().hash === `#${TRANSFERS_ID}`
+  const hash = useLocation().hash
+  const wantsTransfers = hash === `#${TRANSFERS_ID}`
+  const wantsCaptures = hash === `#${CAPTURES_ID}`
 
-  useScrollToTransfers(wantsTransfers, period)
+  useScrollToSection(
+    wantsTransfers ? TRANSFERS_ID : wantsCaptures ? CAPTURES_ID : null,
+    period,
+  )
 
   if (accounts.data && accounts.data.accounts.length === 0) {
     return (
@@ -91,19 +99,21 @@ export function SpendingPage() {
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(22rem,100%),1fr))] items-start gap-4 lg:gap-6">
         <IncomeByCategory period={period} />
         <TransferSuggestions keepWhenEmpty={wantsTransfers} />
+        <CaptureReview keepWhenEmpty={wantsCaptures} />
       </div>
     </div>
   )
 }
 
 /**
- * Scrolls #transferencias into view once, 16px under whichever bar shows (as the
- * shell does for targets present on arrival), after the cards above it have loaded
- * so their skeletons cannot push it away again.
+ * Scrolls #transferencias or #compras (`id`; null for neither) into view once, 16px
+ * under whichever bar shows (as the shell does for targets present on arrival), after
+ * every card around it has loaded so their skeletons cannot push it away again.
  */
-function useScrollToTransfers(wanted: boolean, period: SpendingPeriod) {
+function useScrollToSection(id: string | null, period: SpendingPeriod) {
   const done = useRef(false)
   const suggestions = useTransferSuggestions()
+  const review = useCaptureReview()
   const categories = useCategories()
   const flow = useFlow({
     from: monthBounds(shiftMonth(period.month, -3)).from,
@@ -112,11 +122,13 @@ function useScrollToTransfers(wanted: boolean, period: SpendingPeriod) {
   })
   const spend = useCategoryTotals({ from: period.from, to: period.to, kind: 'spend' })
   const income = useCategoryTotals({ from: period.from, to: period.to, kind: 'income' })
-  const ready = [suggestions, categories, flow, spend, income].every((q) => !q.isPending)
+  const ready = [suggestions, review, categories, flow, spend, income].every(
+    (q) => !q.isPending,
+  )
 
   useEffect(() => {
-    if (!wanted || !ready || done.current) return
-    const target = document.getElementById(TRANSFERS_ID)
+    if (!id || !ready || done.current) return
+    const target = document.getElementById(id)
     if (!target) return
     const frame = requestAnimationFrame(() => {
       done.current = true
@@ -126,5 +138,5 @@ function useScrollToTransfers(wanted: boolean, period: SpendingPeriod) {
       window.scrollTo(0, Math.max(0, top))
     })
     return () => cancelAnimationFrame(frame)
-  }, [wanted, ready])
+  }, [id, ready])
 }

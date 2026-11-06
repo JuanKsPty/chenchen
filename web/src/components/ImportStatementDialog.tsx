@@ -11,7 +11,7 @@
  * instead of being filed somewhere unexpected.
  *
  * The flow, in one dialog (a bottom sheet below lg):
- *   1. Pick a .txt, .csv or .xlsx (button or drop). Then either
+ *   1. Pick a .txt, .csv, .xlsx or .pdf (button or drop). Then either
  *      "Importar" (primary), or "Solo revisar" (ghost): a dry run that shows what
  *      the file says without writing anything, with "Importar ahora" after it.
  *   2. The result, per voice.importResult: "Listo: 12 movimientos nuevos …",
@@ -21,7 +21,7 @@
  * finish, and a toast says how it went; reopening before then shows it running.
  */
 import { CircleAlertIcon } from 'lucide-react'
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
 
 import { ApiError } from '@/api/client'
@@ -36,15 +36,14 @@ import {
 } from '@/components/accounts/ImportOutcome'
 import { ImportFilePicker } from '@/components/accounts/ImportFilePicker'
 import { ResponsiveDialogContent } from '@/components/accounts/ResponsiveDialog'
+import { DIALOG_TITLE, useDialogRound, useViewFocus } from '@/components/import/flow'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Dialog } from '@/components/ui/dialog'
 import { Spinner } from '@/components/ui/spinner'
 import { useAccounts, useDryRunStatement, useImportStatement } from '@/lib/queries'
 
-// A view change replaces the button that had the focus: move it to the new
-// view's title (or back to the picker), so a screen reader hears the result.
-const TITLE = '[role="dialog"] [data-slot="dialog-title"]'
+// Starting over replaces the button that had the focus: move it back to the picker.
 const PICKER = '[role="dialog"] [data-import-picker]'
 // A running import or check disables its button, which drops the focus; when it
 // fails, the focus goes back to that button, next to the message.
@@ -64,34 +63,21 @@ export function ImportStatementDialog({
   /** Lock the import to this account. */
   accountId?: string
 }) {
-  // A new session on every opening: the flow below remounts and starts clean,
-  // while a closing dialog keeps showing what it showed as it fades out. An import
-  // still running keeps its flow instead: reopened, the dialog shows that import
-  // finishing (and how it went), not a fresh picker that could start another.
-  const [session, setSession] = useState(0)
-  const [sessionAccountId, setSessionAccountId] = useState(accountId)
-  const [importing, setImporting] = useState(false)
-  const [wasOpen, setWasOpen] = useState(open)
-  if (open !== wasOpen) {
-    setWasOpen(open)
-    if (open && !importing) {
-      setSession((n) => n + 1)
-      setSessionAccountId(accountId)
-    }
-  }
-  const isOpen = useRef(open)
-  useEffect(() => {
-    isOpen.current = open
-  }, [open])
+  // A new session on every opening, so the flow starts again at the picker; an
+  // import still running keeps its session, and reopening shows it finishing.
+  const { round, isOpen, setBusy } = useDialogRound(open)
+  // The account a session is locked to is the one asked for when it began.
+  const [session, setSession] = useState({ round, accountId })
+  if (session.round !== round) setSession({ round, accountId })
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <ImportFlow
-        key={session}
-        accountId={sessionAccountId}
+        key={round}
+        accountId={session.accountId}
         isOpen={isOpen}
         close={() => onOpenChange(false)}
-        onImportingChange={setImporting}
+        onImportingChange={setBusy}
       />
     </Dialog>
   )
@@ -130,18 +116,7 @@ function ImportFlow({
         ? 'checked'
         : 'pick'
 
-  // Focus moves once the new view is in the DOM, in the same commit, and only
-  // when that view is the one asked for (never the old view's title).
-  const pendingFocus = useRef<{ view: View; selector: string } | null>(null)
-  const focusOn = (next: View, selector: string) => {
-    pendingFocus.current = { view: next, selector }
-  }
-  useLayoutEffect(() => {
-    const request = pendingFocus.current
-    if (!request || request.view !== shown) return
-    pendingFocus.current = null
-    document.querySelector<HTMLElement>(request.selector)?.focus()
-  })
+  const focusOn = useViewFocus(shown)
 
   const choose = (next: File) => {
     setFile(next)
@@ -159,7 +134,7 @@ function ImportFlow({
       { file, accountId },
       {
         onSuccess: (result) => {
-          focusOn('imported', TITLE)
+          focusOn('imported', DIALOG_TITLE)
           setView('imported')
           if (!isOpen.current) toast(importHeadline(result))
         },
@@ -168,7 +143,7 @@ function ImportFlow({
             focusOn(view, ACTION('import'))
             return
           }
-          const failure = failureText(error, lockedTo)
+          const failure = importFailureText(error, lockedTo)
           toast(`No pudimos importar ${file.name}. ${failure}`)
         },
       },
@@ -180,7 +155,7 @@ function ImportFlow({
     upload.reset()
     check.mutate(file, {
       onSuccess: () => {
-        focusOn('checked', TITLE)
+        focusOn('checked', DIALOG_TITLE)
         setView('checked')
       },
       onError: () => focusOn('pick', ACTION('check')),
@@ -314,8 +289,8 @@ function ImportFlow({
 function Instructions({ accountId, lockedTo }: { accountId?: string; lockedTo?: Account }) {
   return (
     <>
-      Sube el estado de cuenta que te da tu banco (.csv, .txt o .xlsx). Si un movimiento ya
-      estaba, no lo repetimos.
+      Sube el estado de cuenta que te da tu banco (.csv, .txt, .xlsx o .pdf). Si un
+      movimiento ya estaba, no lo repetimos.
       {accountId && lockedTo && (
         <>
           {' '}
@@ -344,7 +319,7 @@ function Failure({
       <AlertTitle>
         {upload ? 'No pudimos importar el archivo' : 'No pudimos leer el archivo'}
       </AlertTitle>
-      <AlertDescription>{failureText(error, lockedTo)}</AlertDescription>
+      <AlertDescription>{importFailureText(error, lockedTo)}</AlertDescription>
     </Alert>
   )
 }
@@ -354,13 +329,13 @@ function Failure({
  * this dialog; an unreadable statement keeps the line number the server names
  * ("La línea 8 del archivo…", or "line 8" from an older server). Anything else the
  * server says in a 4xx is shown as it comes, and a 5xx or a network failure is the
- * generic line.
+ * generic line. The review of a file Claude sent (UploadReviewDialog) says the same.
  */
-function failureText(error: Error, lockedTo?: Account): string {
+export function importFailureText(error: Error, lockedTo?: Account): string {
   if (!(error instanceof ApiError)) return GENERIC_ERROR
   switch (error.code) {
     case 'unrecognised_format':
-      return 'No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt o .xlsx).'
+      return 'No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt, .xlsx o .pdf).'
     case 'unreadable_statement': {
       const line = /\b(?:line|l[ií]nea) (\d+)/i.exec(error.message)?.[1]
       return line

@@ -4,7 +4,9 @@
  * "Renombrar": the name the owner knows the account by, and for a bank account
  * whether it is a checking or a savings account (the importer cannot always tell).
  * Opened from the overflow menu, so it is controlled and gives focus back to whatever
- * opened it.
+ * opened it. A card someone else pays has no bank's name to fall back on, so it does
+ * not offer to leave the name empty (the server refuses it: "Ponle un nombre a la
+ * tarjeta.").
  */
 import { CircleAlertIcon } from 'lucide-react'
 import { useId, useState } from 'react'
@@ -26,7 +28,7 @@ import { Field, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Spinner } from '@/components/ui/spinner'
-import { accountRowTitle } from '@/lib/account'
+import { accountRowTitle, paidByOther } from '@/lib/account'
 import { useReturnFocus } from '@/lib/focus'
 import { useUpdateAccount } from '@/lib/queries'
 import { MAX_ALIAS } from '@/lib/validate'
@@ -60,6 +62,7 @@ export function RenameAccountDialog({
 function RenameForm({ account, onDone }: { account: Account; onDone: () => void }) {
   const typeLabelId = useId()
   const bank = account.type === 'checking' || account.type === 'savings'
+  const byHand = paidByOther(account)
   const [alias, setAlias] = useState(account.alias ?? '')
   const [type, setType] = useState<BankType>(
     account.type === 'savings' ? 'savings' : 'checking',
@@ -88,7 +91,9 @@ function RenameForm({ account, onDone }: { account: Account; onDone: () => void 
       <DialogHeader>
         <DialogTitle>Renombrar cuenta</DialogTitle>
         <DialogDescription>
-          Ponle el nombre con que la reconoces. Si lo dejas vacío, usamos el del banco.
+          {byHand
+            ? 'Ponle el nombre con que la reconoces.'
+            : 'Ponle el nombre con que la reconoces. Si lo dejas vacío, usamos el del banco.'}
         </DialogDescription>
       </DialogHeader>
 
@@ -98,7 +103,9 @@ function RenameForm({ account, onDone }: { account: Account; onDone: () => void 
           id="account-alias"
           value={alias}
           maxLength={MAX_ALIAS}
-          placeholder={accountRowTitle({ ...account, alias: undefined })}
+          placeholder={
+            byHand ? 'Tarjeta de papá' : accountRowTitle({ ...account, alias: undefined })
+          }
           autoComplete="off"
           aria-invalid={fieldError ? true : undefined}
           onChange={(e) => setAlias(e.target.value)}

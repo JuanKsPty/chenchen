@@ -2,6 +2,7 @@ package imports
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
@@ -71,10 +72,10 @@ func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Import(r.Context(), identity.MustFromContext(r.Context()), header.Filename, data, expect)
 	if err != nil {
-		httpx.Fail(w, r, translate(r, err))
+		httpx.Fail(w, r, TranslateError(r, err))
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, newResultView(result))
+	httpx.JSON(w, r, http.StatusOK, NewResultView(result))
 }
 
 func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
@@ -101,7 +102,9 @@ func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, map[string]any{"runs": out})
 }
 
-func translate(r *http.Request, err error) error {
+// TranslateError maps what Import returns to the response the web reads.
+func TranslateError(r *http.Request, err error) error {
+	var paid paidByOtherError
 	switch {
 	case errors.Is(err, statement.ErrUnrecognised), errors.Is(err, statement.ErrAccountNotStated),
 		errors.Is(err, ErrUnreadable):
@@ -112,6 +115,9 @@ func translate(r *http.Request, err error) error {
 	case errors.Is(err, ErrAccountMismatch):
 		return httpx.Conflict("account_mismatch",
 			"Este archivo es de otra cuenta. Impórtalo desde esa cuenta o desde Cuentas.").WithCause(err)
+	case errors.As(err, &paid):
+		return httpx.Unprocessable("paid_by_other", fmt.Sprintf(
+			"La tarjeta que termina en %s la paga otra persona: sus estados no se importan.", paid.last4)).WithCause(err)
 	default:
 		return err
 	}
@@ -139,6 +145,11 @@ type AccountResultView struct {
 	ChainBreak   *chainBreakView `json:"chain_break,omitempty"`
 	Warnings     []string        `json:"warnings"`
 	NeedsOpening bool            `json:"needs_opening"`
+	// CapturesLinked and CapturesMissing count the purchases the owner noted
+	// that this file linked to their lines, and those it is the first
+	// statement to pass without printing; absent when none.
+	CapturesLinked  int `json:"captures_linked,omitempty"`
+	CapturesMissing int `json:"captures_missing,omitempty"`
 }
 
 type chainBreakView struct {
@@ -147,7 +158,8 @@ type chainBreakView struct {
 	Computed money.Amount `json:"computed"`
 }
 
-func newResultView(r Result) ResultView {
+// NewResultView builds an import's outcome on the wire.
+func NewResultView(r Result) ResultView {
 	v := ResultView{Source: r.Source, Unchanged: r.Unchanged, Accounts: []AccountResultView{}}
 	for _, a := range r.Accounts {
 		av := AccountResultView{
@@ -155,6 +167,7 @@ func newResultView(r Result) ResultView {
 			PeriodStart: a.PeriodStart, PeriodEnd: a.PeriodEnd, Lines: a.Lines, New: a.New,
 			Duplicates: a.Duplicates, Opening: amountPtr(a.Opening), Closing: amountPtr(a.Closing),
 			Warnings: append([]string{}, a.Warnings...), NeedsOpening: a.NeedsOpening,
+			CapturesLinked: a.CapturesLinked, CapturesMissing: a.CapturesMissing,
 		}
 		if b := a.ChainBreak; b != nil {
 			av.ChainBreak = &chainBreakView{LineNo: b.LineNo, Bank: b.Bank.Amount(), Computed: b.Computed.Amount()}

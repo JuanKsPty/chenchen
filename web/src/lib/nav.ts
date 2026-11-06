@@ -17,6 +17,8 @@ import type { EntryKind } from '@/api/types'
  *   NAV                    the four sections, in order, for the desktop tabs and the
  *                          mobile tab bar: Inicio, Cuentas, Movimientos, Gastos
  *   HOME_PATH ... SETTINGS_PATH   every signed-in path
+ *   CONNECT_PATH           /conectar?req=<id> (or ?error=<code>): where the API sends
+ *                          the owner to answer Claude, outside the shell
  *
  *   movementsHref(filters?)        /movimientos?q=&cuenta=&categoria=&sin_categoria=1
  *                                  &desde=YYYY-MM-DD&hasta=YYYY-MM-DD&tipo=<EntryKind>
@@ -24,12 +26,16 @@ import type { EntryKind } from '@/api/types'
  *   movementFiltersToParams(f)     the same, as URLSearchParams (for setSearchParams)
  *   movementFiltersToQuery(f)      the same, as the API's EntryQuery
  *
- *   accountHref(id, {review?})     /cuentas/:id, plus ?revisar=1 to open the review
+ *   accountHref(id, {review?, shortcut?})
+ *                                  /cuentas/:id, plus ?revisar=1 to open the review,
+ *                                  ?atajo=1 to open "Anotar compras con Atajos"
  *   isReviewRequested(params)      true when ?revisar=1 is present
+ *   isShortcutRequested(params)    true when ?atajo=1 is present
  *
  *   spendingHref(ym?)              /gastos, or /gastos?mes=YYYY-MM
  *   parseSpendingMonth(params)     the ?mes value when it is a valid YYYY-MM
  *   TRANSFERS_HREF                 /gastos#transferencias
+ *   CAPTURES_HREF                  /gastos#compras
  */
 
 export const HOME_PATH = '/inicio'
@@ -38,10 +44,17 @@ export const MOVEMENTS_PATH = '/movimientos'
 export const SPENDING_PATH = '/gastos'
 export const RULES_PATH = '/gastos/reglas'
 export const SETTINGS_PATH = '/ajustes'
+/**
+ * Where Claude's sign-in sends the owner to say yes or no. The API builds this
+ * address (oauth.Service.ConsentPage), so it never changes on its own.
+ */
+export const CONNECT_PATH = '/conectar'
 /** Ajustes, scrolled to the PIN and device section. */
 export const SECURITY_HREF = `${SETTINGS_PATH}#seguridad`
 /** Gastos, scrolled to the transfers waiting for a yes or no. */
 export const TRANSFERS_HREF = `${SPENDING_PATH}#transferencias`
+/** Gastos, scrolled to the noted purchases a statement does not confirm. */
+export const CAPTURES_HREF = `${SPENDING_PATH}#compras`
 
 export interface NavItem {
   to: string
@@ -157,14 +170,28 @@ export function movementFiltersToQuery(
 
 // --- accounts ----------------------------------------------------------------
 
-/** The account's page; with `review` it opens the "why it doesn't match" sheet. */
-export function accountHref(id: string, options: { review?: boolean } = {}): string {
+/**
+ * The account's page; with `review` it opens the "why it doesn't match" sheet, with
+ * `shortcut` the dialog that sets up the phone's shortcut for it.
+ */
+export function accountHref(
+  id: string,
+  options: { review?: boolean; shortcut?: boolean } = {},
+): string {
   const path = `${ACCOUNTS_PATH}/${encodeURIComponent(id)}`
-  return options.review ? `${path}?revisar=1` : path
+  const params = new URLSearchParams()
+  if (options.review) params.set('revisar', '1')
+  if (options.shortcut) params.set('atajo', '1')
+  const query = params.toString()
+  return query ? `${path}?${query}` : path
 }
 
 export function isReviewRequested(params: URLSearchParams): boolean {
   return params.get('revisar') === '1'
+}
+
+export function isShortcutRequested(params: URLSearchParams): boolean {
+  return params.get('atajo') === '1'
 }
 
 // --- spending ------------------------------------------------------------------

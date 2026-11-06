@@ -1,7 +1,10 @@
 /**
- * <HomeNotices accounts className? />
+ * <HomeNotices accounts onReviewUploads className? />
  *
- *   accounts  the account list (useAccounts().data?.accounts)
+ *   accounts         the account list (useAccounts().data?.accounts)
+ *   onReviewUploads  opens the review of the files Claude sent (HomePage owns the
+ *                    dialog: importing the first one can swap Inicio's empty state
+ *                    for the full page, and the dialog must outlive that)
  *
  * What needs a look, under Patrimonio (spec card/surface "Aviso No cuadra"):
  *   - one attention notice per account that does not match its bank:
@@ -9,12 +12,23 @@
  *     opens the account with its review sheet (accountHref(id, {review: true}));
  *   - a pending notice for accounts with no starting balance ("2 cuentas sin saldo
  *     inicial", to Cuentas, where each one shows its chip);
+ *     (a card someone else pays is in neither: it has no balance of the owner's to
+ *     match, and accountStatus says nothing of it)
  *   - a pending notice for transfers waiting for a yes or no ("1 transferencia por
- *     confirmar", to Gastos#transferencias).
+ *     confirmar", to Gastos#transferencias);
+ *   - a pending notice for purchases the owner noted that their statement does not
+ *     confirm ("2 compras por revisar" · "Tu estado no las confirma todavía.", to
+ *     Gastos#compras), counted from the accounts' `to_review`, which the list already
+ *     has: no request of its own;
+ *   - a pending notice for the statements Claude sent that did not enter on their own
+ *     ("Revisa 1 importe que llegó desde Claude" · "No entró solo: míralo antes de
+ *     importarlo."), whose "Revisar" calls onReviewUploads. It is the first of the
+ *     pending ones: what it holds changes balances. Inicio shows it before the first
+ *     import too (HomePage), since the first file of an account is imported there.
  * Renders nothing when there is nothing to say. Counts only, no amounts, on the
  * pending ones: Inicio shows at most five figures before its first list.
  */
-import { ArrowLeftRightIcon, ScaleIcon } from 'lucide-react'
+import { ArrowLeftRightIcon, FileClockIcon, ReceiptIcon, ScaleIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import type { Account } from '@/api/types'
@@ -26,29 +40,38 @@ import {
   type AccountStatus,
 } from '@/lib/account'
 import { formatCivilDayMonth } from '@/lib/format'
-import { ACCOUNTS_PATH, TRANSFERS_HREF, accountHref } from '@/lib/nav'
-import { useTransferSuggestions } from '@/lib/queries'
+import { ACCOUNTS_PATH, CAPTURES_HREF, TRANSFERS_HREF, accountHref } from '@/lib/nav'
+import { useStatementUploads, useTransferSuggestions } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 
 type Mismatch = { account: Account; status: Extract<AccountStatus, { kind: 'no-cuadra' }> }
 
 export function HomeNotices({
   accounts,
+  onReviewUploads,
   className,
 }: {
   accounts: Account[]
+  onReviewUploads: () => void
   className?: string
 }) {
-  const suggestions = useTransferSuggestions()
+  // With no accounts (Inicio's empty state) there is nothing to transfer between.
+  const suggestions = useTransferSuggestions({ enabled: accounts.length > 0 })
+  const uploads = useStatementUploads()
 
   const mismatches: Mismatch[] = []
   let unanchored = 0
+  let purchases = 0
   for (const account of accounts) {
     const status = accountStatus(account)
     if (status?.kind === 'no-cuadra') mismatches.push({ account, status })
     else if (status?.kind === 'sin-partida') unanchored += 1
+    purchases += account.to_review ?? 0
   }
   const transfers = suggestions.data?.suggestions.length ?? 0
+  // Empty when this deployment has no MCP: nothing can arrive from Claude. A failure
+  // says nothing either; the rest of Inicio does not wait on it.
+  const fromClaude = uploads.data?.uploads.length ?? 0
 
   const items: { key: string; notice: ReactNode }[] = [
     ...mismatches.map(({ account, status }) => ({
@@ -71,6 +94,33 @@ export function HomeNotices({
       ),
     })),
   ]
+
+  if (fromClaude > 0) {
+    items.push({
+      key: 'desde-claude',
+      notice: (
+        <Notice
+          tone="pending"
+          icon={FileClockIcon}
+          title={
+            fromClaude === 1
+              ? 'Revisa 1 importe que llegó desde Claude'
+              : `Revisa ${fromClaude} importes que llegaron desde Claude`
+          }
+          description={
+            fromClaude === 1
+              ? 'No entró solo: míralo antes de importarlo.'
+              : 'No entraron solos: míralos antes de importarlos.'
+          }
+          action={{
+            label: 'Revisar',
+            ariaLabel: 'Revisar importes de Claude',
+            onClick: onReviewUploads,
+          }}
+        />
+      ),
+    })
+  }
 
   if (unanchored > 0) {
     items.push({
@@ -104,6 +154,29 @@ export function HomeNotices({
             label: 'Revisar',
             ariaLabel: 'Revisar transferencias',
             to: TRANSFERS_HREF,
+          }}
+        />
+      ),
+    })
+  }
+
+  if (purchases > 0) {
+    items.push({
+      key: 'compras',
+      notice: (
+        <Notice
+          tone="pending"
+          icon={ReceiptIcon}
+          title={`${purchases} ${purchases === 1 ? 'compra' : 'compras'} por revisar`}
+          description={
+            purchases === 1
+              ? 'Tu estado no la confirma todavía.'
+              : 'Tu estado no las confirma todavía.'
+          }
+          action={{
+            label: 'Revisar',
+            ariaLabel: 'Revisar compras',
+            to: CAPTURES_HREF,
           }}
         />
       ),

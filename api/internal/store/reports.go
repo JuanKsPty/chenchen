@@ -21,7 +21,9 @@ type CategoryTotal struct {
 
 // TotalsByCategory sums the user's movements of the given kinds per category,
 // between from and to inclusive (zero dates are unbounded). The sum is signed
-// as stored: spending comes back negative, a refund reduces it.
+// as stored: spending comes back negative, a refund reduces it. A pending
+// capture counts as an expense; one a line could be, or that a statement
+// passed, never does (movementSource).
 func (q *Queries) TotalsByCategory(ctx context.Context, f EntryFilter) ([]CategoryTotal, error) {
 	where, args, err := f.where()
 	if err != nil {
@@ -29,7 +31,7 @@ func (q *Queries) TotalsByCategory(ctx context.Context, f EntryFilter) ([]Catego
 	}
 	rows, err := q.q.Query(ctx, `
 		SELECT e.category_id, COALESCE(SUM(e.amount_cents), 0), count(*)
-		FROM entries e WHERE `+where+`
+		FROM `+movementSource+` WHERE `+where+`
 		GROUP BY e.category_id ORDER BY SUM(e.amount_cents)`, args...)
 	if err != nil {
 		return nil, wrap("store.TotalsByCategory", err)
@@ -56,7 +58,8 @@ type FlowPoint struct {
 }
 
 // Flow totals income and spending per day or per month. Transfers and trades
-// are never in either; a refund reduces spending.
+// are never in either; a refund reduces spending, and a pending capture adds
+// to it (movementSource).
 func (q *Queries) Flow(ctx context.Context, userID uuid.UUID, accountIDs []uuid.UUID, from, to civil.Date, monthly bool) ([]FlowPoint, error) {
 	f := EntryFilter{UserID: userID, AccountIDs: accountIDs, From: from, To: to,
 		Kinds: append(append([]string{}, IncomeKinds...), SpendKinds...)}
@@ -73,7 +76,7 @@ func (q *Queries) Flow(ctx context.Context, userID uuid.UUID, accountIDs []uuid.
 		SELECT `+bucket+` AS day,
 		       COALESCE(SUM(e.amount_cents) FILTER (WHERE COALESCE(e.user_kind, e.kind)::text = ANY($`+strconv.Itoa(len(args))+`)), 0),
 		       COALESCE(-SUM(e.amount_cents) FILTER (WHERE NOT (COALESCE(e.user_kind, e.kind)::text = ANY($`+strconv.Itoa(len(args))+`))), 0)
-		FROM entries e WHERE `+where+`
+		FROM `+movementSource+` WHERE `+where+`
 		GROUP BY day ORDER BY day`, args...)
 	if err != nil {
 		return nil, wrap("store.Flow", err)

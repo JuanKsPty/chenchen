@@ -2,11 +2,16 @@ import { request, requestFile, requestUpload } from './client'
 import type {
   AccountList,
   Account,
+  Capture,
+  CaptureReviewItem,
   CategoryNode,
   CategoryRule,
   CategoryTotal,
   ChatHistory,
   Checkpoint,
+  ClaudeConnection,
+  ConnectAnswer,
+  ConnectRequest,
   DeviceStatus,
   EntryKind,
   EntryPage,
@@ -18,12 +23,16 @@ import type {
   InvestmentLinkStatus,
   InvestmentSyncResult,
   InvestmentTrade,
+  McpResource,
   Me,
+  NewShortcutKey,
   Portfolio,
   Reconciliation,
   SecurityStatus,
   Session,
   StatementFileReport,
+  StatementUpload,
+  StatementUploadStatus,
   TransferSuggestion,
 } from './types'
 
@@ -84,6 +93,17 @@ export const fetchAccounts = () => request<AccountList>('/api/accounts')
 
 export const fetchAccount = (id: string) =>
   request<Account>(`/api/accounts/${encodeURIComponent(id)}`)
+
+/**
+ * Adds a card someone else pays, the one account the owner makes by hand: what they
+ * call it and its last four digits. Answers with the new account (201). The form
+ * chooses the `id`, so sending the same card again (an answer lost on the way)
+ * answers with the card the first send added. A 409 when they already have another
+ * one with those digits, or import the statements of a card that has them; a 422
+ * with `fields` (alias, last4, both at once) for what is missing.
+ */
+export const addOthersCard = (input: { id: string; alias: string; last4: string }) =>
+  request<Account>('/api/accounts', { method: 'POST', body: input })
 
 /** Renames an account, or relabels a bank account as checking or savings. */
 export const updateAccount = (
@@ -184,6 +204,103 @@ export function exportEntriesCSV(query: EntryQuery = {}) {
   const qs = entryParams({ ...query, limit: undefined, cursor: undefined }).toString()
   return requestFile(`/api/entries/export.csv${qs ? `?${qs}` : ''}`)
 }
+
+// --- noted purchases --------------------------------------------------------
+
+export interface CaptureInput {
+  /**
+   * Chosen by the form, the same on every try: sending it again returns the purchase
+   * the first try noted instead of noting it twice.
+   */
+  id?: string
+  account_id: string
+  /** What was paid, positive and as typed: "12.50". */
+  amount: string
+  /** Where: "Super 99". */
+  merchant: string
+  /** The purchase's day (YYYY-MM-DD); today in Panama when left out. */
+  day?: string
+  /** Left out, the owner's rules file it by merchant. */
+  category_id?: string
+  note?: string
+}
+
+/**
+ * Notes a purchase by hand. It comes back with its state: `linked` or `printed` when
+ * its line was already imported, so it does not count twice.
+ */
+export const addCapture = (input: CaptureInput) =>
+  request<Capture>('/api/captures', { method: 'POST', body: input })
+
+/** Corrects a noted purchase; a field left out stays as it is. */
+export interface CapturePatch {
+  /** Positive, as in CaptureInput. */
+  amount?: string
+  merchant?: string
+  day?: string
+}
+
+export const editCapture = (id: string, patch: CapturePatch) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body: patch,
+  })
+
+/** Discards a noted purchase that never happened, so it stops counting. */
+export const discardCapture = (id: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/discard`, { method: 'PUT' })
+
+/** Takes a discarded purchase back. */
+export const restoreCapture = (id: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/discard`, { method: 'DELETE' })
+
+/** Unlinks a noted purchase from its line, which is remembered as not being it. */
+export const unlinkCapture = (id: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/link`, { method: 'DELETE' })
+
+/**
+ * Links a noted purchase to the printed line the owner says it is. Any amount goes:
+ * a tip is why the two can differ.
+ */
+export const linkCapture = (id: string, entryId: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/link`, {
+    method: 'POST',
+    body: { entry_id: entryId },
+  })
+
+/** Says a printed line is not this noted purchase: it is never offered for it again. */
+export const rejectCaptureLine = (id: string, entryId: string) =>
+  request<Capture>(`/api/captures/${encodeURIComponent(id)}/reject`, {
+    method: 'POST',
+    body: { entry_id: entryId },
+  })
+
+/** The noted purchases the owner should look at, newest first. */
+export const fetchCaptureReview = () =>
+  request<{ captures: CaptureReviewItem[] }>('/api/captures/review')
+
+// --- the phone's shortcut -------------------------------------------------------
+
+/**
+ * Where the phone's shortcut sends each purchase, with the account's key. The app
+ * never calls it; it shows it, after this site's origin, for the owner to paste.
+ */
+export const SHORTCUT_PURCHASES_PATH = '/api/shortcut/purchases'
+
+/**
+ * Makes the account's shortcut key, turning off the one it had. The answer is the
+ * only time the key itself is ever sent: see useCreateShortcutKey.
+ */
+export const createShortcutKey = (accountId: string) =>
+  request<NewShortcutKey>(`/api/captures/keys/${encodeURIComponent(accountId)}`, {
+    method: 'POST',
+  })
+
+/** Turns the account's shortcut key off: its shortcut stops noting purchases at once. */
+export const revokeShortcutKey = (accountId: string) =>
+  request<void>(`/api/captures/keys/${encodeURIComponent(accountId)}`, {
+    method: 'DELETE',
+  })
 
 // --- reports -------------------------------------------------------------------
 
@@ -319,6 +436,71 @@ export const dryRunStatement = (file: File) =>
 
 export const fetchImportRuns = (accountId: string) =>
   request<{ runs: ImportRun[] }>(`/api/imports?account_id=${encodeURIComponent(accountId)}`)
+
+// --- statements Claude sent -----------------------------------------------------
+
+/** The statements Claude sent that are in one state; by default, those waiting. */
+export const fetchStatementUploads = (status: StatementUploadStatus = 'needs_review') =>
+  request<{ uploads: StatementUpload[] }>(
+    `/api/imports/uploads?status=${encodeURIComponent(status)}`,
+  )
+
+/** What the file a waiting upload holds says, without importing it: a dry run. */
+export const dryRunStatementUpload = (id: string) =>
+  request<StatementFileReport>(`/api/imports/uploads/${encodeURIComponent(id)}/dry-run`)
+
+/**
+ * Imports the file a waiting upload holds, as the web's own import does: a new
+ * account is made the first time its file is seen. The file is dropped once it is in.
+ */
+export const importStatementUpload = (id: string) =>
+  request<ImportResult>(`/api/imports/uploads/${encodeURIComponent(id)}/import`, {
+    method: 'POST',
+  })
+
+/** Sets a waiting upload aside and drops its file. */
+export const dismissStatementUpload = (id: string) =>
+  request<void>(`/api/imports/uploads/${encodeURIComponent(id)}/dismiss`, {
+    method: 'POST',
+  })
+
+// --- Claude ---------------------------------------------------------------------
+
+/**
+ * The MCP endpoint's protected-resource metadata (RFC 9728). Its `resource` is where
+ * Claude reaches chenchén's tools, which the app shows for the owner to add as a
+ * connector. At the root of the domain, not under /api.
+ */
+export const fetchMcpResource = () =>
+  request<McpResource>('/.well-known/oauth-protected-resource/api/mcp')
+
+/**
+ * A connection Claude asked for. Opening it makes it this owner's to answer; a
+ * 404 (oauth_request_not_found) when it expired, was answered or is someone else's.
+ */
+export const fetchConnectRequest = (id: string) =>
+  request<ConnectRequest>(`/api/oauth/requests/${encodeURIComponent(id)}`)
+
+/** Yes, with whether Claude may also write. The answer says where to go next. */
+export const approveConnectRequest = (id: string, write: boolean) =>
+  request<ConnectAnswer>(`/api/oauth/requests/${encodeURIComponent(id)}/approve`, {
+    method: 'POST',
+    body: { write },
+  })
+
+/** No. The answer says where to go next: back to Claude, which hears the no. */
+export const denyConnectRequest = (id: string) =>
+  request<ConnectAnswer>(`/api/oauth/requests/${encodeURIComponent(id)}/deny`, {
+    method: 'POST',
+  })
+
+/** The owner's live connections with Claude, newest first. */
+export const fetchClaudeConnections = () =>
+  request<{ grants: ClaudeConnection[] }>('/api/oauth/grants')
+
+/** Ends a connection and every token it issued: Claude has to connect again. */
+export const disconnectClaude = (id: string) =>
+  request<void>(`/api/oauth/grants/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- categories ---------------------------------------------------------------
 

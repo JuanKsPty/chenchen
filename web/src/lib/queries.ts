@@ -5,8 +5,17 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 
+import { ApiError } from '@/api/client'
 import * as api from '@/api/endpoints'
-import type { CheckpointInput, EntryPatch, EntryQuery, RuleInput } from '@/api/endpoints'
+import type { ConnectAnswer } from '@/api/types'
+import type {
+  CaptureInput,
+  CapturePatch,
+  CheckpointInput,
+  EntryPatch,
+  EntryQuery,
+  RuleInput,
+} from '@/api/endpoints'
 
 /**
  * Server state.
@@ -20,7 +29,8 @@ import type { CheckpointInput, EntryPatch, EntryQuery, RuleInput } from '@/api/e
  * with useQuery, an api/endpoints function and one of these key prefixes):
  *
  *   accounts      useMe · useAccounts · useAccount(id) · useUpdateAccount(id)
- *                 ({alias?, type?: 'checking'|'savings'}) · useDeleteAccount()(id)
+ *                 ({alias?, type?: 'checking'|'savings'}) · useDeleteAccount()(id) ·
+ *                 useAddOthersCard()({alias, last4}): a card someone else pays
  *   checkpoints   useCheckpoints(accountId) · useAddCheckpoint(accountId) ·
  *                 useDeleteCheckpoint(accountId)(checkpointId) ·
  *                 usePinCheckpoint(accountId)(checkpointId | null) ·
@@ -28,15 +38,32 @@ import type { CheckpointInput, EntryPatch, EntryQuery, RuleInput } from '@/api/e
  *   movements     useEntries(query): one page · useEntryPages(query without cursor):
  *                 infinite, "Ver más" = fetchNextPage, a new query resets the pages ·
  *                 useUpdateEntry()({id, patch})
+ *   captures      useAddCapture()(input) · useEditCapture()({id, patch}) ·
+ *                 useDiscardCapture()(id): purchases the owner noted, which count as
+ *                 spending until their line arrives, so each one refreshes money ·
+ *                 useCaptureReview: the ones their statement does not confirm ·
+ *                 useLinkCapture()({id, entryId}) · useRejectCapture()({id, entryId}) ·
+ *                 useUnlinkCapture()(id)
+ *   shortcut keys useCreateShortcutKey(accountId) · useRevokeShortcutKey(accountId): the
+ *                 key the phone's shortcut notes purchases with. Not money: they refresh
+ *                 only the accounts, whose `shortcut` says whether there is one
  *   imports       useImportStatement()({file, accountId?}) · useDryRunStatement()(file) ·
  *                 useImportRuns(accountId)
+ *   from Claude   useStatementUploads: the statements Claude sent that wait for the
+ *                 owner · useStatementUploadDryRun(id, {enabled?}) ·
+ *                 useImportStatementUpload()(id): money, like any import ·
+ *                 useDismissStatementUpload()(id)
+ *   Claude        useConnectRequest(id): the consent page's request, read once ·
+ *                 useAnswerConnectRequest()({id, write} | {id, deny: true}) ·
+ *                 useClaudeConnections · useDisconnectClaude()(id) · useMcpResource:
+ *                 the connector's address. Not money
  *   investments   useInvestmentLink(accountId, {enabled?}) · useLinkIBKR ·
  *                 useRelinkIBKR(accountId) · useSyncInvestmentAccount(accountId) ·
  *                 usePortfolio(accountId, {enabled?}) · useInvestmentTrades(accountId,
  *                 {enabled?}) (the last 20)
  *   reports       useCategoryTotals({from?, to?, kind?: 'spend'|'income'}) ·
  *                 useFlow({from?, to?, granularity?: 'day'|'month'})
- *   transfers     useTransferSuggestions · useDecideTransfer
+ *   transfers     useTransferSuggestions({enabled?}) · useDecideTransfer
  *   rules         useRules · useSaveRule()({id?, input}) · useDeleteRule()(id)
  *   assistant     useProposals · useDecideProposal()({id, apply}) · useChatHistory ·
  *                 useClearChat
@@ -63,13 +90,21 @@ export const keys = {
   rules: ['rules'] as const,
   proposals: ['proposals'] as const,
   transfers: ['transfer-suggestions'] as const,
+  captures: ['captures'] as const,
+  captureReview: ['captures', 'review'] as const,
+  statementUploads: ['statement-uploads'] as const,
+  statementUploadDryRun: (id: string) => ['statement-upload-dry-run', id] as const,
+  connectRequest: (id: string) => ['connect-request', id] as const,
+  claudeConnections: ['claude-connections'] as const,
+  mcpResource: ['mcp-resource'] as const,
 }
 
 /**
  * Every query-key prefix that shows money or what it means: balances, movements,
- * the spending and flow reports, an account's reconciliation, and the transfers
- * waiting for a yes or no. Recategorizing a movement shrinks "Sin categoría";
- * confirming a transfer takes it off the list; an import changes all of them.
+ * the spending and flow reports, an account's reconciliation, the transfers waiting
+ * for a yes or no, and the noted purchases waiting for review. Recategorizing a
+ * movement shrinks "Sin categoría"; confirming a transfer takes it off the list; an
+ * import changes all of them, and may settle or question a noted purchase.
  */
 const MONEY_KEYS = [
   'me',
@@ -82,6 +117,7 @@ const MONEY_KEYS = [
   'reports',
   'reconciliation',
   keys.transfers[0],
+  keys.captures[0],
 ] as const
 
 /**
@@ -114,6 +150,32 @@ export function useUpdateAccount(id: string) {
     mutationFn: (patch: { alias?: string; type?: 'checking' | 'savings' }) =>
       api.updateAccount(id, patch),
     onSuccess: invalidate,
+  })
+}
+
+/**
+ * Adds a card someone else pays. It starts with no purchases, so of everything that
+ * shows money only the account list changes. The new account goes into the cache as
+ * the answer brought it, so its page opens at once; the list's refresh is awaited, so
+ * Cuentas already has it when the owner goes back.
+ *
+ * The form chooses the card's id, so sending it again after an answer that never
+ * came gets the same card back (201), never a 409 about its own digits. Nothing is
+ * refreshed on an error: a refresh could add the card to Cuentas and unmount the
+ * dialog (opened from Cuentas' empty state) while it says what went wrong, and the
+ * send again refreshes it anyway.
+ */
+export function useAddOthersCard() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: api.addOthersCard,
+    onSuccess: (account) => {
+      queryClient.setQueryData(keys.account(account.id), account)
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.accounts }),
+        queryClient.invalidateQueries({ queryKey: keys.me }),
+      ])
+    },
   })
 }
 
@@ -216,6 +278,147 @@ export function useUpdateEntry() {
   })
 }
 
+// --- noted purchases ----------------------------------------------------------
+
+/**
+ * Notes a purchase by hand. A pending one shows in the lists, in the account's
+ * "Pendiente" line and in Gastos; one its statement already printed changes how
+ * much is pending to review. Either way, money.
+ *
+ * The answer may be a purchase already noted another way (`already_noted`): nothing
+ * new counts, but what was typed may have filled in its note or category, so money
+ * is refreshed then too. The caller says it was already there, never that it is new.
+ *
+ * Sending it again without the same id is not safe: the server makes a new purchase
+ * each time. So a failure refreshes money too, unless the server said no (a 4xx,
+ * which saved nothing). With no answer, or a 5xx, the first one may have been saved,
+ * and the account should show it before the owner notes it again.
+ */
+export function useAddCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (input: CaptureInput) => api.addCapture(input),
+    onSuccess: invalidate,
+    // A send with no answer may have been saved; the account shows it if so. Not
+    // awaited: with the connection gone the refetches retry for seconds, and the
+    // dialog should say what happened at once.
+    onError: (error) => {
+      if (!(error instanceof ApiError && error.status < 500)) void invalidate()
+    },
+  })
+}
+
+/** Corrects a noted purchase's amount, merchant or day; whether it counts derives again. */
+export function useEditCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: CapturePatch }) =>
+      api.editCapture(id, patch),
+    onSuccess: invalidate,
+  })
+}
+
+/** Discards a noted purchase that never happened: it stops counting. */
+export function useDiscardCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (id: string) => api.discardCapture(id),
+    onSuccess: invalidate,
+  })
+}
+
+/** The noted purchases a statement does not confirm, with the lines that could be them. */
+export function useCaptureReview() {
+  return useQuery({ queryKey: keys.captureReview, queryFn: api.fetchCaptureReview })
+}
+
+/*
+ * Linking, rejecting and unlinking each refresh money. Each can change what counts: a
+ * purchase whose only possible line was rejected, or that was unlinked, counts again;
+ * a line that gets the purchase's category moves in Gastos; one answer can settle
+ * another question (a "No" to one of two lines links the other).
+ *
+ * On success the refresh is awaited, so the caller goes on with the lists already
+ * saying what is true now and never asks the owner a question that was just settled.
+ * A failure refreshes too, since a refusal mostly means the screen was out of date
+ * (another tab linked it first) and a send with no answer may have gone through, but
+ * without waiting: with the connection gone the refetches retry for seconds, and the
+ * owner should hear what failed at once.
+ */
+
+/** Links a noted purchase to the line the owner says it is. */
+export function useLinkCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: ({ id, entryId }: { id: string; entryId: string }) =>
+      api.linkCapture(id, entryId),
+    onSuccess: invalidate,
+    onError: () => void invalidate(),
+  })
+}
+
+/** Says a line is not this noted purchase ("No"). */
+export function useRejectCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: ({ id, entryId }: { id: string; entryId: string }) =>
+      api.rejectCaptureLine(id, entryId),
+    onSuccess: invalidate,
+    onError: () => void invalidate(),
+  })
+}
+
+/** Undoes a link the owner says is wrong ("No es esta compra"). */
+export function useUnlinkCapture() {
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (id: string) => api.unlinkCapture(id),
+    onSuccess: invalidate,
+    onError: () => void invalidate(),
+  })
+}
+
+// --- the phone's shortcut ---------------------------------------------------------
+
+/**
+ * A key changes what an account says about its shortcut (`account.shortcut`, in the
+ * account and in the list Ajustes reads) and nothing about money. The refresh is
+ * awaited, so the dialog goes on with the account already saying what is true now.
+ */
+function useShortcutInvalidation(accountId: string) {
+  const queryClient = useQueryClient()
+  return () =>
+    Promise.all([
+      queryClient.invalidateQueries({ queryKey: keys.accounts }),
+      queryClient.invalidateQueries({ queryKey: keys.account(accountId) }),
+    ])
+}
+
+/**
+ * Makes the account's shortcut key, turning off the one it had. The answer is the
+ * key itself, the one time the app ever sees it, and it must not linger: the caller
+ * moves it into its own state and calls reset() at once, and gcTime 0 drops the
+ * finished mutation, with the key in it, from the mutation cache as soon as nothing
+ * observes it (by default it would wait five minutes).
+ */
+export function useCreateShortcutKey(accountId: string) {
+  const invalidate = useShortcutInvalidation(accountId)
+  return useMutation({
+    mutationFn: () => api.createShortcutKey(accountId),
+    onSuccess: () => invalidate(),
+    gcTime: 0,
+  })
+}
+
+/** Turns the account's shortcut key off. */
+export function useRevokeShortcutKey(accountId: string) {
+  const invalidate = useShortcutInvalidation(accountId)
+  return useMutation({
+    mutationFn: () => api.revokeShortcutKey(accountId),
+    onSuccess: () => invalidate(),
+  })
+}
+
 // --- imports -----------------------------------------------------------------
 
 export function useImportStatement() {
@@ -236,6 +439,130 @@ export function useImportRuns(accountId: string) {
   return useQuery({
     queryKey: keys.importRuns(accountId),
     queryFn: () => api.fetchImportRuns(accountId),
+  })
+}
+
+// --- statements Claude sent ---------------------------------------------------
+
+/**
+ * The statements Claude sent that wait for the owner (`needs_review`), oldest first.
+ * Without the MCP (no PUBLIC_URL) nothing can arrive, and the list is empty.
+ */
+export function useStatementUploads() {
+  return useQuery({
+    queryKey: keys.statementUploads,
+    queryFn: () => api.fetchStatementUploads('needs_review'),
+  })
+}
+
+/**
+ * What a waiting upload's file says, written nowhere. Read once per upload: the file
+ * does not change, and once it is imported or dismissed it is gone, so asking again
+ * would only turn what is on screen into a 404.
+ */
+export function useStatementUploadDryRun(id: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.statementUploadDryRun(id),
+    queryFn: () => api.dryRunStatementUpload(id),
+    enabled: options.enabled ?? true,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/**
+ * The owner's own import of a file Claude sent. Money, like any import, and the
+ * upload leaves the waiting list. The refresh is awaited, so the result shows with
+ * the accounts already saying what is true now (a new one included). Its dry run
+ * stays cached as it was, never read again: the file is gone.
+ */
+export function useImportStatementUpload() {
+  const queryClient = useQueryClient()
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (id: string) => api.importStatementUpload(id),
+    onSuccess: () =>
+      Promise.all([
+        invalidate(),
+        queryClient.invalidateQueries({ queryKey: keys.statementUploads }),
+      ]),
+  })
+}
+
+/** Sets a file Claude sent aside: it leaves the waiting list and nothing else changes. */
+export function useDismissStatementUpload() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.dismissStatementUpload(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.statementUploads }),
+  })
+}
+
+// --- Claude ---------------------------------------------------------------------
+
+/**
+ * The request the consent page answers. Read once: answering deletes it, so a
+ * refetch (a focus, a remount) would turn the page into "ya no está vigente" while
+ * the browser is on its way back to Claude. Kept in the cache for that reason too: a
+ * remount after the answer finds it there instead of asking again.
+ */
+export function useConnectRequest(id: string) {
+  return useQuery({
+    queryKey: keys.connectRequest(id),
+    queryFn: () => api.fetchConnectRequest(id),
+    enabled: id !== '',
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  })
+}
+
+/**
+ * The owner's answer: yes (with whether Claude may write) or no. Either way the
+ * answer is where to send the browser, which the caller does. Nothing to refresh:
+ * the connection exists once Claude trades the code for its tokens, after the page
+ * is gone.
+ */
+export function useAnswerConnectRequest() {
+  return useMutation({
+    mutationFn: (
+      answer: { id: string; write: boolean } | { id: string; deny: true },
+    ): Promise<ConnectAnswer> =>
+      'deny' in answer
+        ? api.denyConnectRequest(answer.id)
+        : api.approveConnectRequest(answer.id, answer.write),
+  })
+}
+
+/**
+ * The owner's live connections with Claude. Without the MCP (no PUBLIC_URL) the
+ * route does not exist: a 404, never retried, and Conexiones leaves Claude out.
+ */
+export function useClaudeConnections() {
+  return useQuery({ queryKey: keys.claudeConnections, queryFn: api.fetchClaudeConnections })
+}
+
+/**
+ * The MCP endpoint's metadata, whose `resource` is the connector's address (the API's
+ * PUBLIC_URL and /api/mcp). It does not change while the app runs: read once, and
+ * never retried, since a domain that does not route the document to the API answers
+ * with this app's own page, and asking again changes nothing.
+ */
+export function useMcpResource() {
+  return useQuery({
+    queryKey: keys.mcpResource,
+    queryFn: api.fetchMcpResource,
+    staleTime: Infinity,
+    retry: false,
+  })
+}
+
+/** Ends a connection; the list refreshes before the caller goes on. */
+export function useDisconnectClaude() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.disconnectClaude(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.claudeConnections }),
   })
 }
 
@@ -326,8 +653,12 @@ export function useFlow(query: {
 
 // --- transfers -----------------------------------------------------------------
 
-export function useTransferSuggestions() {
-  return useQuery({ queryKey: keys.transfers, queryFn: api.fetchTransferSuggestions })
+export function useTransferSuggestions(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.transfers,
+    queryFn: api.fetchTransferSuggestions,
+    enabled: options.enabled ?? true,
+  })
 }
 
 /**

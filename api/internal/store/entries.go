@@ -32,7 +32,17 @@ var SpendKinds = []string{KindExpense, KindFee, KindInterest, KindRefund}
 // IncomeKinds are what counts as income.
 var IncomeKinds = []string{KindIncome}
 
-// Entry is one movement a statement or IBKR printed.
+// Where a movement came from: a line a statement or IBKR printed, or a
+// purchase the owner noted that no statement has printed yet (ADR-0002).
+const (
+	OriginStatement = "statement"
+	OriginCapture   = "capture"
+)
+
+// Entry is one movement a statement or IBKR printed. Lists, searches and
+// reports also read a pending capture in this shape (Origin capture), so that
+// a purchase counts from the moment it is noted; it never becomes a row of
+// entries and nothing that builds a balance reads it.
 type Entry struct {
 	ID          uuid.UUID
 	UserID      uuid.UUID
@@ -58,6 +68,19 @@ type Entry struct {
 	DedupKey       string
 	Raw            map[string]string
 	CreatedAt      time.Time
+	// Origin is OriginStatement for a printed line and OriginCapture for a
+	// noted purchase. A capture is always an expense, dated by the day it was
+	// noted, with no statement, posting day or bank fields; its Description is
+	// the merchant and its BookedAt when a timed channel, such as the
+	// shortcut, sent it.
+	Origin string
+	// CaptureSource is how a capture was noted (shortcut | manual | agent);
+	// empty for a printed line.
+	CaptureSource string
+	// Noted is, on a printed line, the purchase the owner noted that was
+	// linked to it. Only the movement lists fill it (with NotedPurchases):
+	// anywhere else nil says nothing.
+	Noted *NotedPurchase
 }
 
 // EffectiveKind is what reports treat the entry as.
@@ -71,6 +94,37 @@ func (e Entry) EffectiveKind() string {
 const entryColumns = `id, user_id, account_id, statement_id, run_id, booked_on, booked_at, posted_on,
 	balance_on, seq, amount_cents, kind, user_kind, description, bank_ref, bank_category,
 	bank_balance_cents, category_id, category_source, note, dedup_key, raw, created_at`
+
+// movementColumns are entryColumns plus where the movement came from: what
+// movementSource yields, and what scanMovement reads.
+const movementColumns = entryColumns + `, origin, capture_source`
+
+// captureAsEntryColumns maps a capture onto movementColumns, column by column. A
+// capture is an expense on the day it was noted, which is also the day it
+// would reach the balance; it has no statement, run, posting day or bank
+// fields, and its time is only known when a timed channel (timedChannelsSQL)
+// noted it the moment the card was tapped: never when it was typed by hand or
+// noted by the assistant. It reads from captures or capture_states alike.
+const captureAsEntryColumns = `id, user_id, account_id, NULL::uuid, NULL::uuid, booked_on,
+	CASE WHEN source IN (` + timedChannelsSQL + `) THEN received_at END, NULL::date, booked_on, 0, amount_cents,
+	'expense'::entry_kind, NULL::entry_kind, merchant, '', '', NULL::bigint, category_id, category_source,
+	note, '', raw, created_at, 'capture', source`
+
+// movementSource is every movement that counts, as one relation aliased e
+// with movementColumns: each printed line, and each capture still pending —
+// one no line could be yet and no statement has passed (ADR-0002). A printed,
+// missing, linked or discarded capture is not here, so a purchase is never
+// counted twice when its line has the same amount: once a line could be it,
+// the line counts instead. A line the bank charged at a different amount, such
+// as a tip, counts alongside it until the owner links them or a statement
+// passes its day.
+//
+// Lists, search, the CSV and the reports read it, so EntryFilter's where and
+// its (booked_on, id) cursor work across both. Nothing that builds a balance
+// may: those read entries alone.
+const movementSource = `(SELECT ` + entryColumns + `, 'statement' AS origin, '' AS capture_source FROM entries
+	UNION ALL
+	SELECT ` + captureAsEntryColumns + ` FROM capture_states WHERE state = 'pending') e`
 
 // InsertEntryIfNew stores e unless the account already holds a line with its
 // dedup key, in which case nothing changes and inserted is false.
@@ -106,8 +160,9 @@ func (q *Queries) EntryIDByDedupKey(ctx context.Context, accountID uuid.UUID, ke
 	return id, wrap("store.EntryIDByDedupKey", err)
 }
 
-// EntryFilter selects entries for history, exports and reports. UserID is
-// always required.
+// EntryFilter selects movements for history, exports and reports: printed
+// lines and pending captures alike (movementSource). UserID is always
+// required.
 type EntryFilter struct {
 	UserID     uuid.UUID
 	AccountIDs []uuid.UUID
@@ -199,7 +254,7 @@ func searchAmount(s string) (money.Cents, bool) {
 	return c, true
 }
 
-// Entries lists entries newest first.
+// Entries lists movements newest first: printed lines and pending captures.
 func (q *Queries) Entries(ctx context.Context, f EntryFilter) ([]Entry, error) {
 	where, args, err := f.where()
 	if err != nil {
@@ -209,19 +264,20 @@ func (q *Queries) Entries(ctx context.Context, f EntryFilter) ([]Entry, error) {
 	if limit <= 0 || limit > 1000 {
 		limit = 50
 	}
-	query := `SELECT ` + prefixed("e.", entryColumns) + ` FROM entries e WHERE ` + where +
+	query := `SELECT ` + prefixed("e.", movementColumns) + ` FROM ` + movementSource + ` WHERE ` + where +
 		fmt.Sprintf(` ORDER BY e.booked_on DESC, e.id DESC LIMIT %d`, limit)
-	return q.queryEntries(ctx, "store.Entries", query, args...)
+	return q.queryEntries(ctx, "store.Entries", scanMovement, query, args...)
 }
 
-// EachEntry streams every entry matching f, oldest first, for an export that
-// must not load the whole history into memory at once.
+// EachEntry streams every movement matching f, printed lines and pending
+// captures, oldest first, for an export that must not load the whole history
+// into memory at once.
 func (q *Queries) EachEntry(ctx context.Context, f EntryFilter, fn func(Entry) error) error {
 	where, args, err := f.where()
 	if err != nil {
 		return err
 	}
-	query := `SELECT ` + prefixed("e.", entryColumns) + ` FROM entries e WHERE ` + where +
+	query := `SELECT ` + prefixed("e.", movementColumns) + ` FROM ` + movementSource + ` WHERE ` + where +
 		` ORDER BY e.booked_on, e.booked_at NULLS FIRST, e.seq, e.id`
 	rows, err := q.q.Query(ctx, query, args...)
 	if err != nil {
@@ -229,7 +285,7 @@ func (q *Queries) EachEntry(ctx context.Context, f EntryFilter, fn func(Entry) e
 	}
 	defer rows.Close()
 	for rows.Next() {
-		e, err := scanEntry(rows)
+		e, err := scanMovement(rows)
 		if err != nil {
 			return wrap("store.EachEntry", err)
 		}
@@ -241,11 +297,13 @@ func (q *Queries) EachEntry(ctx context.Context, f EntryFilter, fn func(Entry) e
 }
 
 // AccountEntriesInOrder lists one account's entries in balance order, oldest
-// first: the order a running balance is computed in.
+// first: the order a running balance is computed in. Printed lines only, never
+// captures (ADR-0002): reconciliation walks this list against the bank's
+// balances.
 func (q *Queries) AccountEntriesInOrder(ctx context.Context, userID, accountID uuid.UUID) ([]Entry, error) {
 	query := `SELECT ` + entryColumns + ` FROM entries WHERE user_id = $1 AND account_id = $2
 		ORDER BY ` + entryOrder
-	return q.queryEntries(ctx, "store.AccountEntriesInOrder", query, userID, accountID)
+	return q.queryEntries(ctx, "store.AccountEntriesInOrder", scanEntry, query, userID, accountID)
 }
 
 // entryOrder is the order movements reach an account's balance. booked_at
@@ -253,15 +311,35 @@ func (q *Queries) AccountEntriesInOrder(ctx context.Context, userID, accountID u
 // source's own order otherwise.
 const entryOrder = `balance_on, booked_at NULLS FIRST, seq, id`
 
-// EntryByID returns one of the user's entries.
+// EntryByID returns one of the user's entries: a printed line, never a
+// capture (ADR-0002).
 func (q *Queries) EntryByID(ctx context.Context, userID, id uuid.UUID) (Entry, error) {
-	rows, err := q.queryEntries(ctx, "store.EntryByID",
+	rows, err := q.queryEntries(ctx, "store.EntryByID", scanEntry,
 		`SELECT `+entryColumns+` FROM entries WHERE id = $1 AND user_id = $2`, id, userID)
 	if err != nil {
 		return Entry{}, err
 	}
 	if len(rows) == 0 {
 		return Entry{}, wrap("store.EntryByID", ErrNotFound)
+	}
+	return rows[0], nil
+}
+
+// CaptureAsEntry returns one of the user's open captures — not linked to its
+// line, not discarded — as a movement with Origin capture, whatever it is now:
+// pending, printed or missing. It is how a movement id from a list, or one the
+// assistant was given, finds a noted purchase. Anything else, a linked or a
+// discarded capture included, is ErrNotFound: its line is the movement now, or
+// there is none.
+func (q *Queries) CaptureAsEntry(ctx context.Context, userID, id uuid.UUID) (Entry, error) {
+	rows, err := q.queryEntries(ctx, "store.CaptureAsEntry", scanMovement,
+		`SELECT `+captureAsEntryColumns+` FROM captures
+		WHERE id = $1 AND user_id = $2 AND entry_id IS NULL AND discarded_at IS NULL`, id, userID)
+	if err != nil {
+		return Entry{}, err
+	}
+	if len(rows) == 0 {
+		return Entry{}, wrap("store.CaptureAsEntry", ErrNotFound)
 	}
 	return rows[0], nil
 }
@@ -299,7 +377,9 @@ type AccountSums struct {
 	LastBooking civil.Date
 }
 
-// SumsByAccount totals every entry of each of the user's accounts.
+// SumsByAccount totals every entry of each of the user's accounts. Printed
+// lines only, never captures (ADR-0002): a purchase the owner noted must not
+// move a balance.
 func (q *Queries) SumsByAccount(ctx context.Context, userID uuid.UUID) (map[uuid.UUID]AccountSums, error) {
 	rows, err := q.q.Query(ctx, `
 		SELECT account_id, COALESCE(SUM(amount_cents), 0), count(*), MIN(balance_on), MAX(balance_on), MAX(booked_on)
@@ -323,7 +403,7 @@ func (q *Queries) SumsByAccount(ctx context.Context, userID uuid.UUID) (map[uuid
 }
 
 // SumThroughDay totals an account's entries that reached the balance on or
-// before day.
+// before day. Printed lines only, never captures (ADR-0002).
 func (q *Queries) SumThroughDay(ctx context.Context, accountID uuid.UUID, day civil.Date) (money.Cents, error) {
 	var total int64
 	err := q.q.QueryRow(ctx, `SELECT COALESCE(SUM(amount_cents), 0) FROM entries
@@ -332,7 +412,7 @@ func (q *Queries) SumThroughDay(ctx context.Context, accountID uuid.UUID, day ci
 }
 
 // SumBefore totals an account's entries that come strictly before the given
-// entry in balance order.
+// entry in balance order. Printed lines only, never captures (ADR-0002).
 func (q *Queries) SumBefore(ctx context.Context, accountID, entryID uuid.UUID) (money.Cents, error) {
 	var total int64
 	err := q.q.QueryRow(ctx, `
@@ -344,7 +424,10 @@ func (q *Queries) SumBefore(ctx context.Context, accountID, entryID uuid.UUID) (
 	return money.Cents(total), wrap("store.SumBefore", err)
 }
 
-func (q *Queries) queryEntries(ctx context.Context, op, query string, args ...any) ([]Entry, error) {
+// queryEntries runs a query whose rows scan reads: scanEntry for entryColumns,
+// scanMovement for movementColumns.
+func (q *Queries) queryEntries(ctx context.Context, op string, scan func(scanner) (Entry, error),
+	query string, args ...any) ([]Entry, error) {
 	rows, err := q.q.Query(ctx, query, args...)
 	if err != nil {
 		return nil, wrap(op, err)
@@ -352,7 +435,7 @@ func (q *Queries) queryEntries(ctx context.Context, op, query string, args ...an
 	defer rows.Close()
 	var out []Entry
 	for rows.Next() {
-		e, err := scanEntry(rows)
+		e, err := scan(rows)
 		if err != nil {
 			return nil, wrap(op, err)
 		}
@@ -361,26 +444,45 @@ func (q *Queries) queryEntries(ctx context.Context, op, query string, args ...an
 	return out, wrap(op, rows.Err())
 }
 
+// scanEntry reads entryColumns: a printed line.
 func scanEntry(s scanner) (Entry, error) {
+	return scanEntryWith(s)
+}
+
+// scanMovement reads movementColumns: a printed line or a pending capture.
+func scanMovement(s scanner) (Entry, error) {
+	var origin, source string
+	e, err := scanEntryWith(s, &origin, &source)
+	if err != nil {
+		return Entry{}, err
+	}
+	e.Origin, e.CaptureSource = origin, source
+	return e, nil
+}
+
+// scanEntryWith reads entryColumns and then whatever columns extra points at.
+func scanEntryWith(s scanner, extra ...any) (Entry, error) {
 	var (
 		e           Entry
 		amount      int64
 		bankBalance *int64
 		raw         []byte
 	)
-	err := s.Scan(&e.ID, &e.UserID, &e.AccountID, &e.StatementID, &e.RunID, &e.BookedOn, &e.BookedAt,
+	dest := []any{&e.ID, &e.UserID, &e.AccountID, &e.StatementID, &e.RunID, &e.BookedOn, &e.BookedAt,
 		&e.PostedOn, &e.BalanceOn, &e.Seq, &amount, &e.Kind, &e.UserKind, &e.Description, &e.BankRef,
 		&e.BankCategory, &bankBalance, &e.CategoryID, &e.CategorySource, &e.Note, &e.DedupKey, &raw,
-		&e.CreatedAt)
-	if err != nil {
+		&e.CreatedAt}
+	if err := s.Scan(append(dest, extra...)...); err != nil {
 		return Entry{}, err
 	}
 	finish(&e, amount, bankBalance, raw)
 	return e, nil
 }
 
-// finish converts the scanned raw columns into an Entry's typed fields.
+// finish converts the scanned raw columns into an Entry's typed fields. A row
+// of entries is a printed line; scanMovement says otherwise when it is not.
 func finish(e *Entry, amount int64, bankBalance *int64, raw []byte) {
+	e.Origin = OriginStatement
 	e.Amount = money.Cents(amount)
 	if bankBalance != nil {
 		b := money.Cents(*bankBalance)

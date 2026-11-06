@@ -2,7 +2,7 @@
  * <ImportFilePicker file onFile disabled? error? />
  *
  *   file      the chosen File, or null
- *   onFile    called with a File the picker accepts (.txt, .csv or .xlsx); a file
+ *   onFile    called with a File the picker accepts (.txt, .csv, .xlsx or .pdf); a file
  *             of any other kind is refused here with a line under the picker
  *   disabled  while an import or a check is running
  *   error     an outside message to show under the picker
@@ -18,8 +18,8 @@ import { useEffect, useId, useRef, useState, type DragEvent } from 'react'
 import { Tile } from '@/components/kit'
 import { cn } from '@/lib/utils'
 
-const ACCEPT = '.txt,.csv,.xlsx'
-const ACCEPTED = /\.(txt|csv|xlsx)$/i
+const ACCEPT = '.txt,.csv,.xlsx,.pdf'
+const ACCEPTED = /\.(txt|csv|xlsx|pdf)$/i
 
 export function ImportFilePicker({
   file,
@@ -56,7 +56,9 @@ export function ImportFilePicker({
   const take = (picked: File | undefined) => {
     if (!picked) return
     if (!ACCEPTED.test(picked.name)) {
-      setRefused(`${picked.name} no es un estado de cuenta: sube un .csv, .txt o .xlsx.`)
+      setRefused(
+        `${picked.name} no es un estado de cuenta: sube un .csv, .txt, .xlsx o .pdf.`,
+      )
       return
     }
     setRefused(null)
@@ -117,7 +119,7 @@ export function ImportFilePicker({
               fileSize(file.size)
             ) : (
               <>
-                .csv, .txt o .xlsx
+                .csv, .txt, .xlsx o .pdf
                 <span className="hidden lg:inline">, o arrástralo aquí</span>
               </>
             )}

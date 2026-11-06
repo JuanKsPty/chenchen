@@ -12,6 +12,8 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -22,13 +24,14 @@ import (
 
 // Config is the whole configuration of the API process.
 type Config struct {
-	Env  string // "development" or "production"; affects log format and error detail
-	HTTP HTTPConfig
-	DB   DBConfig
-	Auth AuthConfig
-	AI   AIConfig
-	IBKR IBKRConfig
-	Log  LogConfig
+	Env   string // "development" or "production"; affects log format and error detail
+	HTTP  HTTPConfig
+	DB    DBConfig
+	Auth  AuthConfig
+	AI    AIConfig
+	IBKR  IBKRConfig
+	OAuth OAuthConfig
+	Log   LogConfig
 }
 
 type HTTPConfig struct {
@@ -67,6 +70,15 @@ type AuthConfig struct {
 	// it. Long, because re-proving a device is exactly the friction PIN login
 	// exists to remove.
 	DeviceTTL time.Duration
+	// CaptureIPRateLimit is how many purchases the phone's shortcut endpoint
+	// takes per IP per minute. It runs before a key is looked up, so guessing
+	// keys costs a request each; but someone with many addresses gets that
+	// many allowances, so it is only a speed bump.
+	CaptureIPRateLimit int
+	// CaptureKeyRateLimit is how many purchases one shortcut key may send per
+	// minute, and the limit that holds: far more than anyone taps, few enough
+	// that a leaked key cannot bury an account in noise before it is revoked.
+	CaptureKeyRateLimit int
 }
 
 type AIConfig struct {
@@ -113,6 +125,36 @@ type IBKRConfig struct {
 // Enabled reports whether IBKR tokens can be encrypted and, therefore, stored.
 func (c IBKRConfig) Enabled() bool { return len(c.TokenEncryptionKey) > 0 }
 
+// OAuthConfig is how Claude signs in to chenchén (ADR-0004): chenchén is both
+// the authorization server Claude gets its tokens from and the resource those
+// tokens are for, and both are named by the address the app is reached at.
+//
+// Like the AI key, it is optional. Without PUBLIC_URL there is no issuer to
+// name, so every OAuth and MCP route is left unmounted and answers 404, and the
+// rest of the application runs as it always did.
+type OAuthConfig struct {
+	// PublicURL is where the app is reached, in canonical form: lower-case
+	// scheme and host, no default port, no path and no trailing slash. Empty
+	// when unset.
+	PublicURL string
+	// RateLimit is how many requests per minute one address may make to the
+	// authorize and token endpoints, each counted on its own. Generous: all of
+	// claude.ai reaches them from a handful of addresses.
+	RateLimit int
+}
+
+// Enabled reports whether Claude can connect at all.
+func (c OAuthConfig) Enabled() bool { return c.PublicURL != "" }
+
+// Issuer is the authorization server's identifier: the public URL itself,
+// with no path, which is what RFC 8414 discovery derives the metadata address
+// from.
+func (c OAuthConfig) Issuer() string { return c.PublicURL }
+
+// Resource is the protected resource Claude's tokens are for: the MCP
+// endpoint, in exactly the form protected resource metadata announces it.
+func (c OAuthConfig) Resource() string { return c.PublicURL + "/api/mcp" }
+
 type LogConfig struct {
 	Level  string // debug | info | warn | error
 	Format string // json | text
@@ -150,7 +192,12 @@ func Load() (Config, error) {
 			// 180 days: long enough that "trusted this device" means something,
 			// short enough that a device nobody has touched in half a year is not
 			// trusted forever.
-			DeviceTTL: duration("DEVICE_TOKEN_TTL", 4320*time.Hour, fail),
+			DeviceTTL:           duration("DEVICE_TOKEN_TTL", 4320*time.Hour, fail),
+			CaptureIPRateLimit:  number("CAPTURE_IP_RATE_LIMIT", 60, fail),
+			CaptureKeyRateLimit: number("CAPTURE_KEY_RATE_LIMIT", 12, fail),
+		},
+		OAuth: OAuthConfig{
+			RateLimit: number("OAUTH_RATE_LIMIT", 30, fail),
 		},
 		AI: AIConfig{
 			APIKey: str("ANTHROPIC_API_KEY", ""),
@@ -207,6 +254,28 @@ func Load() (Config, error) {
 	if cfg.AI.MaxToolTurns < 1 {
 		fail("AI_MAX_TOOL_TURNS must be at least 1, got %d", cfg.AI.MaxToolTurns)
 	}
+	// A limiter quietly treats anything below one as one, so a zero meant as
+	// "off" would instead let one purchase a minute through: say so at boot.
+	if cfg.Auth.CaptureIPRateLimit < 1 {
+		fail("CAPTURE_IP_RATE_LIMIT must be at least 1, got %d", cfg.Auth.CaptureIPRateLimit)
+	}
+	if cfg.Auth.CaptureKeyRateLimit < 1 {
+		fail("CAPTURE_KEY_RATE_LIMIT must be at least 1, got %d", cfg.Auth.CaptureKeyRateLimit)
+	}
+
+	if cfg.OAuth.RateLimit < 1 {
+		fail("OAUTH_RATE_LIMIT must be at least 1, got %d", cfg.OAuth.RateLimit)
+	}
+	// Optional as well: without it Claude cannot connect, and nothing else
+	// changes.
+	if raw := strings.TrimSpace(os.Getenv("PUBLIC_URL")); raw != "" {
+		publicURL, err := publicOrigin(raw)
+		if err != nil {
+			fail("PUBLIC_URL %w", err)
+		} else {
+			cfg.OAuth.PublicURL = publicURL
+		}
+	}
 
 	// Optional, like the AI key: an empty value leaves the IBKR link feature
 	// disabled rather than failing the boot, since a deployment that never links
@@ -226,6 +295,73 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("config: %w", errors.Join(errs...))
 	}
 	return cfg, nil
+}
+
+// publicOrigin checks that raw is an address the app can be reached at — an
+// origin, with nothing after the host — and returns it canonical.
+//
+// https is required except on a loopback host: the tokens Claude receives are
+// bearer credentials, and claude.ai will not connect to anything else anyway.
+func publicOrigin(raw string) (string, error) {
+	canonical, err := CanonicalURL(raw)
+	if err != nil {
+		return "", err
+	}
+	u, _ := url.Parse(canonical)
+	if u.Path != "" {
+		return "", fmt.Errorf("must be an origin with no path, got %q", raw)
+	}
+	if u.Scheme != "https" && !isLoopback(u.Hostname()) {
+		return "", fmt.Errorf("must use https outside localhost, got %q", raw)
+	}
+	return canonical, nil
+}
+
+// CanonicalURL is the form an absolute http(s) URL is stored and compared in:
+// scheme and host lower-cased, the scheme's default port dropped and any
+// trailing slash trimmed. The path keeps its case, since a path is
+// case-sensitive. A URL with credentials, a query or a fragment is refused —
+// none of them belong in an origin or in a resource identifier.
+func CanonicalURL(raw string) (string, error) {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return "", fmt.Errorf("is not a URL: %w", err)
+	}
+	scheme := strings.ToLower(u.Scheme)
+	switch {
+	case scheme != "https" && scheme != "http":
+		return "", fmt.Errorf("must be an http or https URL, got %q", raw)
+	case u.Host == "" || u.Opaque != "":
+		return "", fmt.Errorf("must name a host, got %q", raw)
+	case u.User != nil:
+		return "", fmt.Errorf("must not carry credentials")
+	case u.RawQuery != "" || u.ForceQuery || u.Fragment != "" || strings.Contains(raw, "#"):
+		return "", fmt.Errorf("must not have a query or a fragment, got %q", raw)
+	}
+
+	host := strings.ToLower(u.Hostname())
+	if host == "" {
+		return "", fmt.Errorf("must name a host, got %q", raw)
+	}
+	port := u.Port()
+	if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+		port = ""
+	}
+	switch {
+	case port != "":
+		host = net.JoinHostPort(host, port)
+	case strings.Contains(host, ":"):
+		host = "[" + host + "]" // an IPv6 literal keeps its brackets
+	}
+	return scheme + "://" + host + strings.TrimRight(u.EscapedPath(), "/"), nil
+}
+
+func isLoopback(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 func randomSecret(n int) ([]byte, error) {

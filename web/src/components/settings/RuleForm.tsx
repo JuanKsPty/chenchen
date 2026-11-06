@@ -35,7 +35,7 @@ import {
   NativeSelectOption,
 } from '@/components/ui/native-select'
 import { Spinner } from '@/components/ui/spinner'
-import { categoryNames } from '@/lib/categories'
+import { categoryOptions } from '@/lib/categories'
 import { useSaveRule } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { focusWhenReady } from './focus'
@@ -45,27 +45,11 @@ const MAX_TEXT = 60
 
 type RuleField = 'match_text' | 'category_id'
 
-interface Option {
-  id: string
-  name: string
-}
-
 /** The categories as <optgroup>s: Gastos first (what rules are mostly for), then Entradas. */
 function categoryGroups(tree: CategoryNode[] | undefined) {
-  const names = categoryNames(tree)
-  const spend: Option[] = []
-  const income: Option[] = []
-  for (const node of tree ?? []) {
-    const group = node.kind === 'income' ? income : spend
-    group.push({ id: node.id, name: names.get(node.id) ?? node.name })
-    for (const child of node.children) {
-      group.push({ id: child.id, name: names.get(child.id) ?? child.name })
-    }
-  }
-  const byName = (a: Option, b: Option) => a.name.localeCompare(b.name, 'es')
   return [
-    { label: 'Gastos', options: spend.sort(byName) },
-    { label: 'Entradas', options: income.sort(byName) },
+    { label: 'Gastos', options: categoryOptions(tree, 'expense') },
+    { label: 'Entradas', options: categoryOptions(tree, 'income') },
   ].filter((group) => group.options.length > 0)
 }
 

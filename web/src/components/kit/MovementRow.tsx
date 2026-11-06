@@ -24,6 +24,12 @@
  *     has its own column) · the owner's note: "Alimentación · 24 oct · Tarjeta ···1111".
  *   - Right: the signed amount, body 600 tabular. In: "+$3,800.00" in positive.
  *     Out: "−$84.37" in the text colour.
+ *   - A purchase the owner noted that no statement has printed yet (origin
+ *     'capture') starts its second line with "Pendiente · " and mutes its amount: it
+ *     counts as spending, but the balance does not have it yet. Not the tile's
+ *     `pending`, which means "Sin categoría", and never red or orange. On a card
+ *     someone else pays (`account.paid_by_other`) it is an ordinary line: no
+ *     statement will ever print it, so it is not waiting for anything.
  *   - Wide lists also show "Categorizar" in primary-text on uncategorized rows.
  *
  * Wide-layout columns respond to the nearest @container (MovementList sets one). The
@@ -33,7 +39,7 @@
  * old 36rem it got about 70px.
  */
 import type { Account, Entry } from '@/api/types'
-import { accountWithNumber } from '@/lib/account'
+import { accountWithNumber, paidByOther } from '@/lib/account'
 import { movementCategory } from '@/lib/categories'
 import { entryKindLabel, formatCivilDayMonth } from '@/lib/format'
 import { cn } from '@/lib/utils'
@@ -62,9 +68,22 @@ export function MovementRow({
   const category = movementCategory(entry, categoryName)
   const accountText = showAccount && account ? accountWithNumber(account) : undefined
   const accountColumn = Boolean(accountText) && !compact
+  // A list only ever carries the noted purchases that still count (the server leaves
+  // out those its statement already printed), so a capture here is pending: waiting
+  // for its statement, unless its card is one someone else pays, which has none.
+  // Said only once the account has loaded: until then it could be such a card, and
+  // a flash of "Pendiente" there would promise a statement that never comes.
+  const pending =
+    entry.origin === 'capture' && account !== undefined && !paidByOther(account)
 
   const meta = (
     <>
+      {pending && (
+        <>
+          <span className="font-semibold">Pendiente</span>
+          {' · '}
+        </>
+      )}
       {category.label}
       {showDate && ` · ${formatCivilDayMonth(entry.booked_on)}`}
       {accountText && (
@@ -99,7 +118,12 @@ export function MovementRow({
           </span>
         </>
       )}
-      <Amount amount={entry.amount} signed className="text-right" />
+      <Amount
+        amount={entry.amount}
+        signed
+        tone={pending ? 'muted' : 'auto'}
+        className="text-right"
+      />
     </>
   )
 

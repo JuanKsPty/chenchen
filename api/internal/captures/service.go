@@ -1,0 +1,690 @@
+package captures
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"github.com/google/uuid"
+
+	"github.com/JuanKsPty/chenchen/api/internal/categories"
+	"github.com/JuanKsPty/chenchen/api/internal/civil"
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/store"
+)
+
+var (
+	// ErrNotFound means no such noted purchase belongs to the caller.
+	ErrNotFound = errors.New("captures: purchase not found")
+	// ErrAccountNotFound means no such account belongs to the caller.
+	ErrAccountNotFound = errors.New("captures: account not found")
+	// ErrBrokerage means the account is a brokerage account, which no card
+	// pays from.
+	ErrBrokerage = errors.New("captures: a brokerage account takes no purchases")
+	// ErrMerchantRequired means the purchase says nothing about where it was.
+	ErrMerchantRequired = errors.New("captures: the merchant is required")
+	// ErrMerchantTooLong means the merchant is longer than maxMerchantRunes.
+	ErrMerchantTooLong = errors.New("captures: the merchant is too long")
+	// ErrNoteTooLong means the note is longer than maxNoteRunes.
+	ErrNoteTooLong = errors.New("captures: the note is too long")
+	// ErrAmountTooLarge means the amount is more than maxAmount.
+	ErrAmountTooLarge = errors.New("captures: the amount is too large")
+	// ErrFutureDay means the purchase is dated after today in Panama.
+	ErrFutureDay = errors.New("captures: the day is after today")
+	// ErrLinked means the purchase is linked to its line, which is the
+	// movement now: unlink it first.
+	ErrLinked = errors.New("captures: the purchase is linked to its line")
+	// ErrDiscarded means the owner discarded the purchase: restore it first.
+	ErrDiscarded = errors.New("captures: the purchase is discarded")
+	// ErrNotLinked means the purchase has no line to unlink.
+	ErrNotLinked = errors.New("captures: the purchase is not linked to a line")
+	// ErrLineNotFound means no such printed line belongs to the caller.
+	ErrLineNotFound = errors.New("captures: line not found")
+	// ErrOtherAccount means the line is in a different account from the
+	// purchase, so it cannot be that purchase.
+	ErrOtherAccount = errors.New("captures: the line is in another account")
+	// ErrNotAPurchase means neither the importer nor the owner called the
+	// line an expense: a payment or a deposit is no purchase.
+	ErrNotAPurchase = errors.New("captures: the line is not an expense")
+	// ErrLineTaken means another purchase is already linked to the line.
+	ErrLineTaken = errors.New("captures: the line is linked to another purchase")
+	// ErrIDTaken means the id a caller chose for a new purchase is another
+	// user's purchase.
+	ErrIDTaken = errors.New("captures: the id belongs to another purchase")
+	// ErrChannel means a purchase was to be noted through Add by a channel
+	// other than the owner's hand or the assistant: the caller's mistake.
+	ErrChannel = errors.New("captures: purchases are added by hand or by the assistant")
+)
+
+const (
+	// maxMerchantRunes and maxNoteRunes are the schema's limits, checked
+	// here first so the owner hears which field is too long.
+	maxMerchantRunes = 140
+	maxNoteRunes     = 500
+)
+
+// categoryChosen and categoryChosenByAssistant are the category_source of a
+// category Add was given: by the owner, or by the assistant noting a purchase
+// (store.ChannelAgent). Either outranks a rule's; only the owner's tells the
+// assistant to leave it alone.
+const (
+	categoryChosen            = "user"
+	categoryChosenByAssistant = "assistant"
+)
+
+// maxAmount is the most one noted purchase can be. No card purchase comes
+// close; a card number pasted into the amount does, and would count as
+// spending, swamp every total and overflow the arithmetic that sums them.
+const maxAmount money.Cents = 10_000_000 * 100
+
+// Service notes purchases by hand and pairs them with their printed lines.
+// Every write takes the user's lock, like an import, so a link and an import
+// can never interleave over the same lines.
+type Service struct {
+	db         *store.DB
+	categories *categories.Service
+	now        func() time.Time
+}
+
+func NewService(db *store.DB, cats *categories.Service) *Service {
+	return &Service{db: db, categories: cats, now: time.Now}
+}
+
+// Capture is a noted purchase as the owner sees it: what it is now and, once
+// linked, the printed line it turned out to be.
+type Capture struct {
+	store.Capture
+	Line *store.Entry
+	// AlreadyNoted says Add found the purchase already noted another way — by
+	// the shortcut, say — and only recorded that it was told of this way too:
+	// nothing new counts, and the purchase is as it was but for a note or a
+	// category it lacked, which what was typed fills in.
+	AlreadyNoted bool
+}
+
+// AddInput is a purchase the owner types, or the assistant notes for them.
+type AddInput struct {
+	// ID, when the caller chooses one, makes noting safe to repeat: a second
+	// Add with the same ID returns the purchase the first one noted, or the
+	// one it found already noted, instead of noting it twice. A form that
+	// lost the answer to its first try can send it again. Zero means a new id.
+	ID uuid.UUID
+	// Channel is who is noting it: store.ChannelManual, the owner by hand,
+	// which is the default, or store.ChannelAgent, the assistant from what it
+	// read. Neither knows the purchase's time.
+	Channel   string
+	AccountID uuid.UUID
+	// Amount is what was paid, positive; it is stored with the holder's sign.
+	Amount   money.Cents
+	Merchant string
+	// Day is the purchase's day; zero means today in Panama.
+	Day        civil.Date
+	CategoryID *uuid.UUID
+	Note       string
+	// Reference is the bank's own reference for the purchase, as the
+	// assistant read it, when the bank shows one: two purchases of the same
+	// amount, merchant and day with different references are two. Only
+	// store.ChannelAgent uses it.
+	Reference string
+}
+
+// Add notes a purchase by hand, or for the assistant, in one of the user's
+// accounts. If another channel already noted it — the same amount in the
+// account, booked within JoinDays of its day, not discarded, with no signal of
+// this channel yet — that purchase is returned with AlreadyNoted, and nothing
+// new counts. What was typed is kept in the signal, and fills in what the
+// purchase lacks while it is open: the note when it has none, and the category
+// when its own came from a rule or it has none (FillCapture). Its amount, day
+// and state stay as they were. Otherwise it is noted: without a category, the
+// user's rules file it by merchant, as they would its line, and if its line is
+// already imported and could be no other purchase, it is linked at once and
+// never counts twice.
+//
+// The assistant (store.ChannelAgent) telling again of a purchase it already
+// told of — the same reference, or without one the same amount, merchant and
+// day in the account — gets that purchase back with AlreadyNoted, in whatever
+// state it is: it reads the same purchases in transit every time it looks. A
+// category it gives is recorded as the assistant's choice, never the owner's.
+func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Capture, error) {
+	channel := in.Channel
+	if channel == "" {
+		channel = store.ChannelManual
+	}
+	if channel != store.ChannelManual && channel != store.ChannelAgent {
+		return Capture{}, ErrChannel
+	}
+	merchant, err := cleanMerchant(in.Merchant)
+	if err != nil {
+		return Capture{}, err
+	}
+	chosenBy := categoryChosen
+	if channel == store.ChannelAgent {
+		chosenBy = categoryChosenByAssistant
+	}
+	note, err := cleanNote(in.Note)
+	if err != nil {
+		return Capture{}, err
+	}
+	if err := checkAmount(in.Amount); err != nil {
+		return Capture{}, err
+	}
+	day := in.Day
+	if day.IsZero() {
+		day = s.today()
+	} else if err := s.checkDay(day); err != nil {
+		return Capture{}, err
+	}
+	if in.CategoryID != nil {
+		if _, err := s.categories.Get(ctx, userID, *in.CategoryID); err != nil {
+			return Capture{}, err
+		}
+	}
+
+	var out Capture
+	err = s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		account, err := q.AccountByID(ctx, userID, in.AccountID)
+		if errors.Is(err, store.ErrNotFound) {
+			return fmt.Errorf("%w: %v", ErrAccountNotFound, err)
+		}
+		if err != nil {
+			return err
+		}
+		if account.Type == "brokerage" {
+			return ErrBrokerage
+		}
+		if in.ID != uuid.Nil {
+			// Noted already, by an earlier try whose answer was lost. The
+			// user's lock makes this check and the insert below one step.
+			noted, found, err := notedAs(ctx, q, userID, in.ID)
+			if err != nil || found {
+				out = noted
+				return err
+			}
+		}
+
+		now := s.now()
+		// What was typed, as the signal's raw: kept if it joins a purchase
+		// already noted, whose own merchant stays.
+		raw := map[string]string{"merchant": merchant}
+		if in.CategoryID != nil {
+			raw["category_id"] = in.CategoryID.String()
+		}
+		if note != "" {
+			raw["note"] = note
+		}
+		if channel == store.ChannelAgent {
+			// The assistant reads the same list of purchases in transit each
+			// time it looks, so one it already told of — the same amount,
+			// merchant and day, in this account — is that purchase again,
+			// whatever became of it since: found by what it sent then, which
+			// its raw keeps whether it noted the purchase or joined one.
+			raw["amount"], raw["day"] = in.Amount.String(), day.String()
+			if in.Reference != "" {
+				raw["reference"] = in.Reference
+			}
+			told, found, err := q.CaptureToldBy(ctx, userID, account.ID, channel, in.Amount, merchant, day,
+				in.Reference)
+			if err != nil {
+				return err
+			}
+			if found {
+				if err := q.FillCapture(ctx, userID, told.ID, in.CategoryID, chosenBy, note); err != nil {
+					return err
+				}
+				if out, err = load(ctx, q, userID, told.ID); err != nil {
+					return err
+				}
+				out.AlreadyNoted = true
+				return nil
+			}
+		}
+		signal := store.CaptureSignal{Channel: channel, At: now, Raw: raw}
+		if in.ID != uuid.Nil {
+			// So that a repeat finds the purchase this joins (notedAs).
+			id := in.ID
+			signal.CallerID = &id
+			raw["id"] = id.String()
+		}
+		joined, found, err := JoinSignal(ctx, q, userID, account.ID, in.Amount, day, signal)
+		if err != nil {
+			return err
+		}
+		if found {
+			if err := q.FillCapture(ctx, userID, joined.ID, in.CategoryID, chosenBy, note); err != nil {
+				return err
+			}
+			if out, err = load(ctx, q, userID, joined.ID); err != nil {
+				return err
+			}
+			out.AlreadyNoted = true
+			return nil
+		}
+
+		id := in.ID
+		if id == uuid.Nil {
+			id = uuid.New()
+		}
+		c := store.Capture{ID: id, UserID: userID, AccountID: account.ID, Source: channel, ReceivedAt: now,
+			BookedOn: day, Amount: -in.Amount, Merchant: merchant, Note: note}
+		if channel == store.ChannelAgent {
+			// Its first signal keeps what the assistant sent, as a joining
+			// one does, for the next reading to find it by.
+			c.Raw = raw
+		}
+		if in.CategoryID != nil {
+			src := chosenBy
+			c.CategoryID, c.CategorySource = in.CategoryID, &src
+		} else if c.CategoryID, err = ruleCategory(ctx, q, userID, merchant); err != nil {
+			return err
+		} else if c.CategoryID != nil {
+			src := "rule"
+			c.CategorySource = &src
+		}
+		if err := q.InsertCapture(ctx, c); store.IsConstraint(err, "captures_pkey") {
+			return fmt.Errorf("%w: %v", ErrIDTaken, err)
+		} else if err != nil {
+			return err
+		}
+		if _, err := AutoLink(ctx, q, userID, []uuid.UUID{account.ID}); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, userID, c.ID)
+		return err
+	})
+	return out, err
+}
+
+// EditInput corrects what was noted; a nil field stays as it is.
+type EditInput struct {
+	// Amount is positive, as in AddInput.
+	Amount   *money.Cents
+	Merchant *string
+	Day      *civil.Date
+}
+
+// Edit corrects an open purchase's amount, merchant or day. Whether it counts
+// derives again, and it is linked if its line is now obvious. A new merchant
+// is filed again by the rules, unless the owner or the assistant chose its
+// category.
+func (s *Service) Edit(ctx context.Context, userID, id uuid.UUID, in EditInput) (Capture, error) {
+	if in.Merchant != nil {
+		merchant, err := cleanMerchant(*in.Merchant)
+		if err != nil {
+			return Capture{}, err
+		}
+		in.Merchant = &merchant
+	}
+	if in.Amount != nil {
+		if err := checkAmount(*in.Amount); err != nil {
+			return Capture{}, err
+		}
+	}
+	if in.Day != nil && in.Day.IsZero() {
+		in.Day = nil
+	}
+	if in.Day != nil {
+		if err := s.checkDay(*in.Day); err != nil {
+			return Capture{}, err
+		}
+	}
+
+	var out Capture
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		c, err := openCapture(ctx, q, userID, id)
+		if err != nil {
+			return err
+		}
+		amount, merchant, day := c.Amount, c.Merchant, c.BookedOn
+		if in.Amount != nil {
+			amount = -*in.Amount
+		}
+		if in.Merchant != nil {
+			merchant = *in.Merchant
+		}
+		if in.Day != nil {
+			day = *in.Day
+		}
+		if err := q.UpdateCapture(ctx, userID, id, amount, merchant, day); err != nil {
+			return notFound(err)
+		}
+		// The owner may file it from the movements screen meanwhile, without
+		// the user's lock: FileCaptureByRule checks who chose as it writes.
+		if merchant != c.Merchant {
+			category, err := ruleCategory(ctx, q, userID, merchant)
+			if err != nil {
+				return err
+			}
+			if err := q.FileCaptureByRule(ctx, userID, id, category); err != nil {
+				return err
+			}
+		}
+		if _, err := AutoLink(ctx, q, userID, []uuid.UUID{c.AccountID}); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, userID, id)
+		return err
+	})
+	return out, err
+}
+
+// Link pairs an open purchase with the printed line the owner says it is. Any
+// amount is accepted: a tip or a pre-authorization is why the two differ, and
+// the line is what counts either way. The line must be in the purchase's
+// account, be an expense to the importer or the owner, and have no other
+// purchase.
+func (s *Service) Link(ctx context.Context, userID, id, entryID uuid.UUID) (Capture, error) {
+	var out Capture
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		c, err := openCapture(ctx, q, userID, id)
+		if err != nil {
+			return err
+		}
+		line, err := lineFor(ctx, q, userID, c, entryID)
+		if err != nil {
+			return err
+		}
+		if !couldBePurchase(line) {
+			return ErrNotAPurchase
+		}
+		err = q.LinkCapture(ctx, userID, id, entryID, store.LinkedByUser)
+		if store.IsConstraint(err, "captures_one_per_line_idx") {
+			return fmt.Errorf("%w: %v", ErrLineTaken, err)
+		}
+		if err != nil {
+			return notFound(err)
+		}
+		// The line is taken now, which may leave another purchase only one.
+		if _, err := AutoLink(ctx, q, userID, []uuid.UUID{c.AccountID}); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, userID, id)
+		return err
+	})
+	return out, err
+}
+
+// Unlink undoes a link the owner says is wrong ("No es esta compra"). The line
+// is never offered for this purchase again, which may make it count again
+// until its real line arrives: the owner just said it is a purchase of its
+// own. The category and note the link carried to the line go back, so the
+// rules, or the purchase the line really is, can file it again.
+func (s *Service) Unlink(ctx context.Context, userID, id uuid.UUID) (Capture, error) {
+	var out Capture
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		c, err := capture(ctx, q, userID, id)
+		if err != nil {
+			return err
+		}
+		if c.EntryID == nil {
+			return ErrNotLinked
+		}
+		if err := q.UnlinkCapture(ctx, userID, id); err != nil {
+			return notFound(err)
+		}
+		if _, err := AutoLink(ctx, q, userID, []uuid.UUID{c.AccountID}); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, userID, id)
+		return err
+	})
+	return out, err
+}
+
+// Reject records that a line is not an open purchase ("No"), whether it was
+// one it could be or one review suggested as close. It is never offered for
+// this purchase again.
+func (s *Service) Reject(ctx context.Context, userID, id, entryID uuid.UUID) (Capture, error) {
+	var out Capture
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		c, err := openCapture(ctx, q, userID, id)
+		if err != nil {
+			return err
+		}
+		if _, err := lineFor(ctx, q, userID, c, entryID); err != nil {
+			return err
+		}
+		if err := q.RejectPair(ctx, userID, id, entryID); err != nil {
+			return err
+		}
+		if _, err := AutoLink(ctx, q, userID, []uuid.UUID{c.AccountID}); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, userID, id)
+		return err
+	})
+	return out, err
+}
+
+// Discard records that an open purchase did not happen — a declined tap, one
+// noted twice — so it never counts. Discarding it again changes nothing.
+func (s *Service) Discard(ctx context.Context, userID, id uuid.UUID) (Capture, error) {
+	return s.setDiscarded(ctx, userID, id, true)
+}
+
+// Restore undoes Discard: the purchase counts again, or not, as a new one
+// would. Restoring one that is not discarded changes nothing.
+func (s *Service) Restore(ctx context.Context, userID, id uuid.UUID) (Capture, error) {
+	return s.setDiscarded(ctx, userID, id, false)
+}
+
+func (s *Service) setDiscarded(ctx context.Context, userID, id uuid.UUID, discard bool) (Capture, error) {
+	var out Capture
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		c, err := capture(ctx, q, userID, id)
+		if err != nil {
+			return err
+		}
+		if discard && c.EntryID != nil {
+			return ErrLinked
+		}
+		switch {
+		case discard && c.DiscardedAt == nil:
+			err = q.DiscardCapture(ctx, userID, id)
+		case !discard && c.DiscardedAt != nil:
+			err = q.RestoreCapture(ctx, userID, id)
+		}
+		if err != nil {
+			return notFound(err)
+		}
+		// Either way a line may now have one purchase fewer or more to choose
+		// from.
+		if _, err := AutoLink(ctx, q, userID, []uuid.UUID{c.AccountID}); err != nil {
+			return err
+		}
+		out, err = load(ctx, q, userID, id)
+		return err
+	})
+	return out, err
+}
+
+// Pending lists the user's pending purchases, in one account or all of them,
+// newest first, each with the channels that told of it.
+func (s *Service) Pending(ctx context.Context, userID uuid.UUID, accountID *uuid.UUID) ([]store.PendingCapture, error) {
+	return s.db.Q().PendingCaptures(ctx, userID, accountID)
+}
+
+// Review lists the purchases that need the owner: those a line could be but
+// none was linked, and those a statement passed without printing, with what
+// could be their line.
+func (s *Service) Review(ctx context.Context, userID uuid.UUID) ([]store.CaptureReview, error) {
+	return s.db.Q().CapturesForReview(ctx, userID)
+}
+
+func (s *Service) today() civil.Date { return civil.Of(s.now().In(civil.Panama)) }
+
+// checkDay refuses a day after today: a typo in the year would otherwise file
+// a purchase in a month that has not happened.
+func (s *Service) checkDay(day civil.Date) error {
+	if day.After(s.today()) {
+		return ErrFutureDay
+	}
+	return nil
+}
+
+// checkAmount refuses an amount that is not a purchase: nothing paid, or more
+// than maxAmount.
+func checkAmount(amount money.Cents) error {
+	switch {
+	case amount <= 0:
+		return money.ErrNotPositive
+	case amount > maxAmount:
+		return ErrAmountTooLarge
+	}
+	return nil
+}
+
+func cleanMerchant(merchant string) (string, error) {
+	merchant = squeeze(merchant)
+	switch {
+	case merchant == "":
+		return "", ErrMerchantRequired
+	case utf8.RuneCountInString(merchant) > maxMerchantRunes:
+		return "", ErrMerchantTooLong
+	}
+	return merchant, nil
+}
+
+// squeeze tidies a name someone typed or a phone sent: whitespace of any kind
+// collapses to single spaces and is trimmed, and control and format
+// characters go, since they cannot be seen and a format character can make
+// the name render as something other than what it is (see the accounts
+// alias). They are dropped rather than refused: a purchase must not be lost
+// over a stray tab in its merchant.
+func squeeze(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	// Ranging decodes invalid UTF-8 as U+FFFD, so the result is always text
+	// the database takes.
+	for _, r := range s {
+		switch {
+		case unicode.IsSpace(r):
+			b.WriteRune(' ')
+		case unicode.IsControl(r), unicode.Is(unicode.Cf, r):
+		default:
+			b.WriteRune(r)
+		}
+	}
+	return strings.Join(strings.Fields(b.String()), " ")
+}
+
+func cleanNote(note string) (string, error) {
+	note = strings.TrimSpace(note)
+	if utf8.RuneCountInString(note) > maxNoteRunes {
+		return "", ErrNoteTooLong
+	}
+	return note, nil
+}
+
+// ruleCategory is the category the user's rules give a merchant, if any.
+func ruleCategory(ctx context.Context, q *store.Queries, userID uuid.UUID, merchant string) (*uuid.UUID, error) {
+	rules, err := q.CategoryRulesByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	return store.MatchRule(merchant, rules).CategoryID, nil
+}
+
+// notedAs finds the purchase an earlier Add with this id noted, whatever its
+// state: the one with the id, or the one its signal joined instead, which is
+// AlreadyNoted again. found is false when there is neither.
+func notedAs(ctx context.Context, q *store.Queries, userID, id uuid.UUID) (c Capture, found bool, err error) {
+	c, err = load(ctx, q, userID, id)
+	if err == nil {
+		return c, true, nil
+	}
+	if !errors.Is(err, ErrNotFound) {
+		return Capture{}, false, err
+	}
+	joined, found, err := q.CaptureJoinedAs(ctx, userID, id)
+	if err != nil || !found {
+		return Capture{}, false, err
+	}
+	if c, err = load(ctx, q, userID, joined.ID); err != nil {
+		return Capture{}, false, err
+	}
+	c.AlreadyNoted = true
+	return c, true, nil
+}
+
+// capture reads one of the user's purchases, whatever its state.
+func capture(ctx context.Context, q *store.Queries, userID, id uuid.UUID) (store.Capture, error) {
+	c, err := q.CaptureByID(ctx, userID, id)
+	return c, notFound(err)
+}
+
+// openCapture reads one of the user's purchases that is neither linked nor
+// discarded: the only ones whose line is still a question.
+func openCapture(ctx context.Context, q *store.Queries, userID, id uuid.UUID) (store.Capture, error) {
+	c, err := capture(ctx, q, userID, id)
+	switch {
+	case err != nil:
+		return store.Capture{}, err
+	case c.EntryID != nil:
+		return store.Capture{}, ErrLinked
+	case c.DiscardedAt != nil:
+		return store.Capture{}, ErrDiscarded
+	}
+	return c, nil
+}
+
+// lineFor reads one of the user's printed lines that could be paired with c:
+// one of its own account.
+func lineFor(ctx context.Context, q *store.Queries, userID uuid.UUID, c store.Capture, entryID uuid.UUID) (store.Entry, error) {
+	line, err := q.EntryByID(ctx, userID, entryID)
+	if errors.Is(err, store.ErrNotFound) {
+		return store.Entry{}, fmt.Errorf("%w: %v", ErrLineNotFound, err)
+	}
+	if err != nil {
+		return store.Entry{}, err
+	}
+	if line.AccountID != c.AccountID {
+		return store.Entry{}, ErrOtherAccount
+	}
+	return line, nil
+}
+
+// load reads a purchase as the owner sees it, with its line when linked.
+func load(ctx context.Context, q *store.Queries, userID, id uuid.UUID) (Capture, error) {
+	c, err := capture(ctx, q, userID, id)
+	if err != nil {
+		return Capture{}, err
+	}
+	out := Capture{Capture: c}
+	if c.EntryID != nil {
+		line, err := q.EntryByID(ctx, userID, *c.EntryID)
+		if err != nil {
+			return Capture{}, err
+		}
+		out.Line = &line
+	}
+	return out, nil
+}
+
+func notFound(err error) error {
+	if errors.Is(err, store.ErrNotFound) {
+		return fmt.Errorf("%w: %v", ErrNotFound, err)
+	}
+	return err
+}

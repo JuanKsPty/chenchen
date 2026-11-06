@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
@@ -63,6 +64,28 @@ func sanitiseRequestID(raw string) string {
 	return b.String()
 }
 
+// accessLog is what a request's line records beyond the request itself,
+// filled in by the layers below it.
+type accessLog struct {
+	// redactPath logs the route's pattern instead of the path.
+	redactPath bool
+}
+
+type accessLogKey struct{}
+
+// RedactPath makes the access log record the route's pattern — PUT
+// /api/mcp/uploads/{token} — instead of the request's path, for a route whose
+// path is itself a secret. It goes on the router of those routes, so a request
+// there that matches none of them is redacted too.
+func RedactPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if log, ok := r.Context().Value(accessLogKey{}).(*accessLog); ok {
+			log.redactPath = true
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequestLogger logs one line per request and puts a request-scoped logger in
 // the context, so everything logged downstream carries the same id without any
 // layer having to thread it through by hand.
@@ -70,7 +93,8 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reqLogger := logger.With("request_id", RequestIDFromContext(r.Context()))
-			ctx := logging.WithLogger(r.Context(), reqLogger)
+			log := &accessLog{}
+			ctx := context.WithValue(logging.WithLogger(r.Context(), reqLogger), accessLogKey{}, log)
 
 			// chi's wrapper records the status and byte count while still
 			// forwarding Flush, which the chat's SSE stream depends on.
@@ -79,9 +103,16 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
+			path := r.URL.Path
+			if log.redactPath {
+				path = "(redacted)"
+				if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
+					path = rctx.RoutePattern()
+				}
+			}
 			attrs := []any{
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", path,
 				"status", ww.Status(),
 				"bytes", ww.BytesWritten(),
 				"duration_ms", time.Since(start).Milliseconds(),
@@ -181,17 +212,28 @@ func CORS(origins []string) func(http.Handler) http.Handler {
 
 // ClientIP is the address used for rate limiting.
 //
-// It trusts X-Forwarded-For only because the one proxy in front of this API is
-// the nginx container in the same compose stack. Exposed directly to the
-// internet, this header is client-controlled and would make per-IP limits
-// trivially bypassable — which is why the trust boundary is stated here rather
-// than assumed.
+// Every deployment puts exactly one proxy in front of this API — Traefik in
+// production, the web container's nginx locally — and that proxy appends the
+// address it accepted the connection from to X-Forwarded-For. So only the last
+// entry is trusted. Everything before it arrived with the request, written by
+// whoever sent it: keying a limit on the first entry, as this once did, let
+// anyone reset every per-address limit by changing a header. Without the
+// header, the peer is RemoteAddr itself.
+//
+// That one proxy is the trust boundary, stated here rather than assumed.
+// Reached directly, the API would take a client's own last entry at its word;
+// behind a second proxy, every client would share the first one's address.
 func ClientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if first, _, found := strings.Cut(fwd, ","); found {
-			return strings.TrimSpace(first)
+	// A header sent on several lines is one list (RFC 9110 §5.3), so the last
+	// line holds the last entry.
+	if lines := r.Header.Values("X-Forwarded-For"); len(lines) > 0 {
+		last := lines[len(lines)-1]
+		if i := strings.LastIndexByte(last, ','); i >= 0 {
+			last = last[i+1:]
 		}
-		return strings.TrimSpace(fwd)
+		if ip := strings.TrimSpace(last); ip != "" {
+			return ip
+		}
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host

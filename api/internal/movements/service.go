@@ -1,9 +1,15 @@
-// Package movements lists and annotates the owner's movements: every line
-// their statements and IBKR printed, across every account.
+// Package movements lists and annotates the owner's movements across every
+// account: every line their statements and IBKR printed, and every purchase
+// they noted — with the phone's shortcut or by hand — that no statement has
+// printed yet (ADR-0002). A noted purchase is listed only while it is pending;
+// once a printed line could be it, the line is the movement, and once the two
+// are linked the line says which purchase it was.
 //
-// What a movement *is* — its amount, dates and account — came from a document
-// and cannot be edited here. What it *means* can: its category, a note, and
-// whether it is a transfer between the owner's own accounts.
+// What a movement *is* — its amount, dates and account — came from a document,
+// or from what the owner noted, and cannot be edited here. What it *means*
+// can: its category, a note, and whether a printed line is a transfer between
+// the owner's own accounts. A noted purchase is always spending, never a
+// transfer.
 package movements
 
 import (
@@ -25,6 +31,9 @@ var (
 	ErrNotFound = errors.New("movements: movement not found")
 	// ErrNoteTooLong means the note is longer than 500 characters.
 	ErrNoteTooLong = errors.New("movements: the note is too long")
+	// ErrCaptureNotTransfer means the movement is a purchase the owner noted,
+	// which is spending by definition: only a printed line can be a transfer.
+	ErrCaptureNotTransfer = errors.New("movements: a noted purchase cannot be a transfer")
 )
 
 // Service lists and annotates movements.
@@ -72,7 +81,33 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, q Query) (Page, er
 		last := page.Entries[limit-1]
 		page.Next = &store.EntryCursor{BookedOn: last.BookedOn, ID: last.ID}
 	}
+	if err := s.fillNoted(ctx, userID, page.Entries); err != nil {
+		return Page{}, err
+	}
 	return page, nil
+}
+
+// fillNoted sets, on each printed line a purchase the owner noted was linked
+// to, which purchase that is (Entry.Noted): one read of the user's own
+// captures however long the page, so a line can say what the owner called it
+// and the link can be undone from there.
+func (s *Service) fillNoted(ctx context.Context, userID uuid.UUID, entries []store.Entry) error {
+	var lines []uuid.UUID
+	for _, e := range entries {
+		if e.Origin != store.OriginCapture {
+			lines = append(lines, e.ID)
+		}
+	}
+	noted, err := s.db.Q().NotedPurchases(ctx, userID, lines)
+	if err != nil {
+		return err
+	}
+	for i := range entries {
+		if n, ok := noted[entries[i].ID]; ok {
+			entries[i].Noted = &n
+		}
+	}
+	return nil
 }
 
 // Each streams every movement matching q, oldest first, for an export.
@@ -88,9 +123,17 @@ func (s *Service) filter(userID uuid.UUID, q Query, limit int) store.EntryFilter
 	}
 }
 
-// Get returns one of the user's movements.
+// Get returns one of the user's movements: a printed line, or a purchase the
+// owner noted that is still open — pending, or one a line could be or a
+// statement passed, which the lists no longer show but an id given out
+// earlier may still name. A capture linked to its line or discarded is
+// ErrNotFound. It leaves Entry.Noted unset: only the lists need it, and every
+// write reads the movement through here, twice.
 func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (store.Entry, error) {
 	e, err := s.db.Q().EntryByID(ctx, userID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		e, err = s.db.Q().CaptureAsEntry(ctx, userID, id)
+	}
 	return e, notFound(err)
 }
 
@@ -102,7 +145,15 @@ func (s *Service) SetCategory(ctx context.Context, userID, id uuid.UUID, categor
 			return store.Entry{}, err
 		}
 	}
-	if err := s.db.Q().SetEntryCategory(ctx, userID, id, categoryID, source); err != nil {
+	e, err := s.Get(ctx, userID, id)
+	if err != nil {
+		return store.Entry{}, err
+	}
+	set := s.db.Q().SetEntryCategory
+	if e.Origin == store.OriginCapture {
+		set = s.db.Q().SetCaptureCategory
+	}
+	if err := set(ctx, userID, id, categoryID, source); err != nil {
 		return store.Entry{}, notFound(err)
 	}
 	return s.Get(ctx, userID, id)
@@ -114,19 +165,31 @@ func (s *Service) SetNote(ctx context.Context, userID, id uuid.UUID, note string
 	if utf8.RuneCountInString(note) > 500 {
 		return store.Entry{}, ErrNoteTooLong
 	}
-	if err := s.db.Q().SetEntryNote(ctx, userID, id, note); err != nil {
+	e, err := s.Get(ctx, userID, id)
+	if err != nil {
+		return store.Entry{}, err
+	}
+	set := s.db.Q().SetEntryNote
+	if e.Origin == store.OriginCapture {
+		set = s.db.Q().SetCaptureNote
+	}
+	if err := set(ctx, userID, id, note); err != nil {
 		return store.Entry{}, notFound(err)
 	}
 	return s.Get(ctx, userID, id)
 }
 
-// SetTransfer marks a movement as a transfer between the owner's own
+// SetTransfer marks a printed line as a transfer between the owner's own
 // accounts, so it never counts as spending or income — or, with false,
-// restores what the importer decided.
+// restores what the importer decided. A noted purchase is spending either way:
+// ErrCaptureNotTransfer.
 func (s *Service) SetTransfer(ctx context.Context, userID, id uuid.UUID, transfer bool) (store.Entry, error) {
 	e, err := s.Get(ctx, userID, id)
 	if err != nil {
 		return store.Entry{}, err
+	}
+	if e.Origin == store.OriginCapture {
+		return store.Entry{}, ErrCaptureNotTransfer
 	}
 	var kind *string
 	if transfer && e.Kind != store.KindTransfer {

@@ -20,25 +20,47 @@ import (
 // same on every row — so only the day is the movement's.
 var excelEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 
-// parseBGAccount reads a Banco General account movement export (.xlsx):
-// a "Cuenta:<alias> <number>" cell, a header row found by its "Fecha" cell,
-// and one row per movement with Débito, Crédito and the running "Saldo total".
-func parseBGAccount(data []byte) (File, error) {
-	f, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{RawCellValue: true})
+// What an .xlsx may unzip to. An upload is at most 20 MB and a statement's
+// sheet a few hundred KB, but a zip can claim far more than it weighs: a sheet
+// of nothing compresses a thousand to one. Past unzipSizeLimit in all the
+// file is refused before any of it is read; a part past unzipXMLSizeLimit is
+// read from a temporary file instead of memory, which the API's is too small
+// to spare.
+const (
+	unzipSizeLimit    = 64 << 20
+	unzipXMLSizeLimit = 16 << 20
+)
+
+// parseWorkbook reads an .xlsx export's first sheet and hands it to the parser
+// its content names. A card's sheet goes to the card; every other sheet is read
+// as the BG account's, as every .xlsx was before the card's had a reader, so
+// the account's own errors are unchanged.
+func parseWorkbook(data []byte) (File, error) {
+	f, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{RawCellValue: true,
+		UnzipSizeLimit: unzipSizeLimit, UnzipXMLSizeLimit: unzipXMLSizeLimit})
 	if err != nil {
-		return File{}, fmt.Errorf("statement: opening the BG account file: %w", err)
+		return File{}, fmt.Errorf("statement: opening the .xlsx file: %w", err)
 	}
 	defer f.Close()
 
 	sheets := f.GetSheetList()
 	if len(sheets) == 0 {
-		return File{}, fmt.Errorf("statement: the BG account file has no sheets")
+		return File{}, fmt.Errorf("statement: the .xlsx file has no sheets")
 	}
 	rows, err := f.GetRows(sheets[0], excelize.Options{RawCellValue: true})
 	if err != nil {
-		return File{}, fmt.Errorf("statement: reading the BG account file: %w", err)
+		return File{}, fmt.Errorf("statement: reading the .xlsx file: %w", err)
 	}
+	if isBGCardSheet(rows) {
+		return parseBGCardSheet(rows)
+	}
+	return parseBGAccount(rows)
+}
 
+// parseBGAccount reads a Banco General account movement export (.xlsx):
+// a "Cuenta:<alias> <number>" cell, a header row found by its "Fecha" cell,
+// and one row per movement with Débito, Crédito and the running "Saldo total".
+func parseBGAccount(rows [][]string) (File, error) {
 	id := Identity{
 		Institution: InstitutionBancoGeneral,
 		Currency:    "USD", // the export states no currency; BG accounts here are USD

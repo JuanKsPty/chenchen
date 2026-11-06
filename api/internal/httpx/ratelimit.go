@@ -105,13 +105,20 @@ func RateLimit(limiter *RateLimiter, message string) func(http.Handler) http.Han
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			allowed, retryAfter := limiter.Allow(ClientIP(r))
 			if !allowed {
-				w.Header().Set("Retry-After", retryAfterSeconds(retryAfter))
+				SetRetryAfter(w, retryAfter)
 				Fail(w, r, TooManyRequests(message))
 				return
 			}
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// SetRetryAfter tells a client turned away by a limiter how long to wait, in
+// whole seconds and never less than one. For a handler that writes its own
+// reply rather than going through RateLimit.
+func SetRetryAfter(w http.ResponseWriter, d time.Duration) {
+	w.Header().Set("Retry-After", retryAfterSeconds(d))
 }
 
 func retryAfterSeconds(d time.Duration) string {
