@@ -28,6 +28,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/imports"
 	"github.com/JuanKsPty/chenchen/api/internal/investments"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/oauth"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
@@ -58,6 +59,9 @@ type Deps struct {
 	Chat        *chat.Handler
 	Captures    *captures.Handler
 	Shortcut    *captures.ShortcutHandler
+	// OAuth is how Claude signs in. Nil without PUBLIC_URL, and then none of
+	// its routes exist: discovery, authorize and token all answer 404.
+	OAuth *oauth.Handler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -77,6 +81,13 @@ func NewRouter(d Deps) http.Handler {
 	// any orchestrator have no credentials.
 	r.Get("/healthz", httpx.Health(Version(), d.Health))
 
+	// Beside it, and for the same reason: Claude discovers how to sign in
+	// before it has any credential, at the addresses RFC 8414 and RFC 9728
+	// derive from the issuer and the resource, which are not under /api.
+	if d.OAuth != nil {
+		r.Mount("/.well-known", d.OAuth.WellKnownRoutes())
+	}
+
 	r.Route("/api", func(r chi.Router) {
 		// Public: issuing and ending sessions. Rate limiting lives inside the
 		// auth router, which knows which of its endpoints are worth guessing at.
@@ -88,6 +99,14 @@ func NewRouter(d Deps) http.Handler {
 		// key is never read as an access token, so it reaches nothing a
 		// session reaches, and an access token is no key.
 		r.Mount("/shortcut", d.Shortcut.Routes())
+
+		// Claude signing in. Authorize and token take no session; the
+		// owner's answer and their list of connections are behind Require
+		// inside the oauth router. Nothing Claude is issued is ever read as
+		// a session, here or below: Require refuses its tokens by name.
+		if d.OAuth != nil {
+			r.Mount("/oauth", d.OAuth.Routes())
+		}
 
 		// Everything past here requires a verified access token. Grouping it
 		// under one middleware, rather than applying it per handler, is what

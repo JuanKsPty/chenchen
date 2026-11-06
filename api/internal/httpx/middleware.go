@@ -181,17 +181,28 @@ func CORS(origins []string) func(http.Handler) http.Handler {
 
 // ClientIP is the address used for rate limiting.
 //
-// It trusts X-Forwarded-For only because the one proxy in front of this API is
-// the nginx container in the same compose stack. Exposed directly to the
-// internet, this header is client-controlled and would make per-IP limits
-// trivially bypassable — which is why the trust boundary is stated here rather
-// than assumed.
+// Every deployment puts exactly one proxy in front of this API — Traefik in
+// production, the web container's nginx locally — and that proxy appends the
+// address it accepted the connection from to X-Forwarded-For. So only the last
+// entry is trusted. Everything before it arrived with the request, written by
+// whoever sent it: keying a limit on the first entry, as this once did, let
+// anyone reset every per-address limit by changing a header. Without the
+// header, the peer is RemoteAddr itself.
+//
+// That one proxy is the trust boundary, stated here rather than assumed.
+// Reached directly, the API would take a client's own last entry at its word;
+// behind a second proxy, every client would share the first one's address.
 func ClientIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		if first, _, found := strings.Cut(fwd, ","); found {
-			return strings.TrimSpace(first)
+	// A header sent on several lines is one list (RFC 9110 §5.3), so the last
+	// line holds the last entry.
+	if lines := r.Header.Values("X-Forwarded-For"); len(lines) > 0 {
+		last := lines[len(lines)-1]
+		if i := strings.LastIndexByte(last, ','); i >= 0 {
+			last = last[i+1:]
 		}
-		return strings.TrimSpace(fwd)
+		if ip := strings.TrimSpace(last); ip != "" {
+			return ip
+		}
 	}
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host

@@ -18,7 +18,7 @@ var ErrCaptureKeyInvalid = errors.New("auth: capture key is invalid")
 
 // captureKeyLen is the length of every key NewCaptureKey makes: the prefix
 // and an opaque token's 32 bytes in unpadded base64url.
-var captureKeyLen = len(CaptureKeyPrefix) + 43
+var captureKeyLen = len(CaptureKeyPrefix) + opaqueTokenLen
 
 // CaptureScope is everything a capture key grants: noting purchases in one
 // account of one user. It is a value handed to the one handler that takes
@@ -71,15 +71,5 @@ func (k *CaptureKeys) Authenticate(ctx context.Context, header string) (CaptureS
 // looksLikeCaptureKey reports whether key has the exact shape NewCaptureKey
 // gives one: the prefix and 43 base64url characters.
 func looksLikeCaptureKey(key string) bool {
-	if len(key) != captureKeyLen || !strings.HasPrefix(key, CaptureKeyPrefix) {
-		return false
-	}
-	for _, r := range key[len(CaptureKeyPrefix):] {
-		switch {
-		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
-		default:
-			return false
-		}
-	}
-	return true
+	return looksLikePrefixedToken(key, CaptureKeyPrefix)
 }

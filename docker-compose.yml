@@ -71,6 +71,13 @@ services:
       # Needed to link an IBKR account from Cuentas; the ibkrsync job below reads
       # the same key. Left empty, linking is refused and everything else works.
       IBKR_TOKEN_ENCRYPTION_KEY: ${IBKR_TOKEN_ENCRYPTION_KEY:-}
+      # Where the app is reached, for Claude to sign in with OAuth (ADR-0004).
+      # Empty unless you set it: Claude cannot connect and everything else
+      # works. Keep it unset until the MCP endpoint and the web's /conectar page
+      # are deployed — set before them, Claude would find how to sign in and
+      # have nowhere to go.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      OAUTH_RATE_LIMIT: ${OAUTH_RATE_LIMIT:-30}
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:

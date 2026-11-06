@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -171,3 +172,85 @@ func NewCaptureKey() (key string, hash string, err error) {
 // HashCaptureKey is the value stored in the database for a capture key: the
 // hash of the whole key, prefix included.
 func HashCaptureKey(key string) string { return hashOpaqueToken(key) }
+
+// The prefixes of the two tokens Claude holds once the owner connects it
+// (ADR-0004). They are opaque tokens like a refresh or device token, and get a
+// prefix for the reason a capture key does: what they grant — chenchén's MCP
+// tools, as that owner — is narrower than a session and different in kind, so
+// nothing that takes a session, a device or a capture key may ever take one of
+// these, and the one verifier that takes them takes nothing else. Require
+// refuses both by their prefix before parsing anything.
+const (
+	OAuthAccessTokenPrefix  = "chno_"
+	OAuthRefreshTokenPrefix = "chnr_"
+)
+
+// NewOAuthAccessToken returns a fresh access token for Claude and the hash to
+// store for it.
+func NewOAuthAccessToken() (token string, hash string, err error) {
+	return newPrefixedToken(OAuthAccessTokenPrefix)
+}
+
+// NewOAuthRefreshToken returns a fresh refresh token for Claude and the hash
+// to store for it. It lives only in oauth_tokens, never in refresh_tokens.
+func NewOAuthRefreshToken() (token string, hash string, err error) {
+	return newPrefixedToken(OAuthRefreshTokenPrefix)
+}
+
+// NewOAuthCode returns a fresh authorization code and the hash to store for
+// it. A code is never a bearer credential on its own — it is worthless without
+// the PKCE verifier — so it carries no prefix.
+func NewOAuthCode() (code string, hash string, err error) { return newOpaqueToken() }
+
+// HashOAuthToken is the value stored in the database for an OAuth access
+// token, refresh token or code: the hash of the whole string, prefix included.
+func HashOAuthToken(token string) string { return hashOpaqueToken(token) }
+
+// LooksLikeOAuthAccessToken reports whether token has the exact shape
+// NewOAuthAccessToken gives one, so a verifier can turn away anything else —
+// a session's JWT, a capture key, a refresh token — before a lookup.
+func LooksLikeOAuthAccessToken(token string) bool {
+	return looksLikePrefixedToken(token, OAuthAccessTokenPrefix)
+}
+
+// LooksLikeOAuthRefreshToken is LooksLikeOAuthAccessToken for refresh tokens.
+func LooksLikeOAuthRefreshToken(token string) bool {
+	return looksLikePrefixedToken(token, OAuthRefreshTokenPrefix)
+}
+
+// isOAuthToken reports whether token claims to be one of Claude's, whatever
+// follows the prefix: enough to refuse it where a session is expected.
+func isOAuthToken(token string) bool {
+	return strings.HasPrefix(token, OAuthAccessTokenPrefix) || strings.HasPrefix(token, OAuthRefreshTokenPrefix)
+}
+
+// newPrefixedToken is a fresh opaque token behind prefix, and the hash of the
+// whole of it.
+func newPrefixedToken(prefix string) (token string, hash string, err error) {
+	raw, _, err := newOpaqueToken()
+	if err != nil {
+		return "", "", err
+	}
+	token = prefix + raw
+	return token, hashOpaqueToken(token), nil
+}
+
+// opaqueTokenLen is the length of an opaque token's 32 bytes in unpadded
+// base64url.
+const opaqueTokenLen = 43
+
+// looksLikePrefixedToken reports whether token is prefix followed by exactly
+// an opaque token's 43 base64url characters.
+func looksLikePrefixedToken(token, prefix string) bool {
+	if len(token) != len(prefix)+opaqueTokenLen || !strings.HasPrefix(token, prefix) {
+		return false
+	}
+	for _, r := range token[len(prefix):] {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_':
+		default:
+			return false
+		}
+	}
+	return true
+}

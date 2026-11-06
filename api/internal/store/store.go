@@ -115,3 +115,10 @@ func (db *DB) Exec(ctx context.Context, sql string, args ...any) error {
 	_, err := db.pool.Exec(ctx, sql, args...)
 	return err
 }
+
+// QueryRow runs one query outside any transaction. Like Exec, it exists for
+// tests, which read what the schema holds; application code goes through
+// Queries.
+func (db *DB) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return db.pool.QueryRow(ctx, sql, args...)
+}

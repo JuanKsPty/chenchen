@@ -215,9 +215,9 @@ type ShortcutHandler struct {
 	svc  *Service
 	keys *auth.CaptureKeys
 	// ipLimiter runs before a key is looked up, so guessing keys costs a
-	// request each. It trusts X-Forwarded-For (httpx.ClientIP), which a
-	// client can set, so it is a speed bump; keyLimiter, per key, is the
-	// limit a leaked key cannot get around.
+	// request each, per address the proxy saw (httpx.ClientIP). Someone with
+	// many addresses still gets many guesses, so it is a speed bump;
+	// keyLimiter, per key, is the limit a leaked key cannot get around.
 	ipLimiter  *httpx.RateLimiter
 	keyLimiter *httpx.RateLimiter
 }

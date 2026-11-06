@@ -24,6 +24,14 @@ func Require(tokens *TokenIssuer) func(http.Handler) http.Handler {
 				httpx.Fail(w, r, err)
 				return
 			}
+			// One of Claude's tokens is no session, whatever it would parse
+			// as. Refused by name rather than left to fail as a JWT, so the
+			// rule holds even if either format ever changes (ADR-0004).
+			if isOAuthToken(raw) {
+				httpx.Fail(w, r, httpx.Unauthorized(
+					"Tu sesión no es válida. Inicia sesión de nuevo.").WithCause(ErrTokenInvalid))
+				return
+			}
 
 			userID, err := tokens.ParseAccessToken(raw)
 			if err != nil {

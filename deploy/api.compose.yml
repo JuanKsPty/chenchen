@@ -45,6 +45,16 @@ services:
       # Empty is a supported state: linking refuses with a clear error and
       # everything else keeps working — see config.IBKRConfig.
       IBKR_TOKEN_ENCRYPTION_KEY: ${IBKR_TOKEN_ENCRYPTION_KEY:-}
+      # The public address, e.g. https://chenchen.juank.tech: Claude's OAuth
+      # issuer and, with /api/mcp, the resource its tokens are for (ADR-0004).
+      # Empty unless the deployment's variables set it, and empty is a supported
+      # state: Claude cannot connect. It must stay unset until the MCP endpoint
+      # and the web's /conectar page are deployed — set before them, Claude would
+      # find how to sign in and have nowhere to go. When set, /.well-known must
+      # reach this service too, by a proxy rule of its own, since the root of the
+      # domain goes to the web.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      OAUTH_RATE_LIMIT: ${OAUTH_RATE_LIMIT:-30}
     # The VPS is shared; the API needs a fraction of this even while parsing a
     # year of statements.
     mem_limit: 160m

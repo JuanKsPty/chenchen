@@ -220,6 +220,8 @@ Todo tiene un default que funciona; ver `.env.example`.
 | `AI_BUDGET_USD` / `AI_DAILY_BUDGET_USD` / `AI_USER_DAILY_BUDGET_USD` | `4.00` / `1.00` / `0.30` | Techos de gasto del asistente. |
 | `AI_MAX_TOOL_TURNS` | `4` | Vueltas de herramientas por mensaje. |
 | `IBKR_TOKEN_ENCRYPTION_KEY` | *(vacío)* | 32 bytes en base64 (`openssl rand -base64 32`). Cifra el token de IBKR. Vacío, vincular IBKR se rechaza. Cambiarlo invalida el token guardado. |
+| `PUBLIC_URL` | *(vacío)* | La dirección de la app, sin path (`https://chenchen.example.com`). Con ella, Claude puede conectarse a chenchén por OAuth y MCP ([ADR 0004](docs/adr/0004-claude-por-mcp.md)). Vacía, esas rutas responden 404 y todo lo demás sigue igual. Solo `localhost` admite `http`. Déjala vacía hasta que estén desplegados el endpoint del MCP y la página `/conectar`. |
+| `OAUTH_RATE_LIMIT` | `30` | Pedidos por minuto y por dirección a `/api/oauth/authorize` y a `/api/oauth/token`, contados por separado. |
 | `ENV` / `LOG_LEVEL` | `development` / `info` | `production` pasa los logs a JSON. |
 | `VITE_SHORTCUT_URL` | *(vacío)* | Opcional, al construir la imagen de la web: el enlace https de iCloud a un atajo listo para anotar compras desde el iPhone. Vacío, la web muestra solo los pasos para armarlo. Cambiarlo pide reconstruir la imagen; nunca es un secreto. |
 

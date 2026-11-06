@@ -28,6 +28,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/logging"
 	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/oauth"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
@@ -64,6 +65,9 @@ func run() error {
 	if !cfg.AI.Enabled() {
 		logger.Warn("ANTHROPIC_API_KEY is not set; the assistant is unavailable and says so — " +
 			"everything else works normally")
+	}
+	if !cfg.OAuth.Enabled() {
+		logger.Info("PUBLIC_URL is not set; Claude cannot connect, and its OAuth routes are not mounted")
 	}
 
 	// SIGTERM is what Docker sends on `compose down`; SIGINT is Ctrl-C.
@@ -123,6 +127,19 @@ func run() error {
 	// up, and per key, which is the one a leaked key cannot get around.
 	captureIPLimiter := httpx.NewRateLimiter(cfg.Auth.CaptureIPRateLimit)
 	captureKeyLimiter := httpx.NewRateLimiter(cfg.Auth.CaptureKeyRateLimit)
+	// Claude's authorize and token endpoints, counted apart per address.
+	oauthLimiter := httpx.NewRateLimiter(cfg.OAuth.RateLimit)
+
+	// Without a public URL there is no issuer to name: the service is not
+	// built, and the router leaves every OAuth route out.
+	var (
+		oauthSvc     *oauth.Service
+		oauthHandler *oauth.Handler
+	)
+	if cfg.OAuth.Enabled() {
+		oauthSvc = oauth.NewService(db, cfg.OAuth)
+		oauthHandler = oauth.NewHandler(oauthSvc, authSvc.Tokens(), oauthLimiter)
+	}
 
 	router := server.NewRouter(server.Deps{
 		Config: cfg,
@@ -145,19 +162,22 @@ func run() error {
 		Captures:    captures.NewHandler(capturesSvc),
 		Shortcut: captures.NewShortcutHandler(capturesSvc, auth.NewCaptureKeys(db),
 			captureIPLimiter, captureKeyLimiter),
+		OAuth: oauthHandler,
 	})
 
-	go housekeeping(ctx, authSvc, []*httpx.RateLimiter{
-		loginLimiter, pinLoginLimiter, chatLimiter, captureIPLimiter, captureKeyLimiter,
+	go housekeeping(ctx, authSvc, oauthSvc, []*httpx.RateLimiter{
+		loginLimiter, pinLoginLimiter, chatLimiter, captureIPLimiter, captureKeyLimiter, oauthLimiter,
 	}, logger)
 
 	return server.Run(ctx, cfg.HTTP.Addr, router, cfg.HTTP.ShutdownTimeout, logger)
 }
 
-// housekeeping prunes the two structures that would otherwise grow without
-// bound: expired refresh tokens in the database, and idle rate-limit buckets in
-// memory. Both are cheap, so one modest ticker covers them.
-func housekeeping(ctx context.Context, authSvc *auth.Service, limiters []*httpx.RateLimiter, logger *slog.Logger) {
+// housekeeping prunes the structures that would otherwise grow without bound:
+// expired sessions and Claude's expired requests, codes and tokens in the
+// database, and idle rate-limit buckets in memory. All are cheap, so one modest
+// ticker covers them. oauthSvc is nil when Claude cannot connect.
+func housekeeping(ctx context.Context, authSvc *auth.Service, oauthSvc *oauth.Service,
+	limiters []*httpx.RateLimiter, logger *slog.Logger) {
 	const every = 15 * time.Minute
 
 	ticker := time.NewTicker(every)
@@ -172,16 +192,21 @@ func housekeeping(ctx context.Context, authSvc *auth.Service, limiters []*httpx.
 			// shutdown of an unrelated request, nor hang forever.
 			sweepCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 			removed, err := authSvc.PruneSessions(sweepCtx)
-			cancel()
 			if err != nil {
 				logger.Error("pruning expired sessions failed", "error", err)
-				continue
 			}
+			var oauthRemoved int64
+			if oauthSvc != nil {
+				if oauthRemoved, err = oauthSvc.Prune(sweepCtx); err != nil {
+					logger.Error("pruning Claude's expired connections failed", "error", err)
+				}
+			}
+			cancel()
 			var dropped int
 			for _, limiter := range limiters {
 				dropped += limiter.Sweep()
 			}
-			logger.Debug("housekeeping", "sessions_pruned", removed,
+			logger.Debug("housekeeping", "sessions_pruned", removed, "oauth_pruned", oauthRemoved,
 				"rate_limit_buckets_dropped", dropped)
 		}
 	}

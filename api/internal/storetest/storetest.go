@@ -128,3 +128,15 @@ func Exec(t testing.TB, db *store.DB, sql string, args ...any) error {
 	t.Helper()
 	return db.Exec(context.Background(), sql, args...)
 }
+
+// Count returns how many rows a table holds, or a table and a condition
+// ("oauth_tokens WHERE kind = 'access'"), for a test asserting what was or
+// was not written.
+func Count(t testing.TB, db *store.DB, from string, args ...any) int {
+	t.Helper()
+	var n int
+	if err := db.QueryRow(context.Background(), `SELECT count(*) FROM `+from, args...).Scan(&n); err != nil {
+		t.Fatalf("storetest: counting %s: %v", from, err)
+	}
+	return n
+}
