@@ -55,9 +55,14 @@ Claude, cada uno con sus redirecciones exactas:
 2. La solicitud queda guardada 10 minutos y el navegador va a `/conectar`. Ahí la persona,
    con su sesión, ve quién pide acceso y a dónde vuelve, y decide.
    - «Ver tus cuentas, movimientos y gastos» (`read`) va siempre.
-   - «Anotar compras y ordenar tus movimientos» (`write`) lo decide la persona. Se ofrece
-     aunque el cliente haya pedido solo `read`: un cliente MCP pide lo mínimo que anuncia
-     el endpoint, y si eso fuera un techo, escribir nunca se podría conceder.
+   - «Anotar compras, ordenar tus movimientos y subir los archivos de tu banco» (`write`)
+     lo decide la persona, con un interruptor que empieza como lo pidió el cliente
+     (encendido si pidió `write`). Se ofrece aunque el cliente haya pedido solo `read`:
+     un cliente MCP pide lo mínimo que anuncia el endpoint, y si eso fuera un techo,
+     escribir nunca se podría conceder.
+   - La página va fuera del marco de la app, y la web nunca se deja mostrar dentro de
+     otro sitio (`X-Frame-Options: DENY` y `frame-ancestors 'none'`): un clic en
+     «Permitir» siempre es de la persona.
 3. La solicitud se contesta una sola vez y solo la contesta quien la abrió primero. Una
    que nadie abrió no la contesta nadie: aprobar siempre viene después de ver qué se
    aprueba, nunca de un POST que otra página mandó con la sesión de la persona.

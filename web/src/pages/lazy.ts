@@ -14,6 +14,9 @@
  *   preloadAllPages()          every page, once the shell is up and the browser is
  *                              idle, so moving between sections never waits
  *   HomePage … SettingsPage    React.lazy components for SignedInApp's routes
+ *   ConnectPage                /conectar, Claude's consent page: its own chunk, outside
+ *                              the shell, which it never needs (App renders it)
+ *   preloadConnectPage()       that chunk, early, while a session restores on it
  *
  * A chunk that fails to load (a deployment replaced it) throws inside the shell's
  * ErrorBoundary, whose "Recargar" fetches the new build.
@@ -58,6 +61,12 @@ export const SettingsPage = lazy(() =>
   load.settings().then((m) => ({ default: m.SettingsPage })),
 )
 
+const loadConnect = () => import('./ConnectPage')
+
+export const ConnectPage = lazy(() =>
+  loadConnect().then((m) => ({ default: m.ConnectPage })),
+)
+
 /** Which page a signed-in address opens; old addresses land on their new page. */
 const ROUTES: [pattern: string, loader: () => Promise<unknown>][] = [
   [HOME_PATH, load.home],
@@ -89,6 +98,10 @@ export function loadSignedInApp(pathname: string) {
 
 export function preloadSignedInApp(pathname = '/inicio') {
   void quietly(loadSignedInApp(pathname))
+}
+
+export function preloadConnectPage() {
+  void quietly(loadConnect())
 }
 
 export function preloadAllPages() {

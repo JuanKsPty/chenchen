@@ -476,6 +476,72 @@ export interface ImportRun {
   created_at: string
 }
 
+/**
+ * Where a statement Claude sent stands. `needs_review` waits for the owner with its
+ * file: it did not continue an account cleanly enough to enter on its own.
+ */
+export type StatementUploadStatus =
+  | 'pending'
+  | 'imported'
+  | 'unchanged'
+  | 'needs_review'
+  | 'unreadable'
+  | 'dismissed'
+  | 'expired'
+
+/** A statement Claude sent (GET /api/imports/uploads), oldest first. */
+export interface StatementUpload {
+  id: string
+  filename: string
+  status: StatementUploadStatus
+  /** Why it did not enter on its own, in Spanish, ready to show. */
+  reason?: string
+  created_at: string
+  /** The account it is for, when chenchén already has it; never the bank's name. */
+  account?: { id: string; last4?: string; name: string }
+}
+
+// --- Claude ----------------------------------------------------------------------
+
+/**
+ * A connection Claude asked for, as the consent page shows it (GET
+ * /api/oauth/requests/:id). Opening it is what lets the owner answer it.
+ */
+export interface ConnectRequest {
+  /** "Claude" or "Claude Code". */
+  client_name: string
+  /** Where the answer goes: "claude.ai", or "localhost" for Claude Code. */
+  redirect_host: string
+  /** What the client asked for; the owner decides on writing either way. */
+  scopes: string[]
+  expires_at: string
+}
+
+/** Where the consent page sends the browser after the owner answers. */
+export interface ConnectAnswer {
+  redirect_to: string
+}
+
+/**
+ * The MCP endpoint's protected-resource metadata (GET
+ * /.well-known/oauth-protected-resource/api/mcp), as far as the app reads it.
+ */
+export interface McpResource {
+  /** Where Claude reaches chenchén's tools: the API's PUBLIC_URL and /api/mcp. */
+  resource?: string
+}
+
+/** One of the owner's live connections with Claude (GET /api/oauth/grants). */
+export interface ClaudeConnection {
+  id: string
+  client_name: string
+  /** 'read', and 'write' when the owner let it note and file too. */
+  scopes: string[]
+  created_at: string
+  /** Null until Claude first uses it. */
+  last_used_at: string | null
+}
+
 // --- categories ------------------------------------------------------------------
 
 export interface Category {

@@ -1,8 +1,9 @@
 /**
- * <SettingsRow icon title description? meta? actions? className? />
+ * <SettingsRow icon title headingLevel? description? meta? actions? className? />
  *
  *   icon         a lucide icon, drawn in the kit's 40px Tile (decorative)
- *   title        body 16/24 600, an <h3> under the card's <h2>
+ *   title        body 16/24 600, an <h3> under the card's <h2> (an <h4> with
+ *                headingLevel 4, for a row inside a group with its own <h3>)
  *   description  small 14/20 500 muted, one or two short lines
  *   meta         under the description (a chip), with 4px above it
  *   actions      buttons at the right. When the row itself is narrower than
@@ -20,6 +21,7 @@ import { cn } from '@/lib/utils'
 export function SettingsRow({
   icon,
   title,
+  headingLevel = 3,
   titleId,
   description,
   meta,
@@ -28,6 +30,7 @@ export function SettingsRow({
 }: {
   icon: LucideIcon
   title: ReactNode
+  headingLevel?: 3 | 4
   /** Gives the <h3> this id and makes it focusable from code (tabIndex -1), as a
    *  place to put focus when the row's own buttons go away. */
   titleId?: string
@@ -36,18 +39,19 @@ export function SettingsRow({
   actions?: ReactNode
   className?: string
 }) {
+  const Heading = headingLevel === 4 ? 'h4' : 'h3'
   return (
     <div className={cn('@container', className)}>
       <div className="grid grid-cols-[2.5rem_minmax(0,1fr)] items-start gap-x-3 gap-y-3 @md:grid-cols-[2.5rem_minmax(0,1fr)_auto] @md:items-center">
         <Tile icon={icon} />
         <div className="flex min-w-0 flex-col">
-          <h3
+          <Heading
             id={titleId}
             tabIndex={titleId ? -1 : undefined}
             className="text-body font-semibold text-foreground"
           >
             {title}
-          </h3>
+          </Heading>
           {description && (
             <p className="text-small font-medium text-pretty text-muted-foreground">
               {description}

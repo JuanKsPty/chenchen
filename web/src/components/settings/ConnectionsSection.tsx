@@ -16,6 +16,10 @@
  * (`?atajo=1`), where the key is made again or turned off. Its neutral chip says how
  * the shortcut is doing: "Última compra hace 2 h", "Probada, sin compras todavía" or
  * "Sin probar todavía".
+ *
+ * Last, under "Claude", the connections the owner allowed Claude, each with
+ * [Desconectar], or how to connect it (ClaudeConnections). Left out when this
+ * deployment has no MCP.
  */
 import {
   ChevronRightIcon,
@@ -36,6 +40,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { accountRowTitle, hasShortcut, shortcutNote } from '@/lib/account'
 import { accountHref } from '@/lib/nav'
 import { useAccounts, useInvestmentLink } from '@/lib/queries'
+import { ClaudeConnections } from './ClaudeConnections'
 import { problemMessage } from './problem'
 
 export function ConnectionsSection({ className }: { className?: string }) {
@@ -114,6 +119,8 @@ export function ConnectionsSection({ className }: { className?: string }) {
           </ul>
         </section>
       )}
+
+      <ClaudeConnections />
     </SectionCard>
   )
 }

@@ -36,7 +36,6 @@
 import {
   ChevronDownIcon,
   CircleAlertIcon,
-  CopyIcon,
   ExternalLinkIcon,
   KeyRoundIcon,
 } from 'lucide-react'
@@ -46,6 +45,7 @@ import { toast } from 'sonner'
 import { SHORTCUT_PURCHASES_PATH } from '@/api/endpoints'
 import type { Account, ShortcutStatus } from '@/api/types'
 import { ResponsiveDialogContent } from '@/components/accounts/ResponsiveDialog'
+import { CopyField } from '@/components/CopyField'
 import { Tile } from '@/components/kit'
 import { focusWhenReady } from '@/components/settings/focus'
 import { problemMessage } from '@/components/settings/problem'
@@ -60,8 +60,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { Field, FieldLabel } from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
 import { paidByOther, shortcutNote } from '@/lib/account'
 import { useReturnFocus } from '@/lib/focus'
@@ -74,9 +72,6 @@ const INTRO =
 /** A card someone else pays has no statement to match the purchase with later. */
 const INTRO_OTHERS_CARD =
   'Cada compra que pagues acercando el iPhone llega aquí al momento y cuenta en tus gastos.'
-
-const COPIED = 'Listo: copiada'
-const NOT_COPIED = 'No pudimos copiarla. Ya está seleccionada: cópiala tú.'
 
 /**
  * The ready-made shortcut to install, when the build was given one. Only an https
@@ -366,87 +361,6 @@ function KeyRow({
       </div>
     </div>
   )
-}
-
-/**
- * A read-only field with its own [Copiar]. The text can always be selected by hand
- * too: tapping the field selects all of it.
- */
-function CopyField({
-  label,
-  copyLabel,
-  value,
-}: {
-  label: string
-  /** The button's name for a screen reader: "Copiar clave". */
-  copyLabel: string
-  value: string
-}) {
-  const id = useId()
-  const inputRef = useRef<HTMLInputElement>(null)
-  return (
-    <Field>
-      <FieldLabel htmlFor={id}>{label}</FieldLabel>
-      <div className="flex gap-2">
-        <Input
-          ref={inputRef}
-          id={id}
-          value={value}
-          readOnly
-          autoComplete="off"
-          autoCapitalize="off"
-          autoCorrect="off"
-          spellCheck={false}
-          className="min-w-0 flex-1"
-          onFocus={(event) => selectAll(event.currentTarget)}
-        />
-        <Button
-          type="button"
-          variant="secondary"
-          size="lg"
-          className="md:h-11"
-          aria-label={copyLabel}
-          onClick={() => copyFrom(inputRef.current)}
-        >
-          <CopyIcon aria-hidden="true" />
-          Copiar
-        </Button>
-      </div>
-    </Field>
-  )
-}
-
-/**
- * Copies a field's text. The Clipboard API first, called straight from the click so
- * Safari counts it as the person's own gesture and asks for no permission. Where it
- * is missing (a page served over plain http) or refuses, the text is selected in its
- * field and the older copy command tried; if that fails too, the selection stays for
- * the person to copy, and the toast says so. Neither toast repeats the text.
- */
-function copyFrom(input: HTMLInputElement | null) {
-  if (!input) return
-  const fallback = () => {
-    selectAll(input)
-    let copied = false
-    try {
-      copied = document.execCommand('copy')
-    } catch {
-      copied = false
-    }
-    toast(copied ? COPIED : NOT_COPIED)
-  }
-  if (typeof navigator.clipboard?.writeText === 'function') {
-    navigator.clipboard.writeText(input.value).then(() => toast(COPIED), fallback)
-  } else {
-    fallback()
-  }
-}
-
-/** Selects all of a field's text. iOS Safari ignores select() alone. */
-function selectAll(input: HTMLInputElement) {
-  if (document.activeElement !== input) input.focus({ preventScroll: true })
-  input.select()
-  input.setSelectionRange(0, input.value.length)
 }
 
 /**

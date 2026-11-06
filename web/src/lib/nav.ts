@@ -17,6 +17,8 @@ import type { EntryKind } from '@/api/types'
  *   NAV                    the four sections, in order, for the desktop tabs and the
  *                          mobile tab bar: Inicio, Cuentas, Movimientos, Gastos
  *   HOME_PATH ... SETTINGS_PATH   every signed-in path
+ *   CONNECT_PATH           /conectar?req=<id> (or ?error=<code>): where the API sends
+ *                          the owner to answer Claude, outside the shell
  *
  *   movementsHref(filters?)        /movimientos?q=&cuenta=&categoria=&sin_categoria=1
  *                                  &desde=YYYY-MM-DD&hasta=YYYY-MM-DD&tipo=<EntryKind>
@@ -42,6 +44,11 @@ export const MOVEMENTS_PATH = '/movimientos'
 export const SPENDING_PATH = '/gastos'
 export const RULES_PATH = '/gastos/reglas'
 export const SETTINGS_PATH = '/ajustes'
+/**
+ * Where Claude's sign-in sends the owner to say yes or no. The API builds this
+ * address (oauth.Service.ConsentPage), so it never changes on its own.
+ */
+export const CONNECT_PATH = '/conectar'
 /** Ajustes, scrolled to the PIN and device section. */
 export const SECURITY_HREF = `${SETTINGS_PATH}#seguridad`
 /** Gastos, scrolled to the transfers waiting for a yes or no. */

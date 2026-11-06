@@ -7,6 +7,7 @@ import {
 
 import { ApiError } from '@/api/client'
 import * as api from '@/api/endpoints'
+import type { ConnectAnswer } from '@/api/types'
 import type {
   CaptureInput,
   CapturePatch,
@@ -48,13 +49,21 @@ import type {
  *                 only the accounts, whose `shortcut` says whether there is one
  *   imports       useImportStatement()({file, accountId?}) · useDryRunStatement()(file) ·
  *                 useImportRuns(accountId)
+ *   from Claude   useStatementUploads: the statements Claude sent that wait for the
+ *                 owner · useStatementUploadDryRun(id, {enabled?}) ·
+ *                 useImportStatementUpload()(id): money, like any import ·
+ *                 useDismissStatementUpload()(id)
+ *   Claude        useConnectRequest(id): the consent page's request, read once ·
+ *                 useAnswerConnectRequest()({id, write} | {id, deny: true}) ·
+ *                 useClaudeConnections · useDisconnectClaude()(id) · useMcpResource:
+ *                 the connector's address. Not money
  *   investments   useInvestmentLink(accountId, {enabled?}) · useLinkIBKR ·
  *                 useRelinkIBKR(accountId) · useSyncInvestmentAccount(accountId) ·
  *                 usePortfolio(accountId, {enabled?}) · useInvestmentTrades(accountId,
  *                 {enabled?}) (the last 20)
  *   reports       useCategoryTotals({from?, to?, kind?: 'spend'|'income'}) ·
  *                 useFlow({from?, to?, granularity?: 'day'|'month'})
- *   transfers     useTransferSuggestions · useDecideTransfer
+ *   transfers     useTransferSuggestions({enabled?}) · useDecideTransfer
  *   rules         useRules · useSaveRule()({id?, input}) · useDeleteRule()(id)
  *   assistant     useProposals · useDecideProposal()({id, apply}) · useChatHistory ·
  *                 useClearChat
@@ -83,6 +92,11 @@ export const keys = {
   transfers: ['transfer-suggestions'] as const,
   captures: ['captures'] as const,
   captureReview: ['captures', 'review'] as const,
+  statementUploads: ['statement-uploads'] as const,
+  statementUploadDryRun: (id: string) => ['statement-upload-dry-run', id] as const,
+  connectRequest: (id: string) => ['connect-request', id] as const,
+  claudeConnections: ['claude-connections'] as const,
+  mcpResource: ['mcp-resource'] as const,
 }
 
 /**
@@ -428,6 +442,130 @@ export function useImportRuns(accountId: string) {
   })
 }
 
+// --- statements Claude sent ---------------------------------------------------
+
+/**
+ * The statements Claude sent that wait for the owner (`needs_review`), oldest first.
+ * Without the MCP (no PUBLIC_URL) nothing can arrive, and the list is empty.
+ */
+export function useStatementUploads() {
+  return useQuery({
+    queryKey: keys.statementUploads,
+    queryFn: () => api.fetchStatementUploads('needs_review'),
+  })
+}
+
+/**
+ * What a waiting upload's file says, written nowhere. Read once per upload: the file
+ * does not change, and once it is imported or dismissed it is gone, so asking again
+ * would only turn what is on screen into a 404.
+ */
+export function useStatementUploadDryRun(id: string, options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.statementUploadDryRun(id),
+    queryFn: () => api.dryRunStatementUpload(id),
+    enabled: options.enabled ?? true,
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+  })
+}
+
+/**
+ * The owner's own import of a file Claude sent. Money, like any import, and the
+ * upload leaves the waiting list. The refresh is awaited, so the result shows with
+ * the accounts already saying what is true now (a new one included). Its dry run
+ * stays cached as it was, never read again: the file is gone.
+ */
+export function useImportStatementUpload() {
+  const queryClient = useQueryClient()
+  const invalidate = useMoneyInvalidation()
+  return useMutation({
+    mutationFn: (id: string) => api.importStatementUpload(id),
+    onSuccess: () =>
+      Promise.all([
+        invalidate(),
+        queryClient.invalidateQueries({ queryKey: keys.statementUploads }),
+      ]),
+  })
+}
+
+/** Sets a file Claude sent aside: it leaves the waiting list and nothing else changes. */
+export function useDismissStatementUpload() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.dismissStatementUpload(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.statementUploads }),
+  })
+}
+
+// --- Claude ---------------------------------------------------------------------
+
+/**
+ * The request the consent page answers. Read once: answering deletes it, so a
+ * refetch (a focus, a remount) would turn the page into "ya no está vigente" while
+ * the browser is on its way back to Claude. Kept in the cache for that reason too: a
+ * remount after the answer finds it there instead of asking again.
+ */
+export function useConnectRequest(id: string) {
+  return useQuery({
+    queryKey: keys.connectRequest(id),
+    queryFn: () => api.fetchConnectRequest(id),
+    enabled: id !== '',
+    staleTime: Infinity,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
+  })
+}
+
+/**
+ * The owner's answer: yes (with whether Claude may write) or no. Either way the
+ * answer is where to send the browser, which the caller does. Nothing to refresh:
+ * the connection exists once Claude trades the code for its tokens, after the page
+ * is gone.
+ */
+export function useAnswerConnectRequest() {
+  return useMutation({
+    mutationFn: (
+      answer: { id: string; write: boolean } | { id: string; deny: true },
+    ): Promise<ConnectAnswer> =>
+      'deny' in answer
+        ? api.denyConnectRequest(answer.id)
+        : api.approveConnectRequest(answer.id, answer.write),
+  })
+}
+
+/**
+ * The owner's live connections with Claude. Without the MCP (no PUBLIC_URL) the
+ * route does not exist: a 404, never retried, and Conexiones leaves Claude out.
+ */
+export function useClaudeConnections() {
+  return useQuery({ queryKey: keys.claudeConnections, queryFn: api.fetchClaudeConnections })
+}
+
+/**
+ * The MCP endpoint's metadata, whose `resource` is the connector's address (the API's
+ * PUBLIC_URL and /api/mcp). It does not change while the app runs: read once, and
+ * never retried, since a domain that does not route the document to the API answers
+ * with this app's own page, and asking again changes nothing.
+ */
+export function useMcpResource() {
+  return useQuery({
+    queryKey: keys.mcpResource,
+    queryFn: api.fetchMcpResource,
+    staleTime: Infinity,
+    retry: false,
+  })
+}
+
+/** Ends a connection; the list refreshes before the caller goes on. */
+export function useDisconnectClaude() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => api.disconnectClaude(id),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: keys.claudeConnections }),
+  })
+}
+
 // --- investments -------------------------------------------------------------
 
 export function useInvestmentLink(accountId: string, options: { enabled?: boolean } = {}) {
@@ -515,8 +653,12 @@ export function useFlow(query: {
 
 // --- transfers -----------------------------------------------------------------
 
-export function useTransferSuggestions() {
-  return useQuery({ queryKey: keys.transfers, queryFn: api.fetchTransferSuggestions })
+export function useTransferSuggestions(options: { enabled?: boolean } = {}) {
+  return useQuery({
+    queryKey: keys.transfers,
+    queryFn: api.fetchTransferSuggestions,
+    enabled: options.enabled ?? true,
+  })
 }
 
 /**

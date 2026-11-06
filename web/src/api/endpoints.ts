@@ -9,6 +9,9 @@ import type {
   CategoryTotal,
   ChatHistory,
   Checkpoint,
+  ClaudeConnection,
+  ConnectAnswer,
+  ConnectRequest,
   DeviceStatus,
   EntryKind,
   EntryPage,
@@ -20,6 +23,7 @@ import type {
   InvestmentLinkStatus,
   InvestmentSyncResult,
   InvestmentTrade,
+  McpResource,
   Me,
   NewShortcutKey,
   Portfolio,
@@ -27,6 +31,8 @@ import type {
   SecurityStatus,
   Session,
   StatementFileReport,
+  StatementUpload,
+  StatementUploadStatus,
   TransferSuggestion,
 } from './types'
 
@@ -430,6 +436,71 @@ export const dryRunStatement = (file: File) =>
 
 export const fetchImportRuns = (accountId: string) =>
   request<{ runs: ImportRun[] }>(`/api/imports?account_id=${encodeURIComponent(accountId)}`)
+
+// --- statements Claude sent -----------------------------------------------------
+
+/** The statements Claude sent that are in one state; by default, those waiting. */
+export const fetchStatementUploads = (status: StatementUploadStatus = 'needs_review') =>
+  request<{ uploads: StatementUpload[] }>(
+    `/api/imports/uploads?status=${encodeURIComponent(status)}`,
+  )
+
+/** What the file a waiting upload holds says, without importing it: a dry run. */
+export const dryRunStatementUpload = (id: string) =>
+  request<StatementFileReport>(`/api/imports/uploads/${encodeURIComponent(id)}/dry-run`)
+
+/**
+ * Imports the file a waiting upload holds, as the web's own import does: a new
+ * account is made the first time its file is seen. The file is dropped once it is in.
+ */
+export const importStatementUpload = (id: string) =>
+  request<ImportResult>(`/api/imports/uploads/${encodeURIComponent(id)}/import`, {
+    method: 'POST',
+  })
+
+/** Sets a waiting upload aside and drops its file. */
+export const dismissStatementUpload = (id: string) =>
+  request<void>(`/api/imports/uploads/${encodeURIComponent(id)}/dismiss`, {
+    method: 'POST',
+  })
+
+// --- Claude ---------------------------------------------------------------------
+
+/**
+ * The MCP endpoint's protected-resource metadata (RFC 9728). Its `resource` is where
+ * Claude reaches chenchén's tools, which the app shows for the owner to add as a
+ * connector. At the root of the domain, not under /api.
+ */
+export const fetchMcpResource = () =>
+  request<McpResource>('/.well-known/oauth-protected-resource/api/mcp')
+
+/**
+ * A connection Claude asked for. Opening it makes it this owner's to answer; a
+ * 404 (oauth_request_not_found) when it expired, was answered or is someone else's.
+ */
+export const fetchConnectRequest = (id: string) =>
+  request<ConnectRequest>(`/api/oauth/requests/${encodeURIComponent(id)}`)
+
+/** Yes, with whether Claude may also write. The answer says where to go next. */
+export const approveConnectRequest = (id: string, write: boolean) =>
+  request<ConnectAnswer>(`/api/oauth/requests/${encodeURIComponent(id)}/approve`, {
+    method: 'POST',
+    body: { write },
+  })
+
+/** No. The answer says where to go next: back to Claude, which hears the no. */
+export const denyConnectRequest = (id: string) =>
+  request<ConnectAnswer>(`/api/oauth/requests/${encodeURIComponent(id)}/deny`, {
+    method: 'POST',
+  })
+
+/** The owner's live connections with Claude, newest first. */
+export const fetchClaudeConnections = () =>
+  request<{ grants: ClaudeConnection[] }>('/api/oauth/grants')
+
+/** Ends a connection and every token it issued: Claude has to connect again. */
+export const disconnectClaude = (id: string) =>
+  request<void>(`/api/oauth/grants/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- categories ---------------------------------------------------------------
 

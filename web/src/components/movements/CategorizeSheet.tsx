@@ -35,11 +35,11 @@
  *
  * A purchase the owner noted that no statement has printed yet (origin 'capture') is
  * what they wrote, not what the bank printed, so it can change. Under its facts it
- * says how it was noted ("Anotada con Atajos el 26 oct a las 12:41", or "Anotada a
- * mano") and "Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado." (on a
- * card someone else pays, which has neither a statement nor a balance of the owner's:
- * "Cuenta en tus gastos, no en lo que debes."). It has no transfer option (a purchase
- * is spending) and two ghost buttons:
+ * says how it was noted ("Anotada con Atajos el 26 oct a las 12:41", "Anotada por el
+ * asistente" or "Anotada a mano") and "Cuenta en tus gastos. Tu saldo cambia cuando
+ * llegue tu estado." (on a card someone else pays, which has neither a statement nor
+ * a balance of the owner's: "Cuenta en tus gastos, no en lo que debes."). It has no
+ * transfer option (a purchase is spending) and two ghost buttons:
  *   - "Corregir" swaps in a form for its Monto, ¿Dónde? and Día, whose "Cancelar"
  *     comes back here;
  *   - "Descartar compra", for one that never happened: "Listo: compra descartada"
@@ -47,10 +47,10 @@
  *
  * A printed line that a noted purchase was linked to (`noted`) says so under its
  * facts: "La anotaste como «Café Unido»." ("…con Atajos como…" when the shortcut
- * noted it), with a ghost "No es esta compra" for a wrong link. That unlinks them, so
- * the purchase counts again on its own until its real line arrives, and closes the
- * sheet: "Listo: separamos la compra de este movimiento." with "Deshacer", which links
- * them again.
+ * noted it, "El asistente la anotó como…" when Claude did), with a ghost "No es esta
+ * compra" for a wrong link. That unlinks them, so the purchase counts again on its
+ * own until its real line arrives, and closes the sheet: "Listo: separamos la compra
+ * de este movimiento." with "Deshacer", which links them again.
  */
 import { CircleAlertIcon } from 'lucide-react'
 import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -681,21 +681,37 @@ function ChoiceRow({
   )
 }
 
-/** How a noted purchase was noted: "Anotada con Atajos el 26 oct a las 12:41". */
+/**
+ * How a noted purchase was noted: "Anotada con Atajos el 26 oct a las 12:41", "Anotada
+ * por el asistente" (Claude, from what it read or was told) or "Anotada a mano".
+ */
 function notedHow(entry: Entry): string {
-  if (entry.capture_source !== 'shortcut') return 'Anotada a mano'
-  return entry.booked_at
-    ? `Anotada con Atajos el ${formatDayAndTime(entry.booked_at)}`
-    : 'Anotada con Atajos'
+  switch (entry.capture_source) {
+    case 'shortcut':
+      return entry.booked_at
+        ? `Anotada con Atajos el ${formatDayAndTime(entry.booked_at)}`
+        : 'Anotada con Atajos'
+    case 'agent':
+      return 'Anotada por el asistente'
+    default:
+      return 'Anotada a mano'
+  }
 }
 
 /**
- * What the owner called the purchase linked to a printed line: "La anotaste como «Café
- * Unido»." or, noted by the shortcut, "La anotaste con Atajos como «Café Unido»."
+ * What the purchase linked to a printed line was called: "La anotaste como «Café
+ * Unido».", noted by the shortcut "La anotaste con Atajos como «Café Unido».", and
+ * noted by the assistant "El asistente la anotó como «Café Unido».".
  */
 function notedAs(noted: NotedPurchase): string {
-  const how = noted.source === 'shortcut' ? ' con Atajos' : ''
-  return `La anotaste${how} como «${noted.merchant}».`
+  switch (noted.source) {
+    case 'shortcut':
+      return `La anotaste con Atajos como «${noted.merchant}».`
+    case 'agent':
+      return `El asistente la anotó como «${noted.merchant}».`
+    default:
+      return `La anotaste como «${noted.merchant}».`
+  }
 }
 
 /** An amount as the owner would type it: "12.50" for −$12.50, built from the cents. */

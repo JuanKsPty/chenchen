@@ -19,7 +19,7 @@
  */
 import { useSearchParams, useParams } from 'react-router-dom'
 
-import { ApiError } from '@/api/client'
+import { isNotFound } from '@/api/client'
 import type { Account } from '@/api/types'
 import { AccountMovements } from '@/components/account/AccountMovements'
 import { AccountOverview } from '@/components/account/AccountOverview'
@@ -41,7 +41,7 @@ export function AccountPage() {
   const account = useAccount(id)
   useDocumentTitle(account.data ? shortAccountLabel(account.data) : 'Cuentas')
 
-  const missing = account.error instanceof ApiError && account.error.status === 404
+  const missing = isNotFound(account.error)
   // A refresh that fails for any other reason keeps the figures already on screen.
   if (account.isError && (missing || !account.data)) {
     return (

@@ -37,6 +37,11 @@ export class ApiError extends Error {
   }
 }
 
+/** True when the API answered 404: what was asked for is not there, or not this owner's. */
+export function isNotFound(error: unknown): boolean {
+  return error instanceof ApiError && error.status === 404
+}
+
 let accessToken: string | null = null
 let refreshInFlight: Promise<boolean> | null = null
 

@@ -1,9 +1,12 @@
+import { useState } from 'react'
+
 import { HomeEmpty } from '@/components/home/HomeEmpty'
 import { HomeNotices } from '@/components/home/HomeNotices'
 import { MonthFlow } from '@/components/home/MonthFlow'
 import { NetWorthCard } from '@/components/home/NetWorthCard'
 import { RecentMovements } from '@/components/home/RecentMovements'
 import { TopCategories } from '@/components/home/TopCategories'
+import { UploadReviewDialog } from '@/components/import/UploadReviewDialog'
 import { Notice, PageHeader } from '@/components/kit'
 import { useAccounts } from '@/lib/queries'
 import { useSession } from '@/lib/session'
@@ -21,13 +24,23 @@ import { useDocumentTitle } from '@/lib/title'
  *
  * The greeting is the page's h1 from lg ("Buenas, Juan. Así va tu chenchén.");
  * below lg the mobile bar shows it, and the h1 stays for screen readers.
- * Before the first import, the empty state: Importar, or connect IBKR.
+ * Before the first import, the empty state: Importar, or connect IBKR; above it, the
+ * files Claude sent that wait for their first import, if any.
  */
 export function HomePage() {
   useDocumentTitle('Inicio')
   const { user } = useSession()
   const accounts = useAccounts()
   const firstName = user?.full_name.trim().split(/\s+/)[0]
+  // The review of the files Claude sent, mounted the first time it is asked for and
+  // kept here, above both layouts: importing the first file of the first account
+  // turns the empty state into the full page, and the dialog stays through it.
+  const [reviewing, setReviewing] = useState(false)
+  const [reviewAsked, setReviewAsked] = useState(false)
+  const reviewUploads = () => {
+    setReviewAsked(true)
+    setReviewing(true)
+  }
 
   const list = accounts.data?.accounts
   // From the data, not the status: a failed background refresh keeps what was
@@ -44,7 +57,14 @@ export function HomePage() {
       />
     )
   } else if (empty) {
-    body = <HomeEmpty />
+    // Files Claude sent for accounts chenchén does not have yet wait here: the first
+    // file of an account is imported by its owner.
+    body = (
+      <div className="flex flex-col gap-4 lg:gap-6">
+        <HomeNotices accounts={[]} onReviewUploads={reviewUploads} />
+        <HomeEmpty />
+      </div>
+    )
   } else {
     // From lg the two columns flow on their own: the right one (notices, En qué se
     // te va, Este mes) spans both rows, and the second row is `1fr` so that it, not
@@ -59,7 +79,7 @@ export function HomePage() {
           className="lg:col-span-7 lg:col-start-1 lg:row-start-1"
         />
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-5 lg:col-start-8 lg:row-span-2 lg:row-start-1 lg:gap-6 lg:self-start">
-          {list && <HomeNotices accounts={list} />}
+          {list && <HomeNotices accounts={list} onReviewUploads={reviewUploads} />}
           <TopCategories />
           <MonthFlow />
         </div>
@@ -83,6 +103,7 @@ export function HomePage() {
         }
       />
       {body}
+      {reviewAsked && <UploadReviewDialog open={reviewing} onOpenChange={setReviewing} />}
     </div>
   )
 }

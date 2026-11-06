@@ -19,12 +19,12 @@ teléfono, más el asistente y los ajustes:
 
 | Sección | Qué ves |
 |---|---|
-| **Inicio** (`/inicio`) | Tu patrimonio neto —lo que tienes, lo que debes y tus inversiones—, los avisos que piden algo de ti (una cuenta que no cuadra, cuentas sin saldo inicial, transferencias por confirmar), el mes en curso y lo más reciente. |
+| **Inicio** (`/inicio`) | Tu patrimonio neto —lo que tienes, lo que debes y tus inversiones—, los avisos que piden algo de ti (una cuenta que no cuadra, cuentas sin saldo inicial, transferencias por confirmar, archivos que Claude subió y no entraron solos), el mes en curso y lo más reciente. |
 | **Cuentas** (`/cuentas`) | Cuentas, tarjetas e inversiones con su saldo. Desde aquí importas un estado de cuenta o conectas Interactive Brokers. Cada cuenta abre su detalle: saldo, conciliación línea por línea, corte y pago mínimo de la tarjeta, posiciones. |
 | **Movimientos** (`/movimientos`) | Todo lo importado, con búsqueda por comercio, monto o nota, filtros por cuenta, categoría, fechas y tipo, y exportación a CSV. Tocar un movimiento abre Categorizar. |
 | **Gastos** (`/gastos`) | En qué se te va el mes por categoría, entradas y salidas por mes, las transferencias que esperan un sí o un no y las reglas (`/gastos/reglas`). |
 | **Asistente** | Un panel a la derecha en escritorio y una hoja en el teléfono. Le preguntas por tu dinero; propone cambios y tú decides cuáles aplicar. |
-| **Ajustes** (`/ajustes`) | Modo claro, oscuro o el del sistema; el PIN y este dispositivo; las conexiones con Interactive Brokers y con los atajos del iPhone que anotan tus compras; y tus reglas. |
+| **Ajustes** (`/ajustes`) | Modo claro, oscuro o el del sistema; el PIN y este dispositivo; las conexiones con Interactive Brokers, con los atajos del iPhone que anotan tus compras y con Claude; y tus reglas. |
 
 En un dispositivo de confianza entras con un PIN de 6 dígitos, y la app trae manifiesto
 e íconos para agregarla a la pantalla de inicio del teléfono.
