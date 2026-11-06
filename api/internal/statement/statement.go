@@ -34,6 +34,9 @@ const (
 	SourceBGAccount  Source = "bg_account"
 	SourceBACAccount Source = "bac_account"
 	SourceBGCard     Source = "bg_card"
+	// SourceBGCardStatement is a BG card's closed statement as a PDF: only
+	// its summary, the debt at the cut.
+	SourceBGCardStatement Source = "bg_card_statement"
 )
 
 // Institution values, stable because they are part of an account's identity.
@@ -128,7 +131,9 @@ type Statement struct {
 	PeriodStart civil.Date
 	PeriodEnd   civil.Date
 	// Opening and Closing are the balances before the first line and after
-	// the last; nil when the format prints none (the BG card export).
+	// the last; nil when the format prints none (the BG card export). A
+	// statement with no lines can still carry a Closing: the BG card's PDF
+	// is read for it alone.
 	Opening *money.Cents
 	Closing *money.Cents
 	// Available and Held are the bank's available balance and funds on hold,
@@ -175,8 +180,10 @@ var ErrAccountNotStated = errors.New("statement: the file does not say which acc
 // to show nothing.
 func Parse(filename string, data []byte) (File, error) {
 	switch detect(filename, data) {
-	case SourceBGAccount:
-		return parseBGAccount(data)
+	case sourceWorkbook:
+		return parseWorkbook(data)
+	case sourcePDF:
+		return parsePDF(data)
 	case SourceBACAccount:
 		return parseBAC(data)
 	case SourceBGCard:
@@ -198,9 +205,17 @@ const (
 // why it cannot be imported.
 const sourceBGAccountText Source = "bg_account_txt"
 
+// sourceWorkbook is any .xlsx: the BG account's and the BG card's exports are
+// both workbooks, told apart by what their sheet says (parseWorkbook).
+const sourceWorkbook Source = "xlsx"
+
+// sourcePDF is any PDF. The BG card's closed statement is the only one read,
+// told from every other PDF by its first page (parsePDF).
+const sourcePDF Source = "pdf"
+
 func detect(filename string, data []byte) Source {
 	if strings.HasSuffix(strings.ToLower(filename), ".xlsx") {
-		return SourceBGAccount
+		return sourceWorkbook
 	}
 	head := data[:min(len(data), 2048)]
 	if strings.Contains(string(head), bgCardSignature) {
@@ -211,6 +226,11 @@ func detect(filename string, data []byte) Source {
 	}
 	if strings.HasPrefix(latin1(head), bacSignature) {
 		return SourceBACAccount
+	}
+	// Checked last, so a text export that happens to mention it is still
+	// read as what it is.
+	if pdfStart(data) >= 0 {
+		return sourcePDF
 	}
 	return ""
 }

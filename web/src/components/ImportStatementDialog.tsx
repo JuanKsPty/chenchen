@@ -11,7 +11,7 @@
  * instead of being filed somewhere unexpected.
  *
  * The flow, in one dialog (a bottom sheet below lg):
- *   1. Pick a .txt, .csv or .xlsx (button or drop). Then either
+ *   1. Pick a .txt, .csv, .xlsx or .pdf (button or drop). Then either
  *      "Importar" (primary), or "Solo revisar" (ghost): a dry run that shows what
  *      the file says without writing anything, with "Importar ahora" after it.
  *   2. The result, per voice.importResult: "Listo: 12 movimientos nuevos …",
@@ -314,8 +314,8 @@ function ImportFlow({
 function Instructions({ accountId, lockedTo }: { accountId?: string; lockedTo?: Account }) {
   return (
     <>
-      Sube el estado de cuenta que te da tu banco (.csv, .txt o .xlsx). Si un movimiento ya
-      estaba, no lo repetimos.
+      Sube el estado de cuenta que te da tu banco (.csv, .txt, .xlsx o .pdf). Si un
+      movimiento ya estaba, no lo repetimos.
       {accountId && lockedTo && (
         <>
           {' '}
@@ -360,7 +360,7 @@ function failureText(error: Error, lockedTo?: Account): string {
   if (!(error instanceof ApiError)) return GENERIC_ERROR
   switch (error.code) {
     case 'unrecognised_format':
-      return 'No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt o .xlsx).'
+      return 'No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt, .xlsx o .pdf).'
     case 'unreadable_statement': {
       const line = /\b(?:line|l[ií]nea) (\d+)/i.exec(error.message)?.[1]
       return line

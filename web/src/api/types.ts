@@ -407,6 +407,12 @@ export interface InvestmentTrade {
 
 // --- imports -------------------------------------------------------------------
 
+/**
+ * The format of a statement file. bg_card_statement is a card's closed statement as a
+ * PDF: no lines and no opening, only the balance at its cut.
+ */
+export type StatementSource = 'bg_account' | 'bac_account' | 'bg_card' | 'bg_card_statement'
+
 /** What one statement in an uploaded file did to its account. */
 export interface ImportAccountResult {
   account_id: string
@@ -434,7 +440,7 @@ export interface ImportAccountResult {
 }
 
 export interface ImportResult {
-  source: 'bg_account' | 'bac_account' | 'bg_card'
+  source: StatementSource
   /** The exact same file was already imported; nothing changed. */
   unchanged: boolean
   accounts: ImportAccountResult[]
@@ -443,7 +449,7 @@ export interface ImportResult {
 /** One import or IBKR sync, as recorded. */
 export interface ImportRun {
   id: string
-  source: 'bg_account' | 'bac_account' | 'bg_card' | 'ibkr_flex'
+  source: StatementSource | 'ibkr_flex'
   status: 'ok' | 'unchanged' | 'error'
   filename?: string
   period_start: string | null
@@ -502,7 +508,10 @@ export interface StatementReport {
   /** Civil dates (YYYY-MM-DD). */
   period_start: string | null
   period_end: string | null
-  /** The bank's own balances; absent when the format prints none (a card). */
+  /**
+   * The bank's own balances; absent when the format prints none (a card's exports).
+   * A card's closed statement brings the closing alone, its balance at the cut.
+   */
   opening?: Amount
   closing?: Amount
   available?: Amount
@@ -516,7 +525,7 @@ export interface StatementReport {
 }
 
 export interface StatementFileReport {
-  source: 'bg_account' | 'bac_account' | 'bg_card'
+  source: StatementSource
   statements: StatementReport[]
 }
 

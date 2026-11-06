@@ -20,7 +20,8 @@ var bgCardColumns = []string{
 //
 // The file prints no balance at all — no previous balance, no closing, no
 // credit limit — so its statements carry no Opening or Closing. A card's
-// starting balance has to come from the owner, read off the PDF statement.
+// balance comes from its closed statement's PDF (parseBGCardStatement), or
+// from the owner.
 func parseBGCard(data []byte) (File, error) {
 	r := csv.NewReader(bytes.NewReader(bytes.TrimPrefix(data, []byte("\xef\xbb\xbf"))))
 	r.Comma = ';'
@@ -33,55 +34,84 @@ func parseBGCard(data []byte) (File, error) {
 	if len(records) == 0 {
 		return File{}, fmt.Errorf("statement: the BG card file is empty")
 	}
-	col := map[string]int{}
-	for i, name := range records[0] {
-		col[strings.TrimSpace(name)] = i
+	t := bgCardTable{
+		col:       map[string]int{},
+		rows:      records[1:],
+		firstLine: 2,
+		date:      func(s string) (civil.Date, error) { return civil.ParseLayout("02/01/2006", s) },
+		amount:    signedFromText,
 	}
+	for i, name := range records[0] {
+		t.col[strings.TrimSpace(name)] = i
+	}
+	return t.file()
+}
+
+// bgCardTable is a card export read into cells, under the text export's
+// column names, whichever file it came in. The text and Excel exports of one
+// movement become the same Line through it, so its dedup key is the same and
+// downloading it both ways never counts it twice.
+type bgCardTable struct {
+	// col maps each of bgCardColumns to its index in a row.
+	col  map[string]int
+	rows [][]string
+	// firstLine is the file's own line or row number of rows[0], for
+	// messages that point back at it.
+	firstLine int
+	// date and amount read a cell as the file writes it.
+	date   func(string) (civil.Date, error)
+	amount func(string) (money.Cents, error)
+}
+
+// file builds one statement per card account from the table's rows.
+func (t bgCardTable) file() (File, error) {
 	for _, want := range bgCardColumns {
-		if _, ok := col[want]; !ok {
+		if _, ok := t.col[want]; !ok {
 			return File{}, fmt.Errorf("statement: the BG card file is missing the %q column", want)
 		}
 	}
 
 	byAccount := map[string]*Statement{}
 	var order []string
-	for i, record := range records[1:] {
-		lineNo := i + 2
+	for i, record := range t.rows {
+		lineNo := t.firstLine + i
 		cell := func(name string) string {
-			if c := col[name]; c < len(record) {
+			if c := t.col[name]; c < len(record) {
 				return strings.TrimSpace(record[c])
 			}
 			return ""
 		}
-		if cell("Cuenta") == "" && cell("Descripcion") == "" {
+		account := cell("Cuenta")
+		if account == "" && cell("Fecha tran") == "" {
+			// No account and no day: a blank line, or a sheet's total or
+			// footer ("Total cargos"), not a movement.
 			continue
 		}
-		account := cell("Cuenta")
 		if account == "" {
 			return File{}, fmt.Errorf("statement: BG card line %d has no Cuenta", lineNo)
 		}
 
-		bookedOn, err := civil.ParseLayout("02/01/2006", cell("Fecha tran"))
+		bookedOn, err := t.date(cell("Fecha tran"))
 		if err != nil {
 			return File{}, fmt.Errorf("statement: BG card line %d: fecha tran %q", lineNo, cell("Fecha tran"))
 		}
 		var postedOn *civil.Date
-		if t := cell("Fecha proceso"); t != "" {
-			d, err := civil.ParseLayout("02/01/2006", t)
+		if s := cell("Fecha proceso"); s != "" {
+			d, err := t.date(s)
 			if err != nil {
-				return File{}, fmt.Errorf("statement: BG card line %d: fecha proceso %q", lineNo, t)
+				return File{}, fmt.Errorf("statement: BG card line %d: fecha proceso %q", lineNo, s)
 			}
 			postedOn = &d
 		}
 
 		var charge, payment money.Cents
-		if t := cell("Cargos (Db)"); t != "" {
-			if charge, err = signedFromText(t); err != nil {
+		if s := cell("Cargos (Db)"); s != "" {
+			if charge, err = t.amount(s); err != nil {
 				return File{}, fmt.Errorf("statement: BG card line %d: cargos: %w", lineNo, err)
 			}
 		}
-		if t := cell("Pagos (Cr)"); t != "" {
-			if payment, err = signedFromText(t); err != nil {
+		if s := cell("Pagos (Cr)"); s != "" {
+			if payment, err = t.amount(s); err != nil {
 				return File{}, fmt.Errorf("statement: BG card line %d: pagos: %w", lineNo, err)
 			}
 		}
@@ -104,14 +134,7 @@ func parseBGCard(data []byte) (File, error) {
 
 		st, ok := byAccount[account]
 		if !ok {
-			st = &Statement{Identity: Identity{
-				Institution:    InstitutionBancoGeneral,
-				ExternalNumber: account,
-				Currency:       "USD",
-				DisplayName:    "Tarjeta " + account,
-				Class:          ClassLiability,
-				Type:           "credit_card",
-			}}
+			st = &Statement{Identity: bgCardIdentity(account)}
 			byAccount[account] = st
 			order = append(order, account)
 		}
@@ -137,6 +160,20 @@ func parseBGCard(data []byte) (File, error) {
 		file.Statements = append(file.Statements, *st)
 	}
 	return file, nil
+}
+
+// bgCardIdentity is the card account a BG card file is for, account being its
+// number as the bank prints it ("**** 1234"). Every format of the card builds
+// it here, so they all land in the same account.
+func bgCardIdentity(account string) Identity {
+	return Identity{
+		Institution:    InstitutionBancoGeneral,
+		ExternalNumber: account,
+		Currency:       "USD",
+		DisplayName:    "Tarjeta " + account,
+		Class:          ClassLiability,
+		Type:           "credit_card",
+	}
 }
 
 // cardKind classifies a card line from the bank's own category. "Pagos" is

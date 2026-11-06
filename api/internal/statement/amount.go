@@ -68,7 +68,7 @@ func signedFromText(s string) (money.Cents, error) {
 // rounding it would change the amount.
 func centsFromFloat(raw string) (money.Cents, error) {
 	f, err := strconv.ParseFloat(strings.TrimSpace(raw), 64)
-	if err != nil {
+	if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
 		return 0, fmt.Errorf("%q no es un número", raw)
 	}
 	scaled := f * 100

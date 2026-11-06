@@ -96,7 +96,7 @@ var lineNo = regexp.MustCompile(`\bline (\d+)\b`)
 func ParseProblem(err error) *httpx.Error {
 	if errors.Is(err, ErrUnrecognised) {
 		return httpx.Unprocessable("unrecognised_format",
-			"No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt o .xlsx).").
+			"No reconocemos este archivo. Sube el estado de cuenta tal como te lo da tu banco (.csv, .txt, .xlsx o .pdf).").
 			WithCause(err)
 	}
 	if errors.Is(err, ErrAccountNotStated) {

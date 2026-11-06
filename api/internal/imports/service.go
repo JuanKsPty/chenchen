@@ -110,6 +110,12 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		return Result{}, unreadableError{err}
 	}
 	result := Result{Source: parsed.Source}
+	// A format whose bytes differ on every download (the time is printed in
+	// it) is recognised by what it says instead, so a second download of the
+	// same statement is nothing new rather than a second, identical import.
+	if key, ok := parsed.ContentKey(); ok {
+		sha = key
+	}
 
 	if prior, err := s.db.Q().ImportRunByContent(ctx, userID, sha); err == nil {
 		result.Unchanged = true

@@ -130,7 +130,8 @@ su contenido:
 |---|---|---|
 | Cuenta bancaria | `.xlsx` | Movimientos, saldo corrido por línea y el saldo total. Las fechas traen la hora de la descarga, no la del movimiento, así que solo se lee el día. La versión `.txt` de la misma exportación no dice de qué cuenta es y se rechaza (`account_not_stated`). |
 | Cuenta bancaria | `.csv` (Latin-1) | Producto, saldo inicial, en libros y disponible, con el resumen de débitos y créditos como control. |
-| Tarjeta de crédito | `.txt` | Movimientos y fecha de proceso. No trae saldos: la tarjeta queda **sin saldo inicial** hasta que anotas lo que debías al corte de un estado en PDF. |
+| Tarjeta de crédito | `.txt` o `.xlsx` | Movimientos y fecha de proceso. El mismo movimiento bajado en texto y en Excel es uno solo. No traen saldos: la tarjeta queda **sin saldo inicial** hasta que subes su estado cerrado en PDF o anotas lo que debías al corte. |
+| Estado cerrado de la tarjeta | `.pdf` | Solo el resumen: la fecha de corte y la deuda al corte, que queda como el saldo de la tarjeta ese día. La deuda anterior es la del corte previo y solo sirve para comprobar que el resumen cuadra. Sus movimientos se ignoran a propósito: no traen referencia, y llegan con el `.txt` o el `.xlsx`. Un PDF sin ese título y ese resumen no se reconoce (`unrecognised_format`). |
 | Interactive Brokers | Flex Web Service | Cash Transactions, Trades (Execution), Open Positions y Cash Report. |
 
 - **Reimportar es seguro.** La clave de dedup sale solo de la identidad externa de la
@@ -231,7 +232,7 @@ api/
   cmd/api                 la API
   cmd/import              importa un archivo a mano contra la base
   cmd/ibkrsync            sincroniza todas las cuentas de IBKR, una pasada
-  internal/statement      parsers puros: cuenta .xlsx, cuenta .csv y tarjeta .txt
+  internal/statement      parsers puros: cuenta .xlsx, cuenta .csv, tarjeta .txt y .xlsx, estado .pdf
   internal/ibkr           cliente y parser del Flex Web Service
   internal/imports        un archivo → una transacción
   internal/accounts       saldos, anclas, conciliación
