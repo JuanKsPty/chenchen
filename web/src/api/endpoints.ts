@@ -28,6 +28,7 @@ import type {
   NewShortcutKey,
   Portfolio,
   Reconciliation,
+  RuleReach,
   SecurityStatus,
   Session,
   StatementFileReport,
@@ -362,6 +363,10 @@ export const updateRule = (id: string, input: RuleInput) =>
 
 export const deleteRule = (id: string) =>
   request<void>(`/api/category-rules/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/** What a rule with this text would reach, before it exists. */
+export const fetchRuleReach = (text: string) =>
+  request<RuleReach>(`/api/category-rules/preview?${new URLSearchParams({ text })}`)
 
 // --- proposals -----------------------------------------------------------------
 

@@ -1,4 +1,5 @@
 import {
+  keepPreviousData,
   useInfiniteQuery,
   useMutation,
   useQuery,
@@ -64,7 +65,8 @@ import type {
  *   reports       useCategoryTotals({from?, to?, kind?: 'spend'|'income'}) ·
  *                 useFlow({from?, to?, granularity?: 'day'|'month'})
  *   transfers     useTransferSuggestions({enabled?}) · useDecideTransfer
- *   rules         useRules · useSaveRule()({id?, input}) · useDeleteRule()(id)
+ *   rules         useRules · useSaveRule()({id?, input}) · useDeleteRule()(id) ·
+ *                 useRuleReach(text): what a rule with text would reach, '' for none
  *   assistant     useProposals · useDecideProposal()({id, apply}) · useChatHistory ·
  *                 useClearChat
  *   PIN           useSecurityStatus · useSetPin · useRemovePin · useEnableDeviceForPin ·
@@ -88,6 +90,7 @@ export const keys = {
   security: ['security'] as const,
   categories: ['categories'] as const,
   rules: ['rules'] as const,
+  ruleReach: (text: string) => ['rules', 'reach', text] as const,
   proposals: ['proposals'] as const,
   transfers: ['transfer-suggestions'] as const,
   captures: ['captures'] as const,
@@ -693,6 +696,16 @@ export function useSaveRule() {
       void queryClient.invalidateQueries({ queryKey: keys.rules })
       void invalidate()
     },
+  })
+}
+
+export function useRuleReach(text: string) {
+  return useQuery({
+    queryKey: keys.ruleReach(text),
+    queryFn: () => api.fetchRuleReach(text),
+    enabled: text !== '',
+    // While the owner types, the last count stays until the next arrives.
+    placeholderData: keepPreviousData,
   })
 }
 

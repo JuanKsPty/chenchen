@@ -139,9 +139,18 @@ func (s *Service) Get(ctx context.Context, userID, id uuid.UUID) (store.Entry, e
 
 // SetCategory files a movement under one of the user's categories, or clears
 // it with nil. source records who decided: "user" or "assistant".
+//
+// Money in on a printed line is either spending given back or income, and the
+// category chosen says which: an income category makes a refund income (a
+// friend paying for something sold, not back for a dinner), a spending
+// category makes income a refund. Reports follow the kind, so it moves from
+// Gastos to Ingresos or back. Choosing what the importer said again clears
+// the override.
 func (s *Service) SetCategory(ctx context.Context, userID, id uuid.UUID, categoryID *uuid.UUID, source string) (store.Entry, error) {
+	var chosen categories.Category
 	if categoryID != nil {
-		if _, err := s.categories.Get(ctx, userID, *categoryID); err != nil {
+		var err error
+		if chosen, err = s.categories.Get(ctx, userID, *categoryID); err != nil {
 			return store.Entry{}, err
 		}
 	}
@@ -149,14 +158,46 @@ func (s *Service) SetCategory(ctx context.Context, userID, id uuid.UUID, categor
 	if err != nil {
 		return store.Entry{}, err
 	}
-	set := s.db.Q().SetEntryCategory
 	if e.Origin == store.OriginCapture {
-		set = s.db.Q().SetCaptureCategory
+		if err := s.db.Q().SetCaptureCategory(ctx, userID, id, categoryID, source); err != nil {
+			return store.Entry{}, notFound(err)
+		}
+		return s.Get(ctx, userID, id)
 	}
-	if err := set(ctx, userID, id, categoryID, source); err != nil {
+	err = s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.SetEntryCategory(ctx, userID, id, categoryID, source); err != nil {
+			return err
+		}
+		if kind, change := moneyInKind(e, chosen, categoryID != nil); change {
+			return q.SetEntryUserKind(ctx, userID, id, kind)
+		}
+		return nil
+	})
+	if err != nil {
 		return store.Entry{}, notFound(err)
 	}
 	return s.Get(ctx, userID, id)
+}
+
+// moneyInKind is the user_kind a line of money in takes with the category
+// chosen for it, and whether that changes it: refund under spending, income
+// under income, nil when that is what the importer said.
+func moneyInKind(e store.Entry, chosen categories.Category, has bool) (*string, bool) {
+	now := e.EffectiveKind()
+	if !has || e.Amount <= 0 || (now != store.KindRefund && now != store.KindIncome) {
+		return nil, false
+	}
+	want := store.KindRefund
+	if chosen.Kind == categories.KindIncome {
+		want = store.KindIncome
+	}
+	if want == now {
+		return nil, false
+	}
+	if want == e.Kind {
+		return nil, true
+	}
+	return &want, true
 }
 
 // SetNote sets a movement's note; an empty note clears it.

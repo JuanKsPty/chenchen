@@ -657,3 +657,35 @@ func TestARuleTextSaysWhatItWouldReach(t *testing.T) {
 		t.Errorf("Reach of no text: %v, want ErrInvalid", err)
 	}
 }
+
+// Money a person sends is spending given back until the owner says it was
+// income: the category chosen decides, and choosing a spending category again
+// makes it a refund once more.
+func TestTheCategoryChosenSaysWhetherMoneyInIsARefundOrIncome(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.importFile(t, "m.xlsx", bgFile(t, []bgRow{{day: 1, desc: "YAPPY BG DE ANA PEREZ", credit: 75, balance: 175}}))
+	cats := categories.NewService(e.db)
+	moves := movements.NewService(e.db, cats)
+	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user, Search: "ANA PEREZ"})
+	if err != nil || len(list) != 1 || list[0].Kind != store.KindRefund {
+		t.Fatalf("the payment from a person: %+v %v, want one refund", list, err)
+	}
+	id := list[0].ID
+	otros, _, _ := cats.FindByName(ctx, e.user, "Otros ingresos")
+	food, _, _ := cats.FindByName(ctx, e.user, "Alimentación")
+
+	got, err := moves.SetCategory(ctx, e.user, id, &otros.ID, "user")
+	if err != nil || got.EffectiveKind() != store.KindIncome || got.Kind != store.KindRefund {
+		t.Fatalf("under Otros ingresos: kind %s (imported %s), %v; want income", got.EffectiveKind(), got.Kind, err)
+	}
+	got, err = moves.SetCategory(ctx, e.user, id, &food.ID, "user")
+	if err != nil || got.EffectiveKind() != store.KindRefund || got.UserKind != nil {
+		t.Fatalf("under Alimentación: kind %s, user kind %v, %v; want the refund the importer said", got.EffectiveKind(), got.UserKind, err)
+	}
+	// Taking the category away leaves the kind as it is.
+	got, err = moves.SetCategory(ctx, e.user, id, nil, "user")
+	if err != nil || got.EffectiveKind() != store.KindRefund {
+		t.Fatalf("without a category: kind %s, %v", got.EffectiveKind(), err)
+	}
+}
