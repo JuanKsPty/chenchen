@@ -28,7 +28,8 @@ import type {
  * with useQuery, an api/endpoints function and one of these key prefixes):
  *
  *   accounts      useMe · useAccounts · useAccount(id) · useUpdateAccount(id)
- *                 ({alias?, type?: 'checking'|'savings'}) · useDeleteAccount()(id)
+ *                 ({alias?, type?: 'checking'|'savings'}) · useDeleteAccount()(id) ·
+ *                 useAddOthersCard()({alias, last4}): a card someone else pays
  *   checkpoints   useCheckpoints(accountId) · useAddCheckpoint(accountId) ·
  *                 useDeleteCheckpoint(accountId)(checkpointId) ·
  *                 usePinCheckpoint(accountId)(checkpointId | null) ·
@@ -135,6 +136,32 @@ export function useUpdateAccount(id: string) {
     mutationFn: (patch: { alias?: string; type?: 'checking' | 'savings' }) =>
       api.updateAccount(id, patch),
     onSuccess: invalidate,
+  })
+}
+
+/**
+ * Adds a card someone else pays. It starts with no purchases, so of everything that
+ * shows money only the account list changes. The new account goes into the cache as
+ * the answer brought it, so its page opens at once; the list's refresh is awaited, so
+ * Cuentas already has it when the owner goes back.
+ *
+ * The form chooses the card's id, so sending it again after an answer that never
+ * came gets the same card back (201), never a 409 about its own digits. Nothing is
+ * refreshed on an error: a refresh could add the card to Cuentas and unmount the
+ * dialog (opened from Cuentas' empty state) while it says what went wrong, and the
+ * send again refreshes it anyway.
+ */
+export function useAddOthersCard() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: api.addOthersCard,
+    onSuccess: (account) => {
+      queryClient.setQueryData(keys.account(account.id), account)
+      return Promise.all([
+        queryClient.invalidateQueries({ queryKey: keys.accounts }),
+        queryClient.invalidateQueries({ queryKey: keys.me }),
+      ])
+    },
   })
 }
 

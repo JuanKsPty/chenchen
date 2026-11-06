@@ -1,5 +1,5 @@
 /**
- * <AccountOverview account menu onReview onAnchor />
+ * <AccountOverview account menu onReview onAnchor onAddPurchase />
  *
  * The top of an account's page (spec C-Cuenta-Desktop / C-Cuenta-Mobile):
  *
@@ -21,14 +21,28 @@
  *     with "Sincronizar ahora".
  *   - The notice: "El banco dice $2,173.90 desde el 03 oct." with "Revisar" when it
  *     does not match, or a pending one when there is no starting balance.
+ *
+ * A card someone else pays has no balance of the owner's: its figure is "Este mes",
+ * what it was used for this month, in the text colour, with "Cuenta en tus gastos, no
+ * en lo que debes." under it. No chip, no "Ver saldos del banco", no statement, no
+ * notice, and no "Pendiente" line: every purchase on it is pending forever and
+ * already in that figure. Its one primary is "Anotar compra" (onAddPurchase), full
+ * width below md.
  */
-import { ScaleIcon } from 'lucide-react'
+import { ReceiptIcon, ScaleIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
 import type { Account } from '@/api/types'
 import { Amount, Notice, PageHeader, StatusChip, Tile } from '@/components/kit'
 import { Button } from '@/components/ui/button'
-import { accountStatus, amountOf, headline, shortAccountLabel } from '@/lib/account'
+import {
+  accountStatus,
+  amountOf,
+  headline,
+  PAID_BY_OTHER_NOTE,
+  paidByOther,
+  shortAccountLabel,
+} from '@/lib/account'
 import { useCheckpoints } from '@/lib/queries'
 import { cn } from '@/lib/utils'
 import { AccountOverflow } from './AccountActions'
@@ -40,24 +54,31 @@ export function AccountOverview({
   menu,
   onReview,
   onAnchor,
+  onAddPurchase,
 }: {
   account: Account
   /** The overflow menu's items, from useAccountActions. */
   menu: ReactNode
   onReview: () => void
   onAnchor: () => void
+  /** "Anotar compra", the primary of a card someone else pays. */
+  onAddPurchase: () => void
 }) {
   const status = accountStatus(account)
   const { amount, label } = headline(account)
   const subtitle = accountSubtitle(account)
   const brokerage = account.type === 'brokerage'
+  const othersCard = paidByOther(account)
   // The review sheet holds the bank's figures (set or clear the starting balance,
   // delete one typed by hand). When nothing else opens it (no "Revisar" notice; and
   // below lg, no "Saldos del banco" card), a ghost button beside the chip does. A
   // broker has no side card at any size. A new, empty account has nothing to review
-  // yet: the menu's "Saldo según tu banco" and the empty state cover it.
+  // yet: the menu's "Saldo según tu banco" and the empty state cover it. A card
+  // someone else pays has no bank figures at all.
   const reviewButton =
-    status?.kind !== 'no-cuadra' && (account.anchored || account.movements > 0)
+    !othersCard &&
+    status?.kind !== 'no-cuadra' &&
+    (account.anchored || account.movements > 0)
 
   return (
     <div className="flex flex-col gap-6">
@@ -81,7 +102,13 @@ export function AccountOverview({
           <span className="max-lg:hidden">{label}</span>
         </p>
         <div className="flex flex-col items-start gap-3 lg:flex-row lg:flex-wrap lg:items-center lg:gap-4">
-          <Amount amount={amount} size="title" tone={account.anchored ? 'auto' : 'muted'} />
+          {/* Muted while it is only a sum of movements. What a card someone else
+              pays was used for is never that: nothing else could make it up. */}
+          <Amount
+            amount={amount}
+            size="title"
+            tone={account.anchored || othersCard ? 'auto' : 'muted'}
+          />
           {(status || reviewButton) && (
             <div
               className={cn(
@@ -103,9 +130,21 @@ export function AccountOverview({
           )}
         </div>
         <PendingPurchasesLine account={account} />
+        {othersCard && (
+          <p className="pt-1 text-small font-medium text-muted-foreground">
+            {PAID_BY_OTHER_NOTE}
+          </p>
+        )}
       </div>
 
-      <Facts account={account} />
+      {othersCard ? (
+        <Button size="lg" className="md:h-11 md:self-start" onClick={onAddPurchase}>
+          <ReceiptIcon aria-hidden="true" />
+          Anotar compra
+        </Button>
+      ) : (
+        <Facts account={account} />
+      )}
       {brokerage && <InvestmentSync account={account} />}
 
       {status?.kind === 'no-cuadra' && (
@@ -145,11 +184,13 @@ export function AccountOverview({
  * A bank account: "Pendiente −$12.50 · 3 compras · Estimado $1,187.50". A card, whose
  * figure is what is owed: "Pendiente $12.50 · Con lo pendiente, debes $512.50". The
  * estimate is only there when the balance is anchored; without it the count stands
- * in.
+ * in. Never on a card someone else pays: no statement will ever print its purchases,
+ * and what they come to this month is already its figure.
  */
 function PendingPurchasesLine({ account }: { account: Account }) {
   const pending = account.pending
   if (!pending || pending.count === 0 || account.type === 'brokerage') return null
+  if (paidByOther(account)) return null
   const card = account.class === 'liability'
   const estimated = account.estimated_balance
   const count = `${pending.count} ${pending.count === 1 ? 'compra' : 'compras'}`

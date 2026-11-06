@@ -8,7 +8,9 @@
  * figure in display, then Tienes · Debes · Inversiones in three columns. The
  * breakdown is the three account groups' totals (lib/account groupAccounts), so it
  * reads like Cuentas: Tienes is the bank accounts, Inversiones is a broker's cash
- * plus its positions. Tienes − Debes + Inversiones is the API's total.
+ * plus its positions. Tienes − Debes + Inversiones is the API's total. A card someone
+ * else pays is in neither: it is in its own group, Tarjetas de otros, which has no
+ * total, so Debes is only what the owner owes.
  *
  * Without data yet it keeps its shape with placeholders. From lg it is at least
  * 280px tall, the figure on top and the breakdown at the bottom.

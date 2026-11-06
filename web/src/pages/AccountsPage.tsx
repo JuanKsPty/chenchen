@@ -8,6 +8,13 @@
  * the mobile bar's compact "Importar" (the route's default). "Conectar Interactive
  * Brokers" is the last row of Inversiones, which shows even with no investments.
  *
+ * Cards someone else pays come last, in Tarjetas de otros, with no total: what they
+ * were used for is spending, not money the owner has or owes. Their row reads "Este
+ * mes $312.40", and they never count as accounts without a starting balance. The
+ * group always shows, ending in "Agregar tarjeta de otra persona"; before any account
+ * the empty state offers it too, under "Conectar Interactive Brokers", so someone
+ * whose only card is another's can start with it.
+ *
  * Layout: one column; where the page itself is at least 56rem wide (desktop
  * without the assistant pushing it), two columns balanced by row count, in
  * reading order. The empty state is the whole page and takes over the mobile bar's
@@ -16,6 +23,8 @@
 import { FileUpIcon, ScaleIcon } from 'lucide-react'
 
 import type { AccountList } from '@/api/types'
+import { AddOthersCardDialog } from '@/components/accounts/AddOthersCardDialog'
+import { AddOthersCardRow } from '@/components/accounts/AddOthersCardRow'
 import { ConnectIBKRRow } from '@/components/accounts/ConnectIBKRRow'
 import { useImport } from '@/components/import/ImportProvider'
 import { AccountGroup, EmptyState, Notice, PageHeader } from '@/components/kit'
@@ -23,7 +32,7 @@ import { LinkIBKRDialog } from '@/components/LinkIBKRDialog'
 import { useTopBar } from '@/components/shell/TopBar'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
-import { amountOf, groupAccounts, type AccountGroup as Group } from '@/lib/account'
+import { groupAccounts, lacksOpening, type AccountGroup as Group } from '@/lib/account'
 import { useAccounts } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/title'
 
@@ -69,6 +78,13 @@ export function AccountsPage() {
               </Button>
             }
           />
+          <AddOthersCardDialog
+            trigger={
+              <Button variant="ghost" className="-mt-1 w-full md:w-auto">
+                Agregar tarjeta de otra persona
+              </Button>
+            }
+          />
         </EmptyState>
       ) : (
         <AccountGroups data={accounts.data} />
@@ -78,9 +94,11 @@ export function AccountsPage() {
 }
 
 function AccountGroups({ data }: { data: AccountList }) {
-  const groups = groupAccounts(data.accounts)
-  const columns = balance(withInvestments(groups))
-  const unanchored = data.accounts.filter((a) => !a.anchored && a.movements > 0).length
+  // Inversiones and Tarjetas de otros always show, so connecting IBKR and adding a
+  // card someone else pays each have a place to live.
+  const groups = groupAccounts(data.accounts, { always: ['inversiones', 'otras'] })
+  const columns = balance(groups)
+  const unanchored = data.accounts.filter(lacksOpening).length
 
   return (
     <>
@@ -110,6 +128,7 @@ function AccountGroups({ data }: { data: AccountList }) {
                   {group.key === 'inversiones' && (
                     <ConnectIBKRRow another={group.accounts.length > 0} />
                   )}
+                  {group.key === 'otras' && <AddOthersCardRow />}
                 </AccountGroup>
               ))}
             </div>
@@ -120,22 +139,16 @@ function AccountGroups({ data }: { data: AccountList }) {
   )
 }
 
-/** Inversiones always shows, so connecting IBKR has a place to live. */
-function withInvestments(groups: Group[]): Group[] {
-  if (groups.some((g) => g.key === 'inversiones')) return groups
-  const none: Group = {
-    key: 'inversiones',
-    title: 'Inversiones',
-    accounts: [],
-    total: amountOf(0),
-  }
-  return [...groups, none]
+/** The groups that end in a ghost row of their own: one more row to weigh. */
+function hasGhostRow(group: Group): boolean {
+  return group.key === 'inversiones' || group.key === 'otras'
 }
 
 /**
  * Two columns for the wide layout, in reading order: each group goes to the
  * shorter column so far (a group weighs its rows plus its heading; Inversiones
- * also carries the connect row). Narrow, the columns simply stack.
+ * and Tarjetas de otros also carry their ghost row). Narrow, the columns simply
+ * stack.
  */
 function balance(groups: Group[]): Group[][] {
   const columns: Group[][] = [[], []]
@@ -145,7 +158,7 @@ function balance(groups: Group[]): Group[][] {
     // Keep reading order: once something went right, the rest follows it.
     const target = columns[1]!.length > 0 ? 1 : side
     columns[target]!.push(group)
-    weight[target]! += group.accounts.length + 1 + (group.key === 'inversiones' ? 1 : 0)
+    weight[target]! += group.accounts.length + 1 + (hasGhostRow(group) ? 1 : 0)
   }
   return columns.filter((column) => column.length > 0)
 }

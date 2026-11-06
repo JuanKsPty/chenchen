@@ -18,7 +18,8 @@ export interface Amount {
 
 export type AccountClass = 'asset' | 'liability'
 export type AccountType = 'checking' | 'savings' | 'credit_card' | 'brokerage'
-export type Institution = 'banco_general' | 'bac' | 'ibkr'
+/** 'manual': a card someone else pays, which the owner added by hand (`paid_by_other`). */
+export type Institution = 'banco_general' | 'bac' | 'ibkr' | 'manual'
 
 /**
  * A real-world account: a bank account, a card or a brokerage account, keyed the
@@ -40,8 +41,24 @@ export interface Account {
    * Only meaningful when `anchored`.
    */
   balance: Amount
-  /** A card's balance as the bank prints it: a positive amount owed. */
+  /**
+   * A card's balance as the bank prints it: a positive amount owed. Absent for a card
+   * someone else pays, whose debt is not the owner's.
+   */
   owed?: Amount
+  /**
+   * A card someone else pays: the owner added it by hand and uses it, someone else
+   * gets its statements and pays it. Its purchases count in the owner's spending,
+   * but not in what they owe nor in their net worth. It never has movements of its
+   * own, a statement or a starting balance, so it never lacks one or fails to match:
+   * its `balance` is always zero and `anchored` false. Absent for every other account.
+   */
+  paid_by_other?: boolean
+  /**
+   * What a card someone else pays was used for this calendar month, positive: what it
+   * shows in place of what is owed. Present, zero included, only for such a card.
+   */
+  this_month?: Amount
   /**
    * Whether a stated balance — a statement's opening, IBKR's cash report, or one
    * the owner entered — fixes where the account started. Without one the balance

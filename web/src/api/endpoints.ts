@@ -88,6 +88,17 @@ export const fetchAccounts = () => request<AccountList>('/api/accounts')
 export const fetchAccount = (id: string) =>
   request<Account>(`/api/accounts/${encodeURIComponent(id)}`)
 
+/**
+ * Adds a card someone else pays, the one account the owner makes by hand: what they
+ * call it and its last four digits. Answers with the new account (201). The form
+ * chooses the `id`, so sending the same card again (an answer lost on the way)
+ * answers with the card the first send added. A 409 when they already have another
+ * one with those digits, or import the statements of a card that has them; a 422
+ * with `fields` (alias, last4, both at once) for what is missing.
+ */
+export const addOthersCard = (input: { id: string; alias: string; last4: string }) =>
+  request<Account>('/api/accounts', { method: 'POST', body: input })
+
 /** Renames an account, or relabels a bank account as checking or savings. */
 export const updateAccount = (
   id: string,

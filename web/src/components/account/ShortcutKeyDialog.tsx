@@ -18,6 +18,10 @@
  * All three end with "Obtener el atajo", when the build has a ready-made shortcut
  * (VITE_SHORTCUT_URL), and the steps under "¿Cómo lo configuro?".
  *
+ * On a card someone else pays no statement ever arrives: the purchase simply counts
+ * ("…y cuenta en tus gastos."), and what is not paid with the iPhone is the owner's
+ * to note ("anótalo tú"), not something a statement brings.
+ *
  * The key is a secret shown once. It lives only in this dialog's state: never in the
  * URL, in storage, in a toast or a log, nor in the query cache (the mutation that
  * brings it is reset at once and kept for no time, useCreateShortcutKey). Closing
@@ -59,13 +63,17 @@ import {
 import { Field, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Spinner } from '@/components/ui/spinner'
-import { shortcutNote } from '@/lib/account'
+import { paidByOther, shortcutNote } from '@/lib/account'
 import { useReturnFocus } from '@/lib/focus'
 import { formatDay } from '@/lib/format'
 import { useCreateShortcutKey, useRevokeShortcutKey } from '@/lib/queries'
 
 const INTRO =
   'Cada compra que pagues acercando el iPhone llega aquí al momento. Cuando llegue tu estado, la cuadramos sola.'
+
+/** A card someone else pays has no statement to match the purchase with later. */
+const INTRO_OTHERS_CARD =
+  'Cada compra que pagues acercando el iPhone llega aquí al momento y cuenta en tus gastos.'
 
 const COPIED = 'Listo: copiada'
 const NOT_COPIED = 'No pudimos copiarla. Ya está seleccionada: cópiala tú.'
@@ -146,6 +154,7 @@ function KeySetup({
 
   const shortcut = account.shortcut
   const view = made ? 'made' : shortcut?.configured ? 'key' : 'none'
+  const othersCard = paidByOther(account)
   // Either request still running: neither may start until it is answered.
   const busy = create.isPending || revoke.isPending
 
@@ -186,7 +195,7 @@ function KeySetup({
   return (
     <ResponsiveDialogContent
       title="Anotar compras con Atajos"
-      description={view === 'made' ? undefined : INTRO}
+      description={view === 'made' ? undefined : othersCard ? INTRO_OTHERS_CARD : INTRO}
       onOpenAutoFocus={(event) => {
         returnFocus.onOpenAutoFocus()
         // The dialog itself, not its first button: it also opens on its own from
@@ -229,8 +238,9 @@ function KeySetup({
               La clave solo sirve para anotar compras en esta cuenta. No deja ver nada.
             </p>
             <p className="text-small font-medium text-pretty text-muted-foreground">
-              Solo pagos con el iPhone en tienda. Lo que pagues en línea o con la tarjeta
-              física llega con tu estado.
+              {othersCard
+                ? 'Solo pagos con el iPhone en tienda. Lo que pagues en línea o con la tarjeta física, anótalo tú.'
+                : 'Solo pagos con el iPhone en tienda. Lo que pagues en línea o con la tarjeta física llega con tu estado.'}
             </p>
             {/* Here rather than at the end, where a phone would scroll it out of sight. */}
             {create.isError && (

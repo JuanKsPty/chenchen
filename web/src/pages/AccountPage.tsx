@@ -8,6 +8,10 @@
  * Below lg it is one column: balance, notice, movements (and a broker's positions and
  * trades before its movements).
  *
+ * A card someone else pays has no bank figures (no side card, no review sheet): from
+ * lg its movements, the purchases noted on it, keep the 7 columns, so its page lines
+ * up with every other card's. Its one primary is "Anotar compra" under its figure.
+ *
  * The overflow menu is the ellipsis by the desktop title and the mobile bar's "Más
  * opciones" (useTopBar). "Revisar", "Ver saldos del banco" and "Ver detalle" open the
  * review sheet by setting `?revisar=1`, which the sheet clears again when it closes.
@@ -27,7 +31,7 @@ import { EmptyState, MovementList } from '@/components/kit'
 import { DESKTOP_QUERY, useMediaQuery } from '@/components/shell/media'
 import { useTopBar } from '@/components/shell/TopBar'
 import { Skeleton } from '@/components/ui/skeleton'
-import { shortAccountLabel } from '@/lib/account'
+import { paidByOther, shortAccountLabel } from '@/lib/account'
 import { ACCOUNTS_PATH, isReviewRequested } from '@/lib/nav'
 import { useAccount } from '@/lib/queries'
 import { useDocumentTitle } from '@/lib/title'
@@ -61,8 +65,10 @@ export function AccountPage() {
 
 function AccountDetail({ account }: { account: Account }) {
   const [params, setParams] = useSearchParams()
-  const { items, dialogs, openCheckpoint } = useAccountActions(account)
+  const { items, dialogs, openCheckpoint, openPurchase } = useAccountActions(account)
   const brokerage = account.type === 'brokerage'
+  // Nothing printed reaches it, so it has no bank figures to show or review.
+  const bankFigures = !paidByOther(account)
   // The bank figures card is desktop only; below lg it would only cost a request.
   const desktop = useMediaQuery(DESKTOP_QUERY)
 
@@ -87,6 +93,7 @@ function AccountDetail({ account }: { account: Account }) {
         menu={items}
         onReview={() => setReview(true)}
         onAnchor={() => openCheckpoint(true)}
+        onAddPurchase={openPurchase}
       />
 
       {brokerage ? (
@@ -101,7 +108,7 @@ function AccountDetail({ account }: { account: Account }) {
       ) : (
         <div className="grid gap-4 lg:grid-cols-12 lg:items-start lg:gap-6">
           <AccountMovements account={account} className="lg:col-span-7" />
-          {desktop && (
+          {desktop && bankFigures && (
             <BankFiguresCard
               account={account}
               onReview={() => setReview(true)}
@@ -111,11 +118,13 @@ function AccountDetail({ account }: { account: Account }) {
         </div>
       )}
 
-      <ReviewSheet
-        account={account}
-        open={isReviewRequested(params)}
-        onOpenChange={setReview}
-      />
+      {bankFigures && (
+        <ReviewSheet
+          account={account}
+          open={isReviewRequested(params)}
+          onOpenChange={setReview}
+        />
+      )}
       {dialogs}
     </div>
   )

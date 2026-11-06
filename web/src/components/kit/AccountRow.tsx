@@ -16,7 +16,9 @@
  * <AccountRowSubtitle account className? /> is that second line on its own, for a
  * row built elsewhere (Ajustes › Conexiones).
  *   - Right: the balance (body 600, tabular). A card reads "Debes $486.20" in the
- *     text colour, never red. A balance with no starting point is muted.
+ *     text colour, never red; a card someone else pays reads "Este mes $312.40",
+ *     what it was used for this month, and never has a chip or a due date. A
+ *     balance with no starting point is muted.
  *   - Under the balance from md, or as a third line of the text column on mobile:
  *     the StatusChip; for a card with `account.statement`, "Pago 05 nov · Mínimo
  *     $25.00" in its place (a card that does not match still shows the chip).
@@ -33,6 +35,7 @@ import {
   accountRowTitle,
   accountStatus,
   headline,
+  lacksOpening,
   type AccountStatus,
 } from '@/lib/account'
 import { formatCivilDayMonth } from '@/lib/format'
@@ -52,8 +55,8 @@ export function AccountRow({
   className?: string
 }) {
   const status = accountStatus(account)
-  const { amount } = headline(account)
-  const unanchored = !account.anchored && account.movements > 0
+  const { amount, label } = headline(account)
+  const unanchored = lacksOpening(account)
   const meta = <RowMeta account={account} status={status} />
   const hasMeta = status !== null || Boolean(account.statement)
 
@@ -73,8 +76,9 @@ export function AccountRow({
       </span>
       <span className="flex flex-col items-end gap-1">
         {account.class === 'liability' ? (
+          // "Debes $486.20", or "Este mes $312.40" on a card someone else pays.
           <span className="text-body font-semibold whitespace-nowrap">
-            Debes <Amount amount={amount} size="inline" />
+            {label} <Amount amount={amount} size="inline" />
           </span>
         ) : (
           <Amount amount={amount} tone={unanchored ? 'muted' : 'auto'} />

@@ -7,6 +7,10 @@
  *
  * Mobile (spec C-Cuenta-Mobile): the "Movimientos" heading sits above the card. From
  * lg (C-Cuenta-Desktop) the heading moves inside one card with the rows.
+ *
+ * A card someone else pays only ever has the purchases noted on it, so its empty
+ * state is "Todavía no hay compras", with no import (its page's "Anotar compra" is
+ * the one primary).
  */
 import { useId } from 'react'
 import { FileUpIcon } from 'lucide-react'
@@ -17,6 +21,7 @@ import { useImport } from '@/components/import/ImportProvider'
 import { EmptyState, MovementList } from '@/components/kit'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
+import { paidByOther } from '@/lib/account'
 import { movementsHref } from '@/lib/nav'
 import { useCategories, useEntryPages } from '@/lib/queries'
 import { cn } from '@/lib/utils'
@@ -37,6 +42,9 @@ export function AccountMovements({
   const categories = useCategories()
   const entries = pages.data?.pages.flatMap((page) => page.entries) ?? []
   const brokerage = account.type === 'brokerage'
+  // `movements` counts printed lines; the noted purchases still counting are in
+  // Movimientos too, and on a card someone else pays they are all there is.
+  const listed = account.movements + (account.pending?.count ?? 0)
 
   return (
     <section
@@ -53,7 +61,7 @@ export function AccountMovements({
         <h2 id={headingId} className="font-display text-heading font-bold">
           Movimientos
         </h2>
-        {account.movements > 0 && (
+        {listed > 0 && (
           <Button variant="ghost" asChild>
             <Link to={movementsHref({ account: account.id })}>Ver todos</Link>
           </Button>
@@ -77,6 +85,12 @@ export function AccountMovements({
                 headingLevel={3}
                 title="Todavía no hay movimientos"
                 description="Sincroniza con Interactive Brokers para traerlos."
+              />
+            ) : paidByOther(account) ? (
+              <EmptyState
+                headingLevel={3}
+                title="Todavía no hay compras"
+                description="Las que anotes, a mano o con Atajos, salen aquí."
               />
             ) : (
               <EmptyState

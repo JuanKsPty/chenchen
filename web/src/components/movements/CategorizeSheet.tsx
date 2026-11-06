@@ -36,8 +36,10 @@
  * A purchase the owner noted that no statement has printed yet (origin 'capture') is
  * what they wrote, not what the bank printed, so it can change. Under its facts it
  * says how it was noted ("Anotada con Atajos el 26 oct a las 12:41", or "Anotada a
- * mano") and "Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado." It has
- * no transfer option (a purchase is spending) and two ghost buttons:
+ * mano") and "Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado." (on a
+ * card someone else pays, which has neither a statement nor a balance of the owner's:
+ * "Cuenta en tus gastos, no en lo que debes."). It has no transfer option (a purchase
+ * is spending) and two ghost buttons:
  *   - "Corregir" swaps in a form for its Monto, ¿Dónde? and Día, whose "Cancelar"
  *     comes back here;
  *   - "Descartar compra", for one that never happened: "Listo: compra descartada"
@@ -90,7 +92,7 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Sheet, SheetContent } from '@/components/ui/sheet'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
-import { accountWithNumber } from '@/lib/account'
+import { accountWithNumber, PAID_BY_OTHER_NOTE, paidByOther } from '@/lib/account'
 import { UNCATEGORIZED_ICON, UNCATEGORIZED_LABEL, categoryIcon } from '@/lib/categories'
 import {
   entryKindLabel,
@@ -484,7 +486,9 @@ function CategorizeForm({
             <>
               <span className="block pt-1">{notedHow(entry)}</span>
               <span className="block">
-                Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado.
+                {account && paidByOther(account)
+                  ? PAID_BY_OTHER_NOTE
+                  : 'Cuenta en tus gastos. Tu saldo cambia cuando llegue tu estado.'}
               </span>
             </>
           )}

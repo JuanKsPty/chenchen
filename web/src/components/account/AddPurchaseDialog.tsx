@@ -8,11 +8,13 @@
  * would its line. When that line is already imported the server links the two at
  * once, and the toast says it was not counted twice.
  *
- * Opened from the account's overflow menu (never a brokerage account's), so it is
- * controlled and gives focus back to the menu's button. Below lg a bottom sheet, from
- * lg a dialog (ResponsiveDialogContent), with "Anotar compra" as its one primary. A
- * field the server refuses is marked under that field, with focus on the first one;
- * any other refusal is an Alert above the buttons.
+ * Opened from the account's overflow menu (never a brokerage account's), or from the
+ * "Anotar compra" button of a card someone else pays, so it is controlled and gives
+ * focus back to whatever opened it (a menu item's menu button). On such a card no
+ * statement ever arrives, so it says "Cuenta en tus gastos de este mes." instead.
+ * Below lg a bottom sheet, from lg a dialog (ResponsiveDialogContent), with "Anotar
+ * compra" as its one primary. A field the server refuses is marked under that field,
+ * with focus on the first one; any other refusal is an Alert above the buttons.
  *
  * Each opening picks the purchase's id and sends it on every try, so pressing "Anotar
  * compra" again after a send that got no answer never counts the purchase twice: the
@@ -39,6 +41,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Spinner } from '@/components/ui/spinner'
 import { Textarea } from '@/components/ui/textarea'
+import { paidByOther } from '@/lib/account'
 import { categoryOptions } from '@/lib/categories'
 import { useReturnFocus } from '@/lib/focus'
 import { signedMoney, todayCivil } from '@/lib/format'
@@ -328,7 +331,11 @@ function PurchaseForm({
     <ResponsiveDialogContent
       {...returnFocus}
       title="Anotar compra"
-      description="Cuenta en tus gastos hasta que llegue tu estado."
+      description={
+        paidByOther(account)
+          ? 'Cuenta en tus gastos de este mes.'
+          : 'Cuenta en tus gastos hasta que llegue tu estado.'
+      }
       footer={
         <>
           <DialogClose asChild>

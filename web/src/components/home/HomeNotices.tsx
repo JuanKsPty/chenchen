@@ -9,6 +9,8 @@
  *     opens the account with its review sheet (accountHref(id, {review: true}));
  *   - a pending notice for accounts with no starting balance ("2 cuentas sin saldo
  *     inicial", to Cuentas, where each one shows its chip);
+ *     (a card someone else pays is in neither: it has no balance of the owner's to
+ *     match, and accountStatus says nothing of it)
  *   - a pending notice for transfers waiting for a yes or no ("1 transferencia por
  *     confirmar", to Gastos#transferencias);
  *   - a pending notice for purchases the owner noted that their statement does not

@@ -2,12 +2,15 @@
  * The account's overflow menu (spec menu): Anotar compra, Anotar compras con Atajos,
  * Importar estado, Saldo según tu banco, Renombrar, a divider, Eliminar. A brokerage
  * account has no purchases, statements or bank figures to type, so it keeps
- * Renombrar and Eliminar.
+ * Renombrar and Eliminar. A card someone else pays takes purchases but never a
+ * statement or a balance (the server refuses both), so it has no Importar estado or
+ * Saldo según tu banco.
  *
- *   const { items, dialogs } = useAccountActions(account)
+ *   const { items, dialogs, openPurchase } = useAccountActions(account)
  *   useTopBar({ …, menu: items })          the phone's "Más opciones"
  *   <AccountOverflow>{items}</AccountOverflow>   the ellipsis beside the desktop title
  *   {dialogs}                              rendered once by the page
+ *   openPurchase()                         "Anotar compra" from a button on the page
  *
  * The menu items only flip state; the dialogs live outside the menu, so closing the
  * menu never unmounts the dialog it opened. On close each dialog gives focus back to
@@ -40,6 +43,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
+import { paidByOther } from '@/lib/account'
 import { isShortcutRequested } from '@/lib/nav'
 import { AddPurchaseDialog } from './AddPurchaseDialog'
 import { DeleteAccountDialog } from './DeleteAccountDialog'
@@ -52,12 +56,15 @@ export function useAccountActions(account: Account): {
   items: ReactNode
   dialogs: ReactNode
   openCheckpoint: (anchor?: boolean) => void
+  openPurchase: () => void
 } {
   const { openImport } = useImport()
   const [open, setOpen] = useState<Open>(null)
   const [params, setParams] = useSearchParams()
   const [anchor, setAnchor] = useState(false)
   const brokerage = account.type === 'brokerage'
+  // Purchases only: nothing printed ever reaches it.
+  const byHand = paidByOther(account)
   const accountId = account.id
 
   const setShortcut = useCallback(
@@ -87,19 +94,23 @@ export function useAccountActions(account: Account): {
               <SmartphoneNfcIcon aria-hidden="true" />
               Anotar compras con Atajos
             </DropdownMenuItem>
-            <DropdownMenuItem onSelect={() => openImport({ accountId })}>
-              <FileUpIcon aria-hidden="true" />
-              Importar estado
-            </DropdownMenuItem>
-            <DropdownMenuItem
-              onSelect={() => {
-                setAnchor(false)
-                setOpen('checkpoint')
-              }}
-            >
-              <ScaleIcon aria-hidden="true" />
-              Saldo según tu banco
-            </DropdownMenuItem>
+            {!byHand && (
+              <>
+                <DropdownMenuItem onSelect={() => openImport({ accountId })}>
+                  <FileUpIcon aria-hidden="true" />
+                  Importar estado
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onSelect={() => {
+                    setAnchor(false)
+                    setOpen('checkpoint')
+                  }}
+                >
+                  <ScaleIcon aria-hidden="true" />
+                  Saldo según tu banco
+                </DropdownMenuItem>
+              </>
+            )}
           </>
         )}
         <DropdownMenuItem onSelect={() => setOpen('rename')}>
@@ -113,7 +124,7 @@ export function useAccountActions(account: Account): {
         </DropdownMenuItem>
       </>
     ),
-    [brokerage, accountId, openImport, setShortcut],
+    [brokerage, byHand, accountId, openImport, setShortcut],
   )
 
   const close = (next: boolean) => {
@@ -129,12 +140,14 @@ export function useAccountActions(account: Account): {
             open={open === 'purchase'}
             onOpenChange={close}
           />
-          <CheckpointDialog
-            account={account}
-            anchor={anchor}
-            open={open === 'checkpoint'}
-            onOpenChange={close}
-          />
+          {!byHand && (
+            <CheckpointDialog
+              account={account}
+              anchor={anchor}
+              open={open === 'checkpoint'}
+              onOpenChange={close}
+            />
+          )}
           <ShortcutKeyDialog
             account={account}
             open={isShortcutRequested(params)}
@@ -160,7 +173,9 @@ export function useAccountActions(account: Account): {
     setOpen('checkpoint')
   }
 
-  return { items, dialogs, openCheckpoint }
+  const openPurchase = () => setOpen('purchase')
+
+  return { items, dialogs, openCheckpoint, openPurchase }
 }
 
 /** The 44px ellipsis beside the desktop title. Hidden below lg, where the bar has it. */

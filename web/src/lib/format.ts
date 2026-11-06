@@ -1,4 +1,4 @@
-import type { Account, Amount, EntryKind } from '@/api/types'
+import type { Account, Amount, EntryKind, Institution } from '@/api/types'
 
 /**
  * Rendering money and dates.
@@ -268,14 +268,19 @@ export function accountTypeLabel(type: string): string {
   return ACCOUNT_TYPES[type] ?? type
 }
 
-const INSTITUTIONS: Record<string, string> = {
+const INSTITUTIONS: Record<Institution, string> = {
   banco_general: 'Banco General',
   bac: 'BAC',
   ibkr: 'Interactive Brokers',
+  // A card someone else pays has no bank of the owner's: what tells it apart is who
+  // pays it. Its row reads "Otra persona ···1234" under the owner's name for it. Kept
+  // short: beside "Este mes $312.40" a phone has room for little more than a bank's
+  // name, and what is cut must still read as itself ("Otra per… ···1234").
+  manual: 'Otra persona',
 }
 
-export function institutionLabel(institution: string): string {
-  return INSTITUTIONS[institution] ?? institution
+export function institutionLabel(institution: Institution | string): string {
+  return INSTITUTIONS[institution as Institution] ?? institution
 }
 
 /**
