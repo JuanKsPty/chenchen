@@ -190,10 +190,24 @@ func parseBAC(data []byte) (File, error) {
 	st.Opening, st.Closing = cents(opening), cents(saldoLibros)
 
 	var sum money.Cents
+	var lastBalance *money.Cents
 	for _, l := range st.Lines {
 		sum += l.Amount
+		if l.RunningBalance != nil {
+			lastBalance = l.RunningBalance
+		}
 	}
-	if opening+sum != saldoLibros {
+	switch {
+	case opening+sum == saldoLibros:
+	case lastBalance != nil && *lastBalance == opening+sum:
+		// A month already over, filtered by month: BAC heads it with the
+		// account's balances as they stand the day it is downloaded, not as
+		// they stood when the month ended, and its own balance on the
+		// month's last line says where that was. Today's balances are not
+		// this month's to state.
+		st.Closing = cents(opening + sum)
+		st.Available, st.Held = nil, nil
+	default:
 		st.Warnings = append(st.Warnings, fmt.Sprintf(
 			"El saldo inicial (%s) más los movimientos (%s) no da el saldo en libros que muestra el banco (%s).",
 			opening, sum, saldoLibros))
