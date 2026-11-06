@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/google/uuid"
 
@@ -63,6 +64,28 @@ func sanitiseRequestID(raw string) string {
 	return b.String()
 }
 
+// accessLog is what a request's line records beyond the request itself,
+// filled in by the layers below it.
+type accessLog struct {
+	// redactPath logs the route's pattern instead of the path.
+	redactPath bool
+}
+
+type accessLogKey struct{}
+
+// RedactPath makes the access log record the route's pattern — PUT
+// /api/mcp/uploads/{token} — instead of the request's path, for a route whose
+// path is itself a secret. It goes on the router of those routes, so a request
+// there that matches none of them is redacted too.
+func RedactPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if log, ok := r.Context().Value(accessLogKey{}).(*accessLog); ok {
+			log.redactPath = true
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // RequestLogger logs one line per request and puts a request-scoped logger in
 // the context, so everything logged downstream carries the same id without any
 // layer having to thread it through by hand.
@@ -70,7 +93,8 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			reqLogger := logger.With("request_id", RequestIDFromContext(r.Context()))
-			ctx := logging.WithLogger(r.Context(), reqLogger)
+			log := &accessLog{}
+			ctx := context.WithValue(logging.WithLogger(r.Context(), reqLogger), accessLogKey{}, log)
 
 			// chi's wrapper records the status and byte count while still
 			// forwarding Flush, which the chat's SSE stream depends on.
@@ -79,9 +103,16 @@ func RequestLogger(logger *slog.Logger) func(http.Handler) http.Handler {
 
 			next.ServeHTTP(ww, r.WithContext(ctx))
 
+			path := r.URL.Path
+			if log.redactPath {
+				path = "(redacted)"
+				if rctx := chi.RouteContext(r.Context()); rctx != nil && rctx.RoutePattern() != "" {
+					path = rctx.RoutePattern()
+				}
+			}
 			attrs := []any{
 				"method", r.Method,
-				"path", r.URL.Path,
+				"path", path,
 				"status", ww.Status(),
 				"bytes", ww.BytesWritten(),
 				"duration_ms", time.Since(start).Milliseconds(),

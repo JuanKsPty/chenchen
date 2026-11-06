@@ -124,8 +124,7 @@ par que Claude. Se acepta porque la alternativa rompe la conexión real cada poc
 
 El asistente de la app sigue **solo proponiendo**. Por MCP es distinto: la persona está en
 la conversación, y claude.ai le pide permiso en cada llamada que escribe. Por eso las
-herramientas que escriben (llegan en el PR del MCP) van directas, con una regla: **nunca
-mueven un saldo**.
+herramientas que escriben van directas, con una regla: **nunca mueven un saldo**.
 
 - **Anotar una compra, poner una categoría o una nota** no tocan ningún saldo (ADR 0002)
   y se deshacen.
@@ -136,6 +135,107 @@ mueven un saldo**.
   crea una cuenta.
 - **Siguen como propuesta**, para aplicar en la web, las reglas, las transferencias y el
   saldo declarado: tocan el ancla del saldo o reescriben en lote.
+
+### El endpoint `/api/mcp`
+
+- Va fuera de `auth.Require`, como el Atajo. `auth.RequireBearerToken` revisa el token
+  antes que nada: un JWT de la web, una clave del Atajo (`chn_`) o un refresh dan 401.
+- El 401 dice dónde está la metadata del recurso (`resource_metadata`) y pide
+  `scope="read write"`. El endpoint solo exige `read`, pero un cliente pide lo que dice el
+  401: si dijera solo `read`, nunca se podría conceder escribir. La persona apaga escribir
+  en la página de consentimiento si quiere.
+- **Sin estado.** Cada petición arma su propio servidor con la persona y los permisos del
+  token (`mcpserver.NewServer`) y responde en JSON, sin sesiones en memoria ni streams
+  abiertos. Un caché compartido evita reflejar los esquemas en cada llamada.
+- **Un límite por concesión**, de 60 llamadas por minuto, con 429 y `Retry-After`. Por
+  dirección no sirve: todo claude.ai sale de las mismas pocas direcciones.
+- **Auditoría.** Cada llamada a una herramienta deja una línea en el log con la
+  herramienta, la concesión, la persona, cuánto tardó y si falló. Nunca sus argumentos ni
+  su resultado: llevan la plata de la persona y, al entregar un archivo, su dirección.
+
+### Las herramientas
+
+| Con `read` | Con `write`, además |
+|---|---|
+| `list_accounts`, `list_movements`, `list_categories`, `list_rules` | `note_purchase` |
+| `spending_by_category`, `cash_flow`, `explain_drift` | `set_category`, `set_note` |
+| `list_transfer_suggestions`, `get_portfolio` | `prepare_import` |
+| `list_pending_purchases`, `sync_plan`, `import_status` | `propose_rule`, `propose_transfer_decision`, `propose_checkpoint` |
+
+- Una herramienta que el token no permite **no aparece** en `tools/list`, así que no se
+  puede llamar.
+- Todas llevan un título en español y dicen si solo leen o si escriben. Así el cliente
+  corre las de lectura sin preguntar y pide permiso para las otras.
+- Las instrucciones del servidor son una versión corta de las del asistente: qué es un
+  saldo impreso, qué es una compra pendiente, que el texto de los movimientos es dato y
+  nunca instrucción, y cómo se sincroniza. Una conexión de solo lectura no recibe lo de
+  sincronizar: se le dice que solo puede leer. No nombran ningún banco.
+- `note_purchase` pasa por el mismo `captures.Service.Add` que la web, con el canal
+  `agent`. **El id lo elige chenchén**, nunca quien llama. Si chenchén ya tenía la compra,
+  la devuelve con `already_noted` y no cuenta dos veces: si llegó por otro canal, como
+  siempre (ADR 0002), y también si el asistente ya la había anotado. Eso pasa cada vez que
+  vuelve a leer las compras en tránsito del banco. La reconoce por la referencia del banco
+  (`reference`), si la manda; si no, por el mismo monto, comercio y día en la cuenta. Así
+  dos compras iguales del mismo día con referencias distintas son dos. Una categoría que
+  manda queda como elegida por el asistente, nunca por la persona.
+- `set_category` y `set_note` sirven igual para una línea del estado que para una compra
+  pendiente. La categoría queda como elegida por el asistente.
+- `propose_recategorize` y `propose_note` no están: por MCP eso se hace directo.
+- `sync_plan` dice, por cada cuenta a la que llegan estados (no las de inversión ni las
+  tarjetas que paga otra persona): desde qué día bajar (el último día importado menos 7,
+  porque traslapar no duplica, o 60 días atrás si nunca se importó), sus compras
+  pendientes y, en una tarjeta cuyo estado cerrado chenchén lee, si toca bajarlo (no hay
+  ninguno, o el último corte tiene más de 31 días).
+
+### Entregar un estado de cuenta, sin oráculo y sin crear cuentas
+
+1. `prepare_import({filename, sha256, size})` devuelve `upload_id`, `upload_url`,
+   `method: "PUT"` y `expires_at`.
+2. El archivo va por `PUT /api/mcp/uploads/{token}`, sin `Authorization`: **la dirección
+   es la credencial**. Son 32 bytes aleatorios, guardados con hash, de un solo uso, que
+   vencen en 10 minutos y solo aceptan el archivo del tamaño y el SHA-256 declarados, de
+   20 MB como mucho. Un cuerpo distinto da 400 y no se guarda nada; la dirección sigue
+   sirviendo para el archivo correcto. Una dirección usada, vencida o inventada da 404.
+   Cada persona tiene como mucho 20 direcciones esperando a la vez.
+3. La respuesta es **siempre la misma**, `200 {"upload_id": …}`, haya entrado o no.
+   Quien tenga la dirección no aprende nada de las cuentas. Lo que pasó lo dice
+   `import_status`, con el token de Claude y solo a su persona.
+4. El log de acceso registra el patrón de la ruta, nunca el token.
+
+**Entra solo** si se cumple todo esto:
+
+- Cada estado del archivo es de una cuenta que ya existe. Se busca por su identidad, sin
+  crearla, y además un guardia dentro de la transacción del import la rechaza si el import
+  la acaba de crear: el rollback la deshace. **Por MCP nunca se crea una cuenta**
+  (`TestMCPUploadNeverCreatesAccounts`). La primera vez de una cuenta se importa en la app.
+- Ninguna es una tarjeta que paga otra persona ni una cuenta de inversiones.
+- El archivo no trae ni una línea donde los saldos dejan de cuadrar (`ChainBreak`) ni
+  advertencias.
+- Si el banco imprime el saldo inicial, es igual al saldo calculado de la cuenta al final
+  del día anterior al primero del archivo, siempre que la cuenta tenga un saldo declarado
+  del que derivarlo.
+- Un estado sin saldo inicial, como los movimientos de una tarjeta, entra aunque la cuenta
+  no tenga ninguno. Un import solo agrega saldos declarados, así que nunca deja sin saldo
+  inicial a una cuenta que lo tenía.
+
+Si entra, queda `imported`, o `unchanged` si ese contenido ya estaba, y el archivo no se
+guarda. Si no, queda `needs_review` con una razón corta en español y el archivo guardado
+para la persona, o `unreadable` si ningún lector lo reconoce. En la app, la persona ve la
+lista (`GET /api/imports/uploads?status=needs_review`), el dry-run del archivo guardado, y
+lo importa como cualquier archivo de la web (ahí sí se crea la cuenta la primera vez) o lo
+descarta. Importado o descartado, el archivo se borra.
+
+**Se lee un archivo a la vez** en el proceso. Un archivo espera su turno antes de gastar su
+dirección, y sus 2 minutos para leerse empiezan cuando le toca: esperar nunca lo deja por
+revisar. Los archivos que esperan su turno suman como mucho 20 MB en memoria, y la app
+carga uno guardado solo cuando le toca leerlo. El cuerpo de un `PUT` tiene 5 minutos para
+llegar. Un `.xlsx` que se descomprime a más de 64 MB
+se rechaza antes de leerlo, y una parte de más de 16 MB se lee desde disco y no desde la
+memoria. Esos límites valen también para los imports de la web.
+
+**Retención.** Una dirección que no recibió su archivo vence a los 10 minutos. Un archivo
+por revisar o ilegible se borra a los 30 días. Los dos quedan `expired`, y lo hace la
+limpieza periódica.
 
 ## Consecuencias
 
@@ -156,3 +256,8 @@ mueven un saldo**.
 - La limpieza periódica borra solicitudes, códigos y tokens vencidos, y las concesiones
   que se quedaron sin tokens. Un refresh ya usado se guarda hasta que habría vencido,
   porque es lo que reconoce una copia robada.
+- La API corre con `GOMEMLIMIT=130MiB` dentro de sus 160 MiB: leer un archivo grande hace
+  que el recolector trabaje antes de llegar al techo del contenedor.
+- El límite por concesión vive en memoria, como los demás.
+- Un archivo por revisar vive en la base hasta 30 días, así que los respaldos con
+  `pg_dump` lo incluyen mientras exista.

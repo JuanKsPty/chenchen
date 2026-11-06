@@ -220,6 +220,37 @@ func (q *Queries) RecentDuplicateCapture(ctx context.Context, userID, accountID 
 	return maybeCapture("store.RecentDuplicateCapture", c, err)
 }
 
+// CaptureToldBy finds the capture of one of the user's accounts that a
+// channel already told of, in any state: the same purchase told again. With a
+// reference — the bank's own for the purchase — a signal that kept one is that
+// purchase only if the references are equal, so two identical purchases of a
+// day stay two. Otherwise it is the purchase told with this amount, merchant
+// and day: what the channel sent (its signal's raw amount, merchant and day),
+// falling back to the capture's own for a signal that kept none, so a purchase
+// the owner corrected since is still found by what was first said of it.
+// merchant compares ignoring case and runs of whitespace, as
+// RecentDuplicateCapture does. ok is false when there is none.
+//
+// The raw values are cast only when they have the shape the assistant's
+// signals give them: another channel's raw keeps what it was sent, as sent,
+// and nothing guarantees the channel is compared first.
+func (q *Queries) CaptureToldBy(ctx context.Context, userID, accountID uuid.UUID, channel string,
+	paid money.Cents, merchant string, day civil.Date, reference string) (c Capture, ok bool, err error) {
+	c, err = scanCapture(q.q.QueryRow(ctx, `SELECT `+prefixed("c.", captureColumns)+`
+		FROM capture_states c JOIN capture_signals s ON s.capture_id = c.id
+		WHERE c.user_id = $1 AND c.account_id = $2 AND s.channel = $3
+		  AND CASE WHEN $7::text <> '' AND s.raw->>'reference' IS NOT NULL THEN s.raw->>'reference' = $7::text
+		      ELSE CASE WHEN s.raw->>'amount' ~ '^[0-9]+(\.[0-9]+)?$'
+		                THEN round((s.raw->>'amount')::numeric * 100)::bigint ELSE -c.amount_cents END = $4
+		       AND CASE WHEN s.raw->>'day' ~ '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'
+		                THEN (s.raw->>'day')::date ELSE c.booked_on END = $5
+		       AND lower(btrim(regexp_replace(COALESCE(s.raw->>'merchant', c.merchant), '\s+', ' ', 'g')))
+		         = lower(btrim(regexp_replace($6, '\s+', ' ', 'g')))
+		      END
+		ORDER BY s.at DESC, c.id DESC LIMIT 1`, userID, accountID, channel, int64(paid), day, merchant, reference))
+	return maybeCapture("store.CaptureToldBy", c, err)
+}
+
 // CaptureSignal is one way a purchase reached chenchén: a capture's first
 // signal is the channel that noted it, and every other is a channel that told
 // of the same purchase later (ADR-0002).

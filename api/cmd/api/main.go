@@ -10,6 +10,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/server"
 	"github.com/JuanKsPty/chenchen/api/internal/store"
 	"github.com/JuanKsPty/chenchen/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/uploads"
 )
 
 func main() {
@@ -105,7 +107,10 @@ func run() error {
 	transfersSvc := transfers.NewService(db)
 	rulesSvc := rules.NewService(db, categoriesSvc)
 	proposalsSvc := proposals.NewService(db, accountsSvc, categoriesSvc, movementsSvc, rulesSvc, transfersSvc)
-	chatSvc := chat.NewService(db, mcpserver.Deps{
+	// The statements Claude sends. Without a public URL there is no address
+	// to hand out, but the owner's list still answers, empty.
+	uploadsSvc := uploads.NewService(db, importsSvc, accountsSvc, cfg.OAuth.PublicURL)
+	toolDeps := mcpserver.Deps{
 		Accounts:    accountsSvc,
 		Movements:   movementsSvc,
 		Categories:  categoriesSvc,
@@ -114,7 +119,10 @@ func run() error {
 		Investments: investmentsSvc,
 		Rules:       rulesSvc,
 		Proposals:   proposalsSvc,
-	}, provider, cfg.AI.MaxToolTurns)
+		Captures:    capturesSvc,
+		Uploads:     uploadsSvc,
+	}
+	chatSvc := chat.NewService(db, toolDeps, provider, cfg.AI.MaxToolTurns)
 
 	loginLimiter := httpx.NewRateLimiter(cfg.Auth.LoginRateLimit)
 	// Its own limiter, not a shared one with login: a six-digit PIN and a
@@ -129,16 +137,25 @@ func run() error {
 	captureKeyLimiter := httpx.NewRateLimiter(cfg.Auth.CaptureKeyRateLimit)
 	// Claude's authorize and token endpoints, counted apart per address.
 	oauthLimiter := httpx.NewRateLimiter(cfg.OAuth.RateLimit)
+	// Claude's tools, counted per connection: every claude.ai user shares a
+	// handful of addresses.
+	mcpLimiter := httpx.NewRateLimiter(mcpserver.GrantCallsPerMinute)
 
 	// Without a public URL there is no issuer to name: the service is not
 	// built, and the router leaves every OAuth route out.
 	var (
 		oauthSvc     *oauth.Service
 		oauthHandler *oauth.Handler
+		mcpHandler   http.Handler
 	)
 	if cfg.OAuth.Enabled() {
 		oauthSvc = oauth.NewService(db, cfg.OAuth)
 		oauthHandler = oauth.NewHandler(oauthSvc, authSvc.Tokens(), oauthLimiter)
+		mcpHandler = mcpserver.NewHTTPHandler(toolDeps, mcpserver.HTTPOptions{
+			Verifier:            oauthSvc.Verifier(),
+			ResourceMetadataURL: cfg.OAuth.PublicURL + "/.well-known/oauth-protected-resource/api/mcp",
+			Limiter:             mcpLimiter,
+		})
 	}
 
 	router := server.NewRouter(server.Deps{
@@ -162,11 +179,13 @@ func run() error {
 		Captures:    captures.NewHandler(capturesSvc),
 		Shortcut: captures.NewShortcutHandler(capturesSvc, auth.NewCaptureKeys(db),
 			captureIPLimiter, captureKeyLimiter),
-		OAuth: oauthHandler,
+		OAuth:   oauthHandler,
+		MCP:     mcpHandler,
+		Uploads: uploads.NewHandler(uploadsSvc),
 	})
 
-	go housekeeping(ctx, authSvc, oauthSvc, []*httpx.RateLimiter{
-		loginLimiter, pinLoginLimiter, chatLimiter, captureIPLimiter, captureKeyLimiter, oauthLimiter,
+	go housekeeping(ctx, authSvc, oauthSvc, uploadsSvc, []*httpx.RateLimiter{
+		loginLimiter, pinLoginLimiter, chatLimiter, captureIPLimiter, captureKeyLimiter, oauthLimiter, mcpLimiter,
 	}, logger)
 
 	return server.Run(ctx, cfg.HTTP.Addr, router, cfg.HTTP.ShutdownTimeout, logger)
@@ -174,9 +193,10 @@ func run() error {
 
 // housekeeping prunes the structures that would otherwise grow without bound:
 // expired sessions and Claude's expired requests, codes and tokens in the
-// database, and idle rate-limit buckets in memory. All are cheap, so one modest
-// ticker covers them. oauthSvc is nil when Claude cannot connect.
-func housekeeping(ctx context.Context, authSvc *auth.Service, oauthSvc *oauth.Service,
+// database, the statements Claude sent that nobody will use, and idle
+// rate-limit buckets in memory. All are cheap, so one modest ticker covers
+// them. oauthSvc is nil when Claude cannot connect.
+func housekeeping(ctx context.Context, authSvc *auth.Service, oauthSvc *oauth.Service, uploadsSvc *uploads.Service,
 	limiters []*httpx.RateLimiter, logger *slog.Logger) {
 	const every = 15 * time.Minute
 
@@ -201,13 +221,17 @@ func housekeeping(ctx context.Context, authSvc *auth.Service, oauthSvc *oauth.Se
 					logger.Error("pruning Claude's expired connections failed", "error", err)
 				}
 			}
+			uploadsExpired, err := uploadsSvc.Expire(sweepCtx)
+			if err != nil {
+				logger.Error("expiring statement uploads failed", "error", err)
+			}
 			cancel()
 			var dropped int
 			for _, limiter := range limiters {
 				dropped += limiter.Sweep()
 			}
 			logger.Debug("housekeeping", "sessions_pruned", removed, "oauth_pruned", oauthRemoved,
-				"rate_limit_buckets_dropped", dropped)
+				"uploads_expired", uploadsExpired, "rate_limit_buckets_dropped", dropped)
 		}
 	}
 }

@@ -78,6 +78,10 @@ services:
       # have nowhere to go.
       PUBLIC_URL: ${PUBLIC_URL:-}
       OAUTH_RATE_LIMIT: ${OAUTH_RATE_LIMIT:-30}
+      # A soft limit on the Go runtime's memory, below mem_limit, as in
+      # deploy/api.compose.yml: the collector works harder near it instead of
+      # the container being killed.
+      GOMEMLIMIT: 130MiB
     ports:
       - "${API_PORT:-8080}:8080"
     depends_on:

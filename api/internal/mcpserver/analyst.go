@@ -37,6 +37,8 @@ const (
 	ToolProposeCheckpoint  = "propose_checkpoint"
 	proposalPendingMessage = "La persona verá una tarjeta para aplicarla o descartarla. " +
 		"Todavía no se ha hecho nada: no digas que ya está hecho."
+	remoteProposalPendingMessage = "La persona la verá en chenchén para aplicarla o descartarla. " +
+		"Todavía no se ha hecho nada: no digas que ya está hecho."
 )
 
 type periodArgs struct {
@@ -191,10 +193,12 @@ type proposalResult struct {
 	Note       string `json:"note"`
 }
 
-func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
+// addAnalystReads adds the reports both servers share.
+func addAnalystReads(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolListCategories,
-		Description: "Lista las categorías de la persona con su id. Úsala antes de proponer una categoría o una regla.",
+		Description: "Lista las categorías de la persona con su id. Úsala antes de poner o proponer una categoría o una regla.",
+		Annotations: reading("Ver categorías"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, categoriesResult, error) {
 		names, list, err := categoryNames(ctx, deps.Categories, userID)
 		if err != nil {
@@ -213,6 +217,7 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		Description: "Suma el gasto (o el ingreso) de la persona por categoría en un período, en todas sus cuentas. " +
 			"Las transferencias entre sus cuentas, los pagos de tarjeta y la compraventa de valores no cuentan. " +
 			"Incluye las compras que la persona anotó y que su estado de cuenta todavía no trae.",
+		Annotations: reading("Gasto por categoría"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args spendingArgs) (*mcp.CallToolResult, spendingResult, error) {
 		from, to, err := period(args.periodArgs)
 		if err != nil {
@@ -250,6 +255,7 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		Name: ToolCashFlow,
 		Description: "Ingresos y gastos de la persona por mes en un período. Sin transferencias entre sus cuentas. " +
 			"El gasto incluye las compras que la persona anotó y que su estado de cuenta todavía no trae.",
+		Annotations: reading("Ingresos y gastos por mes"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args periodArgs) (*mcp.CallToolResult, flowResult, error) {
 		if args.From == "" {
 			today := civil.Of(time.Now().In(civil.Panama))
@@ -274,6 +280,7 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		Name: ToolExplainDrift,
 		Description: "Explica por qué el saldo de una cuenta no cuadra con el del banco: cada saldo declarado contra el calculado, " +
 			"los huecos entre estados de cuenta y el primer movimiento donde deja de cuadrar.",
+		Annotations: reading("Por qué no cuadra"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args accountArgs) (*mcp.CallToolResult, driftResult, error) {
 		id, err := parseID(args.AccountID, "account_id", "list_accounts")
 		if err != nil {
@@ -324,6 +331,7 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		Name: ToolTransferSuggest,
 		Description: "Lista pares de movimientos que parecen una sola transferencia entre cuentas de la persona " +
 			"(por ejemplo, el pago de la tarjeta desde su cuenta) y que nadie ha decidido todavía.",
+		Annotations: reading("Transferencias por confirmar"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, suggestionsResult, error) {
 		list, err := deps.Transfers.Suggestions(ctx, userID)
 		if err != nil {
@@ -342,6 +350,7 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolPortfolio,
 		Description: "Las posiciones de una cuenta de IBKR a valor de mercado y cómo fue su última sincronización.",
+		Annotations: reading("Ver inversiones"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args accountArgs) (*mcp.CallToolResult, portfolioResult, error) {
 		id, err := parseID(args.AccountID, "account_id", "list_accounts")
 		if err != nil {
@@ -375,6 +384,7 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolListRules,
 		Description: "Lista las reglas con que se clasifican los movimientos de la persona al importarlos.",
+		Annotations: reading("Ver reglas"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ noArgs) (*mcp.CallToolResult, rulesResult, error) {
 		list, err := deps.Rules.List(ctx, userID)
 		if err != nil {
@@ -394,20 +404,107 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		}
 		return nil, out, nil
 	})
+}
 
+// addProposals adds the propose_* tools. The app's assistant gets them all,
+// and the owner answers each from a card in the chat. Claude, over HTTP
+// (remote), files and annotates a movement itself, so it gets only the rule,
+// the transfer and the stated balance, which the owner answers in the app:
+// the balance anchors an account, and a rule rewrites movements in bulk.
+func addProposals(server *mcp.Server, deps Deps, userID uuid.UUID, remote bool) {
+	// Where the owner answers, as each description ends.
+	answered := func(chat, elsewhere string) string {
+		if remote {
+			return elsewhere
+		}
+		return chat
+	}
+	pending := proposalPendingMessage
+	if remote {
+		pending = remoteProposalPendingMessage
+	}
 	propose := func(ctx context.Context, payload any) (*mcp.CallToolResult, proposalResult, error) {
 		p, err := deps.Proposals.Propose(ctx, userID, payload)
 		if err != nil {
 			return nil, proposalResult{}, proposalError(err)
 		}
 		return nil, proposalResult{ProposalID: p.ID.String(), Kind: p.Kind, Summary: p.Summary,
-			Status: p.Status, Note: proposalPendingMessage}, nil
+			Status: p.Status, Note: pending}, nil
 	}
 
+	if !remote {
+		addChatProposals(server, propose)
+	}
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: ToolProposeRule,
+		Description: "Propone una regla: los movimientos cuyo concepto contenga un texto van a una categoría, o son transferencias. " +
+			answered("No cambia nada: la persona la aplica desde una tarjeta.",
+				"No cambia nada: la persona la aplica o la descarta en chenchén."),
+		Annotations: writing("Proponer regla", false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeRuleArgs) (*mcp.CallToolResult, proposalResult, error) {
+		payload := proposals.Rule{MatchText: args.MatchText, Transfer: args.Transfer, ApplyToExisting: args.ApplyToExisting}
+		if args.CategoryID != "" {
+			id, err := parseID(args.CategoryID, "category_id", "list_categories")
+			if err != nil {
+				return nil, proposalResult{}, err
+			}
+			payload.CategoryID = &id
+		}
+		return propose(ctx, payload)
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: ToolProposeTransfer,
+		Description: "Propone confirmar (o descartar) que dos movimientos son una sola transferencia entre cuentas de la persona, " +
+			"normalmente un par de list_transfer_suggestions. " +
+			answered("No cambia nada: la persona lo aplica desde una tarjeta.",
+				"No cambia nada: la persona lo aplica o lo descarta en chenchén."),
+		Annotations: writing("Proponer transferencia", false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeTransferArgs) (*mcp.CallToolResult, proposalResult, error) {
+		outID, err := parseID(args.OutEntryID, "out_entry_id", "list_transfer_suggestions")
+		if err != nil {
+			return nil, proposalResult{}, err
+		}
+		inID, err := parseID(args.InEntryID, "in_entry_id", "list_transfer_suggestions")
+		if err != nil {
+			return nil, proposalResult{}, err
+		}
+		return propose(ctx, proposals.TransferDecision{OutEntryID: outID, InEntryID: inID, Confirm: args.Confirm})
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: ToolProposeCheckpoint,
+		Description: "Propone registrar el saldo que el banco dice que tenía una cuenta al cierre de un día, por ejemplo el adeudado " +
+			"al corte de una tarjeta. Solo sirve para comprobar los movimientos: no crea ninguno. " +
+			answered("La persona lo aplica desde una tarjeta.", "La persona lo aplica o lo descarta en chenchén."),
+		Annotations: writing("Proponer saldo del banco", false),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeCheckpointArgs) (*mcp.CallToolResult, proposalResult, error) {
+		accountID, err := parseID(args.AccountID, "account_id", "list_accounts")
+		if err != nil {
+			return nil, proposalResult{}, err
+		}
+		day, err := civil.Parse(args.AsOf)
+		if err != nil {
+			return nil, proposalResult{}, fmt.Errorf("la fecha %q no es válida: usa AAAA-MM-DD", args.AsOf)
+		}
+		balance, err := money.Parse(args.Balance)
+		if err != nil {
+			return nil, proposalResult{}, fmt.Errorf("el saldo %q no es válido: usa un número como -14.30", args.Balance)
+		}
+		return propose(ctx, proposals.Checkpoint{AccountID: accountID, AsOf: day, BalanceCents: int64(balance), Note: args.Note})
+	})
+}
+
+// addChatProposals adds the proposals only the app's assistant makes: a
+// movement's category and note, which Claude over HTTP sets itself.
+func addChatProposals(server *mcp.Server,
+	propose func(context.Context, any) (*mcp.CallToolResult, proposalResult, error)) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: ToolProposeCategory,
 		Description: "Propone cambiar la categoría de un movimiento, o marcarlo como transferencia entre cuentas de la persona. " +
 			"No cambia nada: la persona lo aplica desde una tarjeta.",
+		Annotations: writing("Proponer categoría", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeCategoryArgs) (*mcp.CallToolResult, proposalResult, error) {
 		entryID, err := parseID(args.EntryID, "entry_id", "list_movements")
 		if err != nil {
@@ -427,64 +524,13 @@ func addAnalystTools(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolProposeNote,
 		Description: "Propone ponerle una nota a un movimiento. No cambia nada: la persona lo aplica desde una tarjeta.",
+		Annotations: writing("Proponer nota", false),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeNoteArgs) (*mcp.CallToolResult, proposalResult, error) {
 		entryID, err := parseID(args.EntryID, "entry_id", "list_movements")
 		if err != nil {
 			return nil, proposalResult{}, err
 		}
 		return propose(ctx, proposals.Note{EntryID: entryID, Note: args.Note})
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: ToolProposeRule,
-		Description: "Propone una regla: los movimientos cuyo concepto contenga un texto van a una categoría, o son transferencias. " +
-			"No cambia nada: la persona la aplica desde una tarjeta.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeRuleArgs) (*mcp.CallToolResult, proposalResult, error) {
-		payload := proposals.Rule{MatchText: args.MatchText, Transfer: args.Transfer, ApplyToExisting: args.ApplyToExisting}
-		if args.CategoryID != "" {
-			id, err := parseID(args.CategoryID, "category_id", "list_categories")
-			if err != nil {
-				return nil, proposalResult{}, err
-			}
-			payload.CategoryID = &id
-		}
-		return propose(ctx, payload)
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: ToolProposeTransfer,
-		Description: "Propone confirmar (o descartar) que dos movimientos son una sola transferencia entre cuentas de la persona, " +
-			"normalmente un par de list_transfer_suggestions. No cambia nada: la persona lo aplica desde una tarjeta.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeTransferArgs) (*mcp.CallToolResult, proposalResult, error) {
-		outID, err := parseID(args.OutEntryID, "out_entry_id", "list_transfer_suggestions")
-		if err != nil {
-			return nil, proposalResult{}, err
-		}
-		inID, err := parseID(args.InEntryID, "in_entry_id", "list_transfer_suggestions")
-		if err != nil {
-			return nil, proposalResult{}, err
-		}
-		return propose(ctx, proposals.TransferDecision{OutEntryID: outID, InEntryID: inID, Confirm: args.Confirm})
-	})
-
-	mcp.AddTool(server, &mcp.Tool{
-		Name: ToolProposeCheckpoint,
-		Description: "Propone registrar el saldo que el banco dice que tenía una cuenta al cierre de un día, por ejemplo el adeudado " +
-			"al corte de una tarjeta. Solo sirve para comprobar los movimientos: no crea ninguno. La persona lo aplica desde una tarjeta.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, args proposeCheckpointArgs) (*mcp.CallToolResult, proposalResult, error) {
-		accountID, err := parseID(args.AccountID, "account_id", "list_accounts")
-		if err != nil {
-			return nil, proposalResult{}, err
-		}
-		day, err := civil.Parse(args.AsOf)
-		if err != nil {
-			return nil, proposalResult{}, fmt.Errorf("la fecha %q no es válida: usa AAAA-MM-DD", args.AsOf)
-		}
-		balance, err := money.Parse(args.Balance)
-		if err != nil {
-			return nil, proposalResult{}, fmt.Errorf("el saldo %q no es válido: usa un número como -14.30", args.Balance)
-		}
-		return propose(ctx, proposals.Checkpoint{AccountID: accountID, AsOf: day, BalanceCents: int64(balance), Note: args.Note})
 	})
 }
 

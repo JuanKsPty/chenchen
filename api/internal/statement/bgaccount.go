@@ -20,12 +20,24 @@ import (
 // same on every row — so only the day is the movement's.
 var excelEpoch = time.Date(1899, 12, 30, 0, 0, 0, 0, time.UTC)
 
+// What an .xlsx may unzip to. An upload is at most 20 MB and a statement's
+// sheet a few hundred KB, but a zip can claim far more than it weighs: a sheet
+// of nothing compresses a thousand to one. Past unzipSizeLimit in all the
+// file is refused before any of it is read; a part past unzipXMLSizeLimit is
+// read from a temporary file instead of memory, which the API's is too small
+// to spare.
+const (
+	unzipSizeLimit    = 64 << 20
+	unzipXMLSizeLimit = 16 << 20
+)
+
 // parseWorkbook reads an .xlsx export's first sheet and hands it to the parser
 // its content names. A card's sheet goes to the card; every other sheet is read
 // as the BG account's, as every .xlsx was before the card's had a reader, so
 // the account's own errors are unchanged.
 func parseWorkbook(data []byte) (File, error) {
-	f, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{RawCellValue: true})
+	f, err := excelize.OpenReader(bytes.NewReader(data), excelize.Options{RawCellValue: true,
+		UnzipSizeLimit: unzipSizeLimit, UnzipXMLSizeLimit: unzipXMLSizeLimit})
 	if err != nil {
 		return File{}, fmt.Errorf("statement: opening the .xlsx file: %w", err)
 	}

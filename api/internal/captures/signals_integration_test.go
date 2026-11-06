@@ -277,14 +277,20 @@ func TestTheAssistantNotesThroughTheSameDoor(t *testing.T) {
 	if e, err := r.db.Q().CaptureAsEntry(ctx, r.user, read.ID); err != nil || e.BookedAt != nil {
 		t.Errorf("listed = %+v, %v; want no time of day", e, err)
 	}
-	// The owner typing it too is another channel, so it joins; the assistant
-	// again is a second purchase.
+	// The owner typing it too is another channel, so it joins. The assistant
+	// telling of it again — it reads the same purchases in transit each time
+	// it looks — is the same purchase; another merchant on that day for the
+	// same amount is a second one.
 	if c, err := r.svc.Add(ctx, r.user, captures.AddInput{AccountID: card.ID, Amount: 1999, Merchant: "Libros",
 		Day: day.AddDays(-5)}); err != nil || !c.AlreadyNoted || c.ID != read.ID {
 		t.Errorf("typed after the assistant = %+v, %v; want the assistant's purchase", c, err)
 	}
-	if c := agent(1999, day.AddDays(-5)); c.AlreadyNoted {
-		t.Errorf("the assistant twice = %+v; want two purchases", c)
+	if c := agent(1999, day.AddDays(-5)); !c.AlreadyNoted || c.ID != read.ID {
+		t.Errorf("the assistant twice = %+v; want its first purchase, already noted", c)
+	}
+	if c, err := r.svc.Add(ctx, r.user, captures.AddInput{AccountID: card.ID, Amount: 1999, Merchant: "PAPELERIA",
+		Day: day.AddDays(-5), Channel: store.ChannelAgent}); err != nil || c.AlreadyNoted {
+		t.Errorf("the assistant on another merchant = %+v, %v; want a second purchase", c, err)
 	}
 	if channels := r.channels(t, read.ID); fmt.Sprint(channels) != "[agent manual]" {
 		t.Errorf("signals = %v", channels)
@@ -306,6 +312,60 @@ func TestTheAssistantNotesThroughTheSameDoor(t *testing.T) {
 	}
 	if n := r.count(t, card); n != 3 {
 		t.Errorf("purchases = %d, want 3", n)
+	}
+}
+
+// The assistant reads the same purchases in transit each time it looks. The
+// same amount, merchant and day in the account is the purchase it told of
+// before, whatever became of it — corrected by the owner, discarded, or joined
+// to the shortcut's tap of the next day — and never a second one.
+func TestTheAssistantTellingAgainIsTheSamePurchase(t *testing.T) {
+	r := newRig(t, 60, 12)
+	ctx := context.Background()
+	card := r.account(t, r.user, "credit_card")
+	key := "Bearer " + r.createKey(t, r.user, card.ID)
+	agent := func(paid money.Cents, merchant string, on civil.Date) captures.Capture {
+		t.Helper()
+		c, err := r.svc.Add(ctx, r.user, captures.AddInput{AccountID: card.ID, Amount: paid, Merchant: merchant,
+			Day: on, Channel: store.ChannelAgent})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c
+	}
+
+	first := agent(1250, "SUPER 99  VIA ESPAÑA", day.AddDays(-3))
+	amount, merchant := money.Cents(1300), "Super 99"
+	if _, err := r.svc.Edit(ctx, r.user, first.ID, captures.EditInput{Amount: &amount, Merchant: &merchant}); err != nil {
+		t.Fatal(err)
+	}
+	if c := agent(1250, "super 99 via españa", day.AddDays(-3)); !c.AlreadyNoted || c.ID != first.ID || c.Amount != -1300 {
+		t.Errorf("told again after the owner corrected it = %+v; want it as corrected, already noted", c)
+	}
+
+	discarded := agent(800, "KIOSCO", day.AddDays(-2))
+	if _, err := r.svc.Discard(ctx, r.user, discarded.ID); err != nil {
+		t.Fatal(err)
+	}
+	if c := agent(800, "KIOSCO", day.AddDays(-2)); !c.AlreadyNoted || c.ID != discarded.ID ||
+		c.State != store.CaptureDiscarded {
+		t.Errorf("told again after the owner discarded it = %+v; want it still discarded", c)
+	}
+
+	tapped := r.tap(t, key, "$45.00", "Farmacia")
+	if c := agent(4500, "FARMACIA DE TURNO", day.AddDays(-1)); !c.AlreadyNoted || c.ID != tapped {
+		t.Errorf("the assistant beside the tap = %+v; want the tap", c)
+	}
+	if c := agent(4500, "FARMACIA DE TURNO", day.AddDays(-1)); !c.AlreadyNoted || c.ID != tapped {
+		t.Errorf("told again beside the tap = %+v; want the tap", c)
+	}
+
+	// Another day is another purchase.
+	if c := agent(1250, "SUPER 99 VIA ESPAÑA", day.AddDays(-2)); c.AlreadyNoted {
+		t.Errorf("the same purchase on another day = %+v; want a new one", c)
+	}
+	if n := r.count(t, card); n != 4 {
+		t.Errorf("purchases = %d, want 4", n)
 	}
 }
 
@@ -480,8 +540,8 @@ func TestWhatWasTypedFillsInWhatThePurchaseLacks(t *testing.T) {
 		wantSource   string
 		wantNote     string
 	}{
-		{"over a rule's category, with no note", "Super 99", nil, "", typed{&health, "pan"}, &health, "user", "pan"},
-		{"with no category", "Kiosco", nil, "", typed{&health, ""}, &health, "user", ""},
+		{"over a rule's category, with no note", "Super 99", nil, "", typed{&health, "pan"}, &health, "assistant", "pan"},
+		{"with no category", "Kiosco", nil, "", typed{&health, ""}, &health, "assistant", ""},
 		{"under a category someone chose", "Kiosco", &food, "", typed{&health, "pan"}, &food, "user", "pan"},
 		{"beside a note it has", "Super 99", nil, "del mes", typed{nil, "pan"}, &food, "rule", "del mes"},
 	} {
@@ -517,7 +577,7 @@ func TestWhatWasTypedFillsInWhatThePurchaseLacks(t *testing.T) {
 				t.Errorf("after the Add: %+v\nbefore: %+v", after, before)
 			}
 
-			wantRaw := map[string]string{"merchant": "Lo que sea"}
+			wantRaw := map[string]string{"merchant": "Lo que sea", "amount": paid.String(), "day": day.String()}
 			if tt.typed.category != nil {
 				wantRaw["category_id"] = tt.typed.category.String()
 			}

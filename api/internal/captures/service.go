@@ -67,9 +67,14 @@ const (
 	maxNoteRunes     = 500
 )
 
-// categoryChosen is the category_source of a category Add was given: the
-// owner chose it, or the assistant for them, so it outranks a rule's.
-const categoryChosen = "user"
+// categoryChosen and categoryChosenByAssistant are the category_source of a
+// category Add was given: by the owner, or by the assistant noting a purchase
+// (store.ChannelAgent). Either outranks a rule's; only the owner's tells the
+// assistant to leave it alone.
+const (
+	categoryChosen            = "user"
+	categoryChosenByAssistant = "assistant"
+)
 
 // maxAmount is the most one noted purchase can be. No card purchase comes
 // close; a card number pasted into the amount does, and would count as
@@ -120,6 +125,11 @@ type AddInput struct {
 	Day        civil.Date
 	CategoryID *uuid.UUID
 	Note       string
+	// Reference is the bank's own reference for the purchase, as the
+	// assistant read it, when the bank shows one: two purchases of the same
+	// amount, merchant and day with different references are two. Only
+	// store.ChannelAgent uses it.
+	Reference string
 }
 
 // Add notes a purchase by hand, or for the assistant, in one of the user's
@@ -133,6 +143,12 @@ type AddInput struct {
 // user's rules file it by merchant, as they would its line, and if its line is
 // already imported and could be no other purchase, it is linked at once and
 // never counts twice.
+//
+// The assistant (store.ChannelAgent) telling again of a purchase it already
+// told of — the same reference, or without one the same amount, merchant and
+// day in the account — gets that purchase back with AlreadyNoted, in whatever
+// state it is: it reads the same purchases in transit every time it looks. A
+// category it gives is recorded as the assistant's choice, never the owner's.
 func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Capture, error) {
 	channel := in.Channel
 	if channel == "" {
@@ -144,6 +160,10 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Captu
 	merchant, err := cleanMerchant(in.Merchant)
 	if err != nil {
 		return Capture{}, err
+	}
+	chosenBy := categoryChosen
+	if channel == store.ChannelAgent {
+		chosenBy = categoryChosenByAssistant
 	}
 	note, err := cleanNote(in.Note)
 	if err != nil {
@@ -199,6 +219,32 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Captu
 		if note != "" {
 			raw["note"] = note
 		}
+		if channel == store.ChannelAgent {
+			// The assistant reads the same list of purchases in transit each
+			// time it looks, so one it already told of — the same amount,
+			// merchant and day, in this account — is that purchase again,
+			// whatever became of it since: found by what it sent then, which
+			// its raw keeps whether it noted the purchase or joined one.
+			raw["amount"], raw["day"] = in.Amount.String(), day.String()
+			if in.Reference != "" {
+				raw["reference"] = in.Reference
+			}
+			told, found, err := q.CaptureToldBy(ctx, userID, account.ID, channel, in.Amount, merchant, day,
+				in.Reference)
+			if err != nil {
+				return err
+			}
+			if found {
+				if err := q.FillCapture(ctx, userID, told.ID, in.CategoryID, chosenBy, note); err != nil {
+					return err
+				}
+				if out, err = load(ctx, q, userID, told.ID); err != nil {
+					return err
+				}
+				out.AlreadyNoted = true
+				return nil
+			}
+		}
 		signal := store.CaptureSignal{Channel: channel, At: now, Raw: raw}
 		if in.ID != uuid.Nil {
 			// So that a repeat finds the purchase this joins (notedAs).
@@ -211,7 +257,7 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Captu
 			return err
 		}
 		if found {
-			if err := q.FillCapture(ctx, userID, joined.ID, in.CategoryID, categoryChosen, note); err != nil {
+			if err := q.FillCapture(ctx, userID, joined.ID, in.CategoryID, chosenBy, note); err != nil {
 				return err
 			}
 			if out, err = load(ctx, q, userID, joined.ID); err != nil {
@@ -227,8 +273,13 @@ func (s *Service) Add(ctx context.Context, userID uuid.UUID, in AddInput) (Captu
 		}
 		c := store.Capture{ID: id, UserID: userID, AccountID: account.ID, Source: channel, ReceivedAt: now,
 			BookedOn: day, Amount: -in.Amount, Merchant: merchant, Note: note}
+		if channel == store.ChannelAgent {
+			// Its first signal keeps what the assistant sent, as a joining
+			// one does, for the next reading to find it by.
+			c.Raw = raw
+		}
 		if in.CategoryID != nil {
-			src := categoryChosen
+			src := chosenBy
 			c.CategoryID, c.CategorySource = in.CategoryID, &src
 		} else if c.CategoryID, err = ruleCategory(ctx, q, userID, merchant); err != nil {
 			return err
@@ -466,6 +517,12 @@ func (s *Service) setDiscarded(ctx context.Context, userID, id uuid.UUID, discar
 		return err
 	})
 	return out, err
+}
+
+// Pending lists the user's pending purchases, in one account or all of them,
+// newest first, each with the channels that told of it.
+func (s *Service) Pending(ctx context.Context, userID uuid.UUID, accountID *uuid.UUID) ([]store.PendingCapture, error) {
+	return s.db.Q().PendingCaptures(ctx, userID, accountID)
 }
 
 // Review lists the purchases that need the owner: those a line could be but

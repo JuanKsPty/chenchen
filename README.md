@@ -183,6 +183,15 @@ aplicar se vuelve a comprobar, y un `UPDATE` condicional hace que dos clics la a
 una sola vez. Nada de lo que puede proponer cambia un saldo, y ninguna herramienta mueve
 dinero.
 
+**Claude, desde fuera.** Con `PUBLIC_URL`, el mismo servidor responde en `/api/mcp` a
+Claude (claude.ai, su app y Claude Code), con un token propio por OAuth
+([ADR 0004](docs/adr/0004-claude-por-mcp.md)). Ahí lee lo mismo, más
+`list_pending_purchases`, `sync_plan` e `import_status`. Si la persona lo permite, además
+anota compras (`note_purchase`), pone categoría y nota (`set_category`, `set_note`) y
+entrega estados de cuenta (`prepare_import`). Nada de eso mueve un saldo, salvo el archivo
+que generó el propio banco, que entra solo si continúa una cuenta que ya existe y cuadra
+con ella; si no, queda por revisar en la app.
+
 **Ninguna herramienta acepta un `user_id`.** La identidad viene del token de la petición
 y queda fijada en el servidor MCP antes de que el modelo diga nada, así que no hay
 argumento que falsificar. Las descripciones de los movimientos entran al contexto del

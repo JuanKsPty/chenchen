@@ -122,6 +122,10 @@ Por eso cada compra anotada guarda sus señales en **`capture_signals`** (migrac
   categoría, si la suya vino de una regla o no tiene, con la misma precedencia de las
   reglas (lo que alguien eligió gana a una regla). Una unida a su línea no cambia: la
   línea es la compra ahora.
+- Desde el asistente, una compra que ya contó (la misma referencia del banco o, sin ella,
+  el mismo monto, comercio y día en la cuenta, en cualquier estado) es esa misma compra:
+  lee las mismas compras en tránsito cada vez que mira. Se la reconoce por lo que mandó la primera vez, que queda en su
+  señal, así que la encuentra aunque la persona la haya corregido o descartado después.
 - A mano, la respuesta lo dice (`already_noted`) y devuelve la compra que ya estaba. Si el
   formulario repite el intento con el mismo id, la encuentra por ese id (`caller_id` de
   la señal, único por persona) en vez de anotarla. Al Atajo nunca se le dice: su

@@ -99,16 +99,45 @@ var ErrUnreadable = errors.New("imports: unreadable statement")
 // import started from an account's own page — a file for any other account is
 // refused rather than silently filed elsewhere.
 func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string, data []byte, expect *uuid.UUID) (Result, error) {
-	sum := sha256.Sum256(data)
-	sha := hex.EncodeToString(sum[:])
+	parsed, err := Parse(filename, data)
+	if err != nil {
+		return Result{}, err
+	}
+	return s.store(ctx, userID, filename, data, parsed, expect, nil)
+}
 
+// Parse reads a file as Import does, with Import's errors: one it cannot read
+// is ErrUnreadable, statement.ErrUnrecognised or statement.ErrAccountNotStated.
+func Parse(filename string, data []byte) (statement.File, error) {
 	parsed, err := statement.Parse(filename, data)
 	if err != nil {
 		if errors.Is(err, statement.ErrUnrecognised) || errors.Is(err, statement.ErrAccountNotStated) {
-			return Result{}, err
+			return statement.File{}, err
 		}
-		return Result{}, unreadableError{err}
+		return statement.File{}, unreadableError{err}
 	}
+	return parsed, nil
+}
+
+// Gate decides, for each statement of a file, whether it may be stored. It
+// runs inside the import's transaction, under the user's lock, once the
+// statement's account is known — created is true when the import itself just
+// created it — and before anything of the statement is written. An error
+// stops the whole file: the transaction rolls back, the account just created
+// with it, and Import returns the error as it is.
+type Gate func(ctx context.Context, q *store.Queries, account store.Account, created bool, st statement.Statement) error
+
+// ImportGated stores a file already parsed (Parse) from data, as Import does,
+// asking gate about each statement first.
+func (s *Service) ImportGated(ctx context.Context, userID uuid.UUID, filename string, data []byte, parsed statement.File,
+	expect *uuid.UUID, gate Gate) (Result, error) {
+	return s.store(ctx, userID, filename, data, parsed, expect, gate)
+}
+
+func (s *Service) store(ctx context.Context, userID uuid.UUID, filename string, data []byte, parsed statement.File,
+	expect *uuid.UUID, gate Gate) (Result, error) {
+	sum := sha256.Sum256(data)
+	sha := hex.EncodeToString(sum[:])
 	result := Result{Source: parsed.Source}
 	// A format whose bytes differ on every download (the time is printed in
 	// it) is recognised by what it says instead, so a second download of the
@@ -127,7 +156,7 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		return Result{}, err
 	}
 
-	err = s.db.InTx(ctx, func(q *store.Queries) error {
+	err := s.db.InTx(ctx, func(q *store.Queries) error {
 		if err := q.LockUser(ctx, userID); err != nil {
 			return err
 		}
@@ -149,7 +178,7 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 		var from, to civil.Date
 		for _, st := range parsed.Statements {
 			holders := holderNames(owner.FullName, st.Identity.Holder)
-			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, holders, expect)
+			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, holders, expect, gate)
 			if err != nil {
 				return err
 			}
@@ -186,7 +215,7 @@ func (s *Service) Import(ctx context.Context, userID uuid.UUID, filename string,
 
 func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID uuid.UUID, source statement.Source,
 	filename, sha string, st statement.Statement, rules []store.CategoryRule, holders []holderName,
-	expect *uuid.UUID) (AccountResult, error) {
+	expect *uuid.UUID, gate Gate) (AccountResult, error) {
 	id := st.Identity
 	if st.PeriodStart.IsZero() || st.PeriodEnd.IsZero() {
 		// Only possible for a file with no movements and no stated date,
@@ -201,6 +230,11 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 	})
 	if err != nil {
 		return AccountResult{}, err
+	}
+	if gate != nil {
+		if err := gate(ctx, q, account, created, st); err != nil {
+			return AccountResult{}, err
+		}
 	}
 	if expect != nil && account.ID != *expect {
 		return AccountResult{}, fmt.Errorf("%w: %s %s", ErrAccountMismatch, id.Institution, id.ExternalNumber)

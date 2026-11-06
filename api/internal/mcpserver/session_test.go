@@ -3,10 +3,12 @@ package mcpserver
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
 // The tools are exercised end to end against a live PostgreSQL and ledger in
@@ -129,4 +131,71 @@ func openOffline(t *testing.T) *Session {
 		}
 	})
 	return session
+}
+
+// Claude's server over HTTP keeps the same claims: no tool names a user, no
+// tool's verb moves money, and nobody's server is built without a user or
+// without read.
+func TestClaudesServerKeepsTheSameClaims(t *testing.T) {
+	ctx := context.Background()
+	if _, err := NewServer(Deps{}, uuid.Nil, []string{"read", "write"}, RemoteOptions{}); err == nil {
+		t.Error("a server was built with no user")
+	}
+	if _, err := NewServer(Deps{}, uuid.New(), []string{"write"}, RemoteOptions{}); err == nil {
+		t.Error("a server was built without read")
+	}
+	server, err := NewServer(Deps{}, uuid.New(), []string{"read", "write"}, RemoteOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientTransport, serverTransport := mcp.NewInMemoryTransports()
+	ss, err := server.Connect(ctx, serverTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = ss.Close() })
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientTransport, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+
+	list, err := cs.ListTools(ctx, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Tools) != 19 {
+		t.Errorf("Claude's server publishes %d tools, want 19 — a new one needs a test", len(list.Tools))
+	}
+	forbidden := []string{"user_id", "userid", "user", "owner", "customer_id", "subject", "actor", "token", "id"}
+	verbs := map[string]bool{"deposit": true, "withdraw": true, "transfer": true, "pay": true, "send": true, "move": true}
+	for _, tool := range list.Tools {
+		if tool.Description == "" || tool.Annotations == nil || tool.Annotations.Title == "" {
+			t.Errorf("%s is published without a description or a title", tool.Name)
+		}
+		raw, err := json.Marshal(tool.InputSchema)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var schema struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if err := json.Unmarshal(raw, &schema); err != nil {
+			t.Fatal(err)
+		}
+		for field := range schema.Properties {
+			if slices.Contains(forbidden, strings.ToLower(field)) {
+				t.Errorf("%s takes %q", tool.Name, field)
+			}
+		}
+		if verb, _, _ := strings.Cut(tool.Name, "_"); verbs[verb] {
+			t.Errorf("%s looks like it moves money", tool.Name)
+		}
+	}
+	instructions := cs.InitializeResult().Instructions
+	for _, bank := range []string{"Banco General", "BG", "BAC", "General"} {
+		if strings.Contains(instructions, bank) {
+			t.Errorf("the instructions name %q", bank)
+		}
+	}
 }

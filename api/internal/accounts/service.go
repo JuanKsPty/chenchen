@@ -369,10 +369,37 @@ func (s *Service) balanceAt(ctx context.Context, c store.Checkpoint, opening mon
 // sumAt totals the movements a checkpoint's balance includes: everything
 // before its entry, or everything through the end of its day.
 func (s *Service) sumAt(ctx context.Context, c store.Checkpoint) (money.Cents, error) {
+	return sumAt(ctx, s.db.Q(), c)
+}
+
+func sumAt(ctx context.Context, q *store.Queries, c store.Checkpoint) (money.Cents, error) {
 	if c.BeforeEntryID != nil {
-		return s.db.Q().SumBefore(ctx, c.AccountID, *c.BeforeEntryID)
+		return q.SumBefore(ctx, c.AccountID, *c.BeforeEntryID)
 	}
-	return s.db.Q().SumThroughDay(ctx, c.AccountID, c.AsOf)
+	return q.SumThroughDay(ctx, c.AccountID, c.AsOf)
+}
+
+// BalanceThrough is what the movements say an account's balance was at the
+// end of day: the opening derived from the anchor among its checkpoints cps,
+// plus every movement through that day — the computation a balance and its
+// drift come from, read through q so it can run inside the caller's
+// transaction. ok is false when cps has no anchor: without a stated balance
+// there is nothing to derive the opening from.
+func BalanceThrough(ctx context.Context, q *store.Queries, accountID uuid.UUID, cps []store.Checkpoint,
+	day civil.Date) (balance money.Cents, ok bool, err error) {
+	anchor, ok := Anchor(cps)
+	if !ok {
+		return 0, false, nil
+	}
+	before, err := sumAt(ctx, q, anchor)
+	if err != nil {
+		return 0, false, err
+	}
+	through, err := q.SumThroughDay(ctx, accountID, day)
+	if err != nil {
+		return 0, false, err
+	}
+	return anchor.Balance - before + through, true, nil
 }
 
 // Rename sets or clears an account's alias. A card someone else pays keeps

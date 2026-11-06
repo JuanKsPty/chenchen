@@ -33,6 +33,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
 	"github.com/JuanKsPty/chenchen/api/internal/transfers"
+	"github.com/JuanKsPty/chenchen/api/internal/uploads"
 )
 
 // Deps are the collaborators the routing table needs. It grows as features land;
@@ -62,6 +63,14 @@ type Deps struct {
 	// OAuth is how Claude signs in. Nil without PUBLIC_URL, and then none of
 	// its routes exist: discovery, authorize and token all answer 404.
 	OAuth *oauth.Handler
+	// MCP is the endpoint Claude's tools answer at, behind Claude's own
+	// tokens. Nil without PUBLIC_URL, like OAuth, and then neither it nor the
+	// address statements are sent to exists.
+	MCP http.Handler
+	// Uploads serves the statements Claude sends: the address they arrive
+	// at, mounted only with MCP, and the owner's list of the ones that wait,
+	// behind a session.
+	Uploads *uploads.Handler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -108,6 +117,16 @@ func NewRouter(d Deps) http.Handler {
 			r.Mount("/oauth", d.OAuth.Routes())
 		}
 
+		// Claude's tools. Outside Require like the shortcut: the endpoint
+		// takes only Claude's access tokens, checked by the handler itself,
+		// and a session's token is no such thing. The address a statement is
+		// sent to takes no token at all: the address is the credential, good
+		// for one file, and its path never reaches the access log.
+		if d.MCP != nil {
+			r.Handle("/mcp", d.MCP)
+			r.Mount("/mcp/uploads", d.Uploads.AddressRoutes())
+		}
+
 		// Everything past here requires a verified access token. Grouping it
 		// under one middleware, rather than applying it per handler, is what
 		// makes forgetting it impossible: a route added inside this block is
@@ -121,6 +140,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Mount("/categories", d.Categories.Routes())
 			r.Mount("/investments", d.Investments.Routes())
 			r.Mount("/imports", d.Imports.Routes())
+			if d.Uploads != nil {
+				r.Mount("/imports/uploads", d.Uploads.Routes())
+			}
 			r.Mount("/reports", d.Reports.Routes())
 			r.Mount("/transfers", d.Transfers.Routes())
 			r.Mount("/category-rules", d.Rules.Routes())

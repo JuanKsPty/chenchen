@@ -55,6 +55,10 @@ services:
       # domain goes to the web.
       PUBLIC_URL: ${PUBLIC_URL:-}
       OAUTH_RATE_LIMIT: ${OAUTH_RATE_LIMIT:-30}
+      # A soft limit on the Go runtime's memory, below mem_limit: while a large
+      # statement is read, the collector works harder near it instead of the
+      # container being killed at 160m.
+      GOMEMLIMIT: 130MiB
     # The VPS is shared; the API needs a fraction of this even while parsing a
     # year of statements.
     mem_limit: 160m

@@ -72,10 +72,10 @@ func (h *Handler) importFile(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.svc.Import(r.Context(), identity.MustFromContext(r.Context()), header.Filename, data, expect)
 	if err != nil {
-		httpx.Fail(w, r, translate(r, err))
+		httpx.Fail(w, r, TranslateError(r, err))
 		return
 	}
-	httpx.JSON(w, r, http.StatusOK, newResultView(result))
+	httpx.JSON(w, r, http.StatusOK, NewResultView(result))
 }
 
 func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
@@ -102,7 +102,8 @@ func (h *Handler) runs(w http.ResponseWriter, r *http.Request) {
 	httpx.JSON(w, r, http.StatusOK, map[string]any{"runs": out})
 }
 
-func translate(r *http.Request, err error) error {
+// TranslateError maps what Import returns to the response the web reads.
+func TranslateError(r *http.Request, err error) error {
 	var paid paidByOtherError
 	switch {
 	case errors.Is(err, statement.ErrUnrecognised), errors.Is(err, statement.ErrAccountNotStated),
@@ -157,7 +158,8 @@ type chainBreakView struct {
 	Computed money.Amount `json:"computed"`
 }
 
-func newResultView(r Result) ResultView {
+// NewResultView builds an import's outcome on the wire.
+func NewResultView(r Result) ResultView {
 	v := ResultView{Source: r.Source, Unchanged: r.Unchanged, Accounts: []AccountResultView{}}
 	for _, a := range r.Accounts {
 		av := AccountResultView{
