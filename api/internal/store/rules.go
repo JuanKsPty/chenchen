@@ -176,3 +176,32 @@ func (q *Queries) ApplyCategoryRule(ctx context.Context, r CategoryRule) (int64,
 	}
 	return total, nil
 }
+
+// RuleReach is what a rule's text would reach among a user's movements: how
+// many it matches, lines and the purchases they noted that still count, and how
+// many of those are spending with no category yet.
+type RuleReach struct {
+	Matches       int64
+	Uncategorized int64
+}
+
+// RuleReach counts what a rule with text would reach, the way ApplyCategoryRule
+// and MatchRule compare text: without case or accents, anywhere in a line's
+// bank category and description, or in a noted purchase's merchant.
+func (q *Queries) RuleReach(ctx context.Context, userID uuid.UUID, text string) (RuleReach, error) {
+	pattern := "%" + escapeLike(foldRuleText(strings.TrimSpace(text))) + "%"
+	var r RuleReach
+	err := q.q.QueryRow(ctx, `
+		WITH reached AS (
+			SELECT category_id, COALESCE(user_kind, kind)::text AS kind FROM entries
+			WHERE user_id = $1 AND `+ruleTextSQL("bank_category || ' ' || description")+` LIKE $2
+			UNION ALL
+			SELECT category_id, 'expense' FROM capture_states
+			WHERE user_id = $1 AND state = 'pending' AND `+ruleTextSQL("merchant")+` LIKE $2)
+		SELECT count(*), count(*) FILTER (WHERE category_id IS NULL AND kind = ANY($3))
+		FROM reached`, userID, pattern, SpendKinds).Scan(&r.Matches, &r.Uncategorized)
+	if err != nil {
+		return RuleReach{}, wrap("store.RuleReach", err)
+	}
+	return r, nil
+}

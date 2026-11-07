@@ -167,6 +167,12 @@ func (s *Service) store(ctx context.Context, userID uuid.UUID, filename string, 
 		if err != nil {
 			return err
 		}
+		file := filing{rules: rules}
+		if fees, ok, err := q.FallbackCategory(ctx, userID, "fee"); err != nil {
+			return err
+		} else if ok {
+			file.fees = &fees
+		}
 		owner, err := q.UserByID(ctx, userID)
 		if err != nil {
 			return err
@@ -178,7 +184,7 @@ func (s *Service) store(ctx context.Context, userID uuid.UUID, filename string, 
 		var from, to civil.Date
 		for _, st := range parsed.Statements {
 			holders := holderNames(owner.FullName, st.Identity.Holder)
-			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, rules, holders, expect, gate)
+			r, err := s.importStatement(ctx, q, userID, parsed.Source, filename, sha, st, file, holders, expect, gate)
 			if err != nil {
 				return err
 			}
@@ -214,7 +220,7 @@ func (s *Service) store(ctx context.Context, userID uuid.UUID, filename string, 
 }
 
 func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID uuid.UUID, source statement.Source,
-	filename, sha string, st statement.Statement, rules []store.CategoryRule, holders []holderName,
+	filename, sha string, st statement.Statement, file filing, holders []holderName,
 	expect *uuid.UUID, gate Gate) (AccountResult, error) {
 	id := st.Identity
 	if st.PeriodStart.IsZero() || st.PeriodEnd.IsZero() {
@@ -275,7 +281,7 @@ func (s *Service) importStatement(ctx context.Context, q *store.Queries, userID 
 			BankCategory: l.BankCategory, BankBalance: l.RunningBalance, DedupKey: statement.DedupKey(id, l),
 			Raw: l.Raw,
 		}
-		m := matchRules(l, rules)
+		m := file.match(l, kind)
 		if m.CategoryID != nil {
 			src := "rule"
 			e.CategoryID, e.CategorySource = m.CategoryID, &src

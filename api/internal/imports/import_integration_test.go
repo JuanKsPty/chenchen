@@ -443,6 +443,67 @@ func TestARuleFilesWhatIsAlreadyImportedButNotWhatTheOwnerChose(t *testing.T) {
 	}
 }
 
+// A bank's own charge has no shop and no bank category to file it by; it falls
+// to Comisiones, unless one of the owner's rules says otherwise.
+func TestAChargeNoRulePlacedFallsToComisiones(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cats := categories.NewService(e.db)
+	comisiones, found, err := cats.FindByName(ctx, e.user, "Comisiones")
+	if err != nil || !found {
+		t.Fatalf("Comisiones category: %v %v", found, err)
+	}
+	servicios, _, _ := cats.FindByName(ctx, e.user, "Servicios")
+	id := servicios.ID
+	if _, _, err := rules.NewService(e.db, cats).Create(ctx, e.user, rules.Input{
+		MatchText: "DESGRAVAMEN", CategoryID: &id,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	e.importFile(t, "tarjeta.txt", []byte(cardFile))
+	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]store.Entry{}
+	for _, l := range list {
+		// A line of the additional card carries its number first.
+		got[l.Description[strings.Index(l.Description, "]")+1:]] = l
+	}
+	if l := got["ITBMS CARGO POR SEGURO"]; l.CategoryID == nil || *l.CategoryID != comisiones.ID ||
+		l.CategorySource == nil || *l.CategorySource != "rule" {
+		t.Errorf("a charge no rule placed is filed %v by %v, want Comisiones by rule", l.CategoryID, l.CategorySource)
+	}
+	if l := got["SEGURO DE DESGRAVAMEN"]; l.CategoryID == nil || *l.CategoryID != servicios.ID {
+		t.Errorf("a charge the owner has a rule for is filed %v, want Servicios", l.CategoryID)
+	}
+	if l := got["GRACIAS POR SU PAGO - BANCA MOVIL"]; l.CategoryID != nil {
+		t.Errorf("the card payment is filed %v; a transfer is no charge", l.CategoryID)
+	}
+	if l := got[" CAFE DE PRUEBA PANAMA"]; l.CategoryID == nil || *l.CategoryID == comisiones.ID {
+		t.Errorf("a purchase is filed %v, want it where the bank's category puts it", l.CategoryID)
+	}
+}
+
+func TestWithoutComisionesAChargeWaitsForTheOwner(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	cats := categories.NewService(e.db)
+	comisiones, _, _ := cats.FindByName(ctx, e.user, "Comisiones")
+	if err := cats.Delete(ctx, e.user, comisiones.ID); err != nil {
+		t.Fatal(err)
+	}
+	e.importFile(t, "tarjeta.txt", []byte(cardFile))
+	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user, Search: "ITBMS"})
+	if err != nil || len(list) != 1 {
+		t.Fatalf("the ITBMS line: %v %v", list, err)
+	}
+	if list[0].CategoryID != nil {
+		t.Errorf("with Comisiones deleted a charge is filed %v, want it left for the owner", list[0].CategoryID)
+	}
+}
+
 func TestMoneyBetweenTheOwnersAccountsIsNeitherIncomeNorSpending(t *testing.T) {
 	e := setup(t)
 	ctx := context.Background()
@@ -560,5 +621,71 @@ func TestAProposalChangesNothingUntilTheOwnerAppliesIt(t *testing.T) {
 	}
 	if pending, _ := svc.Pending(ctx, e.user); len(pending) != 0 {
 		t.Errorf("pending = %d, want 0", len(pending))
+	}
+}
+
+// Before making a rule the owner sees what its text would reach: everything it
+// matches, and how much of it is spending still waiting for a category.
+func TestARuleTextSaysWhatItWouldReach(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.importFile(t, "tarjeta.txt", []byte(cardFile))
+	e.importFile(t, "m.xlsx", bgFile(t, []bgRow{
+		{day: 1, desc: "PANADERÍA DE PRUEBA", debit: -3, balance: 97},
+		{day: 2, desc: "DEPOSITO DE PRUEBA", credit: 10, balance: 107},
+	}))
+	svc := rules.NewService(e.db, categories.NewService(e.db))
+	for _, tt := range []struct {
+		text                   string
+		matches, uncategorized int64
+	}{
+		// The café and the pharmacy are filed by the bank's category, the
+		// deposit is income: only the bakery waits.
+		{"de prueba", 4, 1},
+		{"Panaderia", 1, 1},
+		{"NADA ASI", 0, 0},
+	} {
+		got, err := svc.Reach(ctx, e.user, tt.text)
+		if err != nil {
+			t.Fatalf("Reach(%q): %v", tt.text, err)
+		}
+		if got.Matches != tt.matches || got.Uncategorized != tt.uncategorized {
+			t.Errorf("Reach(%q) = %+v, want %d matches, %d uncategorized", tt.text, got, tt.matches, tt.uncategorized)
+		}
+	}
+	if _, err := svc.Reach(ctx, e.user, "  "); !errors.Is(err, rules.ErrInvalid) {
+		t.Errorf("Reach of no text: %v, want ErrInvalid", err)
+	}
+}
+
+// Money a person sends is spending given back until the owner says it was
+// income: the category chosen decides, and choosing a spending category again
+// makes it a refund once more.
+func TestTheCategoryChosenSaysWhetherMoneyInIsARefundOrIncome(t *testing.T) {
+	e := setup(t)
+	ctx := context.Background()
+	e.importFile(t, "m.xlsx", bgFile(t, []bgRow{{day: 1, desc: "YAPPY BG DE ANA PEREZ", credit: 75, balance: 175}}))
+	cats := categories.NewService(e.db)
+	moves := movements.NewService(e.db, cats)
+	list, err := e.db.Q().Entries(ctx, store.EntryFilter{UserID: e.user, Search: "ANA PEREZ"})
+	if err != nil || len(list) != 1 || list[0].Kind != store.KindRefund {
+		t.Fatalf("the payment from a person: %+v %v, want one refund", list, err)
+	}
+	id := list[0].ID
+	otros, _, _ := cats.FindByName(ctx, e.user, "Otros ingresos")
+	food, _, _ := cats.FindByName(ctx, e.user, "Alimentación")
+
+	got, err := moves.SetCategory(ctx, e.user, id, &otros.ID, "user")
+	if err != nil || got.EffectiveKind() != store.KindIncome || got.Kind != store.KindRefund {
+		t.Fatalf("under Otros ingresos: kind %s (imported %s), %v; want income", got.EffectiveKind(), got.Kind, err)
+	}
+	got, err = moves.SetCategory(ctx, e.user, id, &food.ID, "user")
+	if err != nil || got.EffectiveKind() != store.KindRefund || got.UserKind != nil {
+		t.Fatalf("under Alimentación: kind %s, user kind %v, %v; want the refund the importer said", got.EffectiveKind(), got.UserKind, err)
+	}
+	// Taking the category away leaves the kind as it is.
+	got, err = moves.SetCategory(ctx, e.user, id, nil, "user")
+	if err != nil || got.EffectiveKind() != store.KindRefund {
+		t.Fatalf("without a category: kind %s, %v", got.EffectiveKind(), err)
 	}
 }

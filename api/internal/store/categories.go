@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -18,14 +19,17 @@ type Category struct {
 	ID     uuid.UUID
 	UserID uuid.UUID
 	// ParentID is nil for a top-level category.
-	ParentID  *uuid.UUID
-	Name      string
-	Kind      string
-	Color     string
-	Icon      string
-	IsSystem  bool
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ParentID *uuid.UUID
+	Name     string
+	Kind     string
+	Color    string
+	Icon     string
+	IsSystem bool
+	// FallbackFor is "fee" for the one category a user's charges fall to
+	// when no rule placed them, and empty for every other.
+	FallbackFor string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
 }
 
 // Constraint names a caller may need to distinguish.
@@ -42,12 +46,13 @@ const (
 // CreateCategory inserts a category.
 func (q *Queries) CreateCategory(ctx context.Context, c Category) (Category, error) {
 	const query = `
-		INSERT INTO categories (id, user_id, parent_id, name, kind, color, icon, is_system)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+		INSERT INTO categories (id, user_id, parent_id, name, kind, color, icon, is_system, fallback_for)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 		RETURNING created_at, updated_at`
 
 	err := q.q.QueryRow(ctx, query,
 		c.ID, c.UserID, c.ParentID, c.Name, c.Kind, nullIfEmpty(c.Color), nullIfEmpty(c.Icon), c.IsSystem,
+		nullIfEmpty(c.FallbackFor),
 	).Scan(&c.CreatedAt, &c.UpdatedAt)
 	if err != nil {
 		return Category{}, wrap("store.CreateCategory", err)
@@ -60,7 +65,7 @@ func (q *Queries) CreateCategory(ctx context.Context, c Category) (Category, err
 func (q *Queries) CategoriesByUser(ctx context.Context, userID uuid.UUID) ([]Category, error) {
 	const query = `
 		SELECT id, user_id, parent_id, name, kind, COALESCE(color, ''), COALESCE(icon, ''),
-		       is_system, created_at, updated_at
+		       is_system, COALESCE(fallback_for, ''), created_at, updated_at
 		FROM categories
 		WHERE user_id = $1
 		ORDER BY kind, (parent_id IS NOT NULL), name`
@@ -83,7 +88,7 @@ func (q *Queries) CategoriesByUser(ctx context.Context, userID uuid.UUID) ([]Cat
 func (q *Queries) CategoryByID(ctx context.Context, id uuid.UUID) (Category, error) {
 	const query = `
 		SELECT id, user_id, parent_id, name, kind, COALESCE(color, ''), COALESCE(icon, ''),
-		       is_system, created_at, updated_at
+		       is_system, COALESCE(fallback_for, ''), created_at, updated_at
 		FROM categories WHERE id = $1`
 
 	c, err := scanCategory(q.q.QueryRow(ctx, query, id))
@@ -91,6 +96,21 @@ func (q *Queries) CategoryByID(ctx context.Context, id uuid.UUID) (Category, err
 		return Category{}, wrap("store.CategoryByID", err)
 	}
 	return c, nil
+}
+
+// FallbackCategory is the user's category marked to receive what no rule
+// placed for purpose ("fee"), or ok=false when they have none.
+func (q *Queries) FallbackCategory(ctx context.Context, userID uuid.UUID, purpose string) (id uuid.UUID, ok bool, err error) {
+	const query = `SELECT id FROM categories WHERE user_id = $1 AND fallback_for = $2`
+
+	err = q.q.QueryRow(ctx, query, userID, purpose).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, wrap("store.FallbackCategory", err)
+	}
+	return id, true, nil
 }
 
 // RenameCategory updates a category's name and color/icon.
@@ -136,7 +156,7 @@ func nullIfEmpty(s string) any {
 func scanCategory(s scanner) (Category, error) {
 	var c Category
 	if err := s.Scan(&c.ID, &c.UserID, &c.ParentID, &c.Name, &c.Kind, &c.Color, &c.Icon,
-		&c.IsSystem, &c.CreatedAt, &c.UpdatedAt); err != nil {
+		&c.IsSystem, &c.FallbackFor, &c.CreatedAt, &c.UpdatedAt); err != nil {
 		return Category{}, err
 	}
 	return c, nil

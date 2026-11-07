@@ -81,11 +81,12 @@ func NewService(db *store.DB) *Service {
 func (s *Service) SeedDefaults(ctx context.Context, q *store.Queries, userID uuid.UUID) error {
 	for _, seed := range defaultSeeds {
 		_, err := q.CreateCategory(ctx, store.Category{
-			ID:       uuid.New(),
-			UserID:   userID,
-			Name:     seed.name,
-			Kind:     string(seed.kind),
-			IsSystem: true,
+			ID:          uuid.New(),
+			UserID:      userID,
+			Name:        seed.name,
+			Kind:        string(seed.kind),
+			IsSystem:    true,
+			FallbackFor: seed.fallbackFor,
 		})
 		if err != nil {
 			return fmt.Errorf("categories: seeding defaults: %w", err)

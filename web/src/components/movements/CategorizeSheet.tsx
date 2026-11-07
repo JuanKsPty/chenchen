@@ -22,11 +22,19 @@
  * change: "SUPER 99 VIA ESPAÑA · −$84.37 · 24 oct · Tarjeta ···1111". Then
  * what it means, which can:
  *   - the categories of its direction (spending or income) as a radio group, 52px
- *     rows with their icons (44 in the dialog), "Sin categoría" last;
+ *     rows with their icons (44 in the dialog), "Sin categoría" last. Money in that
+ *     the bank printed as a refund may be income instead (something sold, not a
+ *     dinner paid back): under "¿O fue un ingreso, como algo que vendiste?" it also
+ *     lists the income categories, and the one chosen decides which it is;
  *   - "Es una transferencia entre tus cuentas" (it then needs no category);
  *   - a note.
- * The footer stays put: "Hacer lo mismo con <DESCRIPCIÓN>", which saves a rule and
- * applies it to the movements already here, and "Guardar".
+ * The footer stays put: "Hacer lo mismo con <EL COMERCIO>", which saves a rule and
+ * applies it to the movements already here, and "Guardar". The rule's text is the
+ * shop the description names (rule_hint), without card, city or order number, and
+ * can be edited once checked; under it, what it would reach: "Coincide con 4
+ * movimientos; 3 otros están sin categoría." It comes checked when others still
+ * without a category share the shop, never for a person paid by phone: what is paid
+ * to a person varies.
  *
  * After saving, a toast: "Guardado" with "Deshacer" (puts back what changed), or,
  * with the rule, "Listo: regla creada, N movimientos" with "Ver regla". A rule that
@@ -53,7 +61,15 @@
  * de este movimiento." with "Deshacer", which links them again.
  */
 import { CircleAlertIcon } from 'lucide-react'
-import { useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
+import {
+  Fragment,
+  useEffect,
+  useId,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from 'react'
 import { useNavigate } from 'react-router-dom'
 import { toast } from 'sonner'
 
@@ -82,6 +98,7 @@ import { DESKTOP_QUERY, useMediaQuery } from '@/components/shell/media'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
 import {
   Dialog,
   DialogContent,
@@ -109,6 +126,7 @@ import {
   useDiscardCapture,
   useEditCapture,
   useMoneyInvalidation,
+  useRuleReach,
   useRules,
   useSaveRule,
   useUnlinkCapture,
@@ -121,6 +139,9 @@ import { useSwipeDown } from './useSwipeDown'
 
 /** The server keeps a rule's text to 60 characters. */
 const RULE_TEXT_LIMIT = 60
+
+/** What Gastos counts as spending, so what "Sin categoría" waits on. */
+const SPENDING: readonly string[] = ['expense', 'refund', 'fee', 'interest']
 
 /** The radio's value for "Sin categoría" (a category id is never empty). */
 const UNCATEGORIZED_VALUE = 'sin-categoria'
@@ -228,9 +249,15 @@ interface CategoryChoice {
   id: string
   name: string
   icon: ReturnType<typeof categoryIcon>
+  /** Of the other direction: income for a refund, spending for one made income. */
+  other?: boolean
 }
 
-/** The categories that fit a movement's direction, children after their parent. */
+/**
+ * The categories that fit a movement's direction, children after their parent. Money
+ * in that the bank printed as a refund lists the other direction's after its own:
+ * the category chosen says whether it is spending given back or income.
+ */
 function choicesFor(entry: Entry, tree: CategoryNode[]): CategoryChoice[] {
   const kind = entry.amount.cents > 0 && entry.kind !== 'refund' ? 'income' : 'expense'
   const all = tree.flatMap((node) => [
@@ -241,10 +268,52 @@ function choicesFor(entry: Entry, tree: CategoryNode[]): CategoryChoice[] {
       name: `${node.name} › ${child.name}`,
     })),
   ])
-  const fits = all.filter(
-    (choice) => choice.node.kind === kind || choice.id === entry.category_id,
+  const fits = (choice: (typeof all)[number]) =>
+    choice.node.kind === kind || choice.id === entry.category_id
+  const own = all
+    .filter(fits)
+    .map(({ id, name }) => ({ id, name, icon: categoryIcon(name) }))
+  if (!eitherWay(entry)) return own
+  const other = all
+    .filter((choice) => !fits(choice))
+    .map(({ id, name }) => ({ id, name, icon: categoryIcon(name), other: true }))
+  return [...own, ...other]
+}
+
+/** Money in the bank printed as a refund, which the owner may call income, or back. */
+function eitherWay(entry: Entry): boolean {
+  return (
+    entry.origin !== 'capture' &&
+    entry.amount.cents > 0 &&
+    (entry.kind === 'refund' ||
+      (entry.kind === 'income' && entry.imported_kind === 'refund'))
   )
-  return fits.map(({ id, name }) => ({ id, name, icon: categoryIcon(name) }))
+}
+
+/** Lower case without accents, the way a rule compares text. */
+function fold(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+}
+
+/** value, once it has stopped changing for ms. */
+function useSettled<T>(value: T, ms: number): T {
+  const [settled, setSettled] = useState(value)
+  useEffect(() => {
+    const timer = setTimeout(() => setSettled(value), ms)
+    return () => clearTimeout(timer)
+  }, [value, ms])
+  return settled
+}
+
+/** What a rule's text would reach: "Coincide con 4 movimientos; 3 otros están sin categoría." */
+function reachSentence(matches: number, othersWaiting: number): string {
+  if (matches === 0) return 'Todavía no coincide con ningún movimiento.'
+  const reach = `Coincide con ${matches} ${matches === 1 ? 'movimiento' : 'movimientos'}`
+  if (othersWaiting === 0) return `${reach}.`
+  return `${reach}; ${othersWaiting} ${othersWaiting === 1 ? 'otro está' : 'otros están'} sin categoría.`
 }
 
 /**
@@ -324,7 +393,8 @@ function CategorizeForm({
   const [category, setCategory] = useState(entry.category_id ?? '')
   const [transfer, setTransfer] = useState(wasTransfer)
   const [note, setNote] = useState(entry.note ?? '')
-  const [withRule, setWithRule] = useState(false)
+  // null until the owner checks or unchecks it: then it follows the suggestion.
+  const [withRule, setWithRule] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
   const [discarding, setDiscarding] = useState(false)
   const [unlinking, setUnlinking] = useState(false)
@@ -341,11 +411,36 @@ function CategorizeForm({
     [entry, categories.data],
   )
 
-  const description = entry.description.trim()
-  const ruleText = Array.from(description).slice(0, RULE_TEXT_LIMIT).join('').trim()
+  // The rule's text: the shop the description names, as the server reads it, or the
+  // description itself from an older server.
+  const suggested =
+    entry.rule_hint?.trim() ||
+    Array.from(entry.description.trim()).slice(0, RULE_TEXT_LIMIT).join('').trim()
+  const [ruleInput, setRuleInput] = useState(suggested)
+  const ruleText = ruleInput.trim()
+  const reachText = useSettled(ruleText, 300)
+  const reach = useRuleReach(reachText)
+  // This movement is one of those waiting while it has none and the text is in it.
+  const selfWaits =
+    !entry.category_id &&
+    SPENDING.includes(entry.kind) &&
+    reachText !== '' &&
+    fold(`${entry.bank_category ?? ''} ${entry.description}`).includes(fold(reachText))
+  const othersWaiting = reach.data
+    ? Math.max(0, reach.data.uncategorized - (selfWaits ? 1 : 0))
+    : 0
+  const suggestRule =
+    !entry.rule_hint_person && reachText === suggested && othersWaiting > 0
   // A rule needs something to do: a category, or the transfer mark.
   const canRule = ruleText !== '' && (transfer || category !== '')
-  const ruleChecked = withRule && canRule
+  const ruleChecked = (withRule ?? suggestRule) && canRule
+  const ruleNote = !canRule
+    ? 'Elige una categoría para crear la regla.'
+    : entry.rule_hint_person && ruleText === suggested
+      ? 'Es una persona: sirve si le pagas siempre lo mismo.'
+      : reach.data && reachText === ruleText
+        ? reachSentence(reach.data.matches, othersWaiting)
+        : 'Crea una regla y la aplica a los que ya tienes.'
 
   const save = async () => {
     if (busy) return
@@ -542,16 +637,29 @@ function CategorizeForm({
             disabled={transfer}
             className={cn('gap-0', !sheet && 'grid-cols-2 gap-x-2')}
           >
-            {choices.map((choice) => (
-              <ChoiceRow
-                key={choice.id}
-                value={choice.id}
-                icon={choice.icon}
-                sheet={sheet}
-                disabled={transfer}
-              >
-                {choice.name}
-              </ChoiceRow>
+            {choices.map((choice, i) => (
+              <Fragment key={choice.id}>
+                {choice.other && !choices[i - 1]?.other && (
+                  <p
+                    className={cn(
+                      'px-3 pt-4 pb-1 text-small font-medium text-muted-foreground',
+                      !sheet && 'col-span-2',
+                    )}
+                  >
+                    {entry.kind === 'refund'
+                      ? '¿O fue un ingreso, como algo que vendiste?'
+                      : '¿O te devolvieron un gasto?'}
+                  </p>
+                )}
+                <ChoiceRow
+                  value={choice.id}
+                  icon={choice.icon}
+                  sheet={sheet}
+                  disabled={transfer}
+                >
+                  {choice.name}
+                </ChoiceRow>
+              </Fragment>
             ))}
             <ChoiceRow
               value={UNCATEGORIZED_VALUE}
@@ -593,33 +701,47 @@ function CategorizeForm({
           sheet ? 'px-4 pt-3 pb-4' : 'px-6 pt-3 pb-6',
         )}
       >
-        <label
-          className={cn(
-            'flex min-h-11 items-center gap-3 py-1',
-            canRule ? 'cursor-pointer' : 'cursor-not-allowed',
+        <div className="flex flex-col gap-2">
+          <label
+            className={cn(
+              'flex min-h-11 items-center gap-3 py-1',
+              canRule ? 'cursor-pointer' : 'cursor-not-allowed',
+            )}
+          >
+            <Checkbox
+              checked={ruleChecked}
+              disabled={!canRule}
+              onCheckedChange={(checked) => setWithRule(checked === true)}
+            />
+            <span className="flex min-w-0 flex-col">
+              <span
+                className={cn(
+                  'text-body font-medium break-words',
+                  !canRule && 'text-muted-foreground',
+                )}
+              >
+                {ruleChecked
+                  ? 'Hacer lo mismo con todo lo que diga'
+                  : `Hacer lo mismo con ${ruleText || entryKindLabel(entry.kind)}`}
+              </span>
+              <span className="text-small font-medium text-muted-foreground">
+                {ruleNote}
+              </span>
+            </span>
+          </label>
+          {ruleChecked && (
+            <Input
+              aria-label="Texto de la regla"
+              value={ruleInput}
+              maxLength={RULE_TEXT_LIMIT}
+              onChange={(event) => {
+                // Editing keeps it checked, whatever the new text reaches.
+                setWithRule(true)
+                setRuleInput(event.target.value)
+              }}
+            />
           )}
-        >
-          <Checkbox
-            checked={ruleChecked}
-            disabled={!canRule}
-            onCheckedChange={(checked) => setWithRule(checked === true)}
-          />
-          <span className="flex min-w-0 flex-col">
-            <span
-              className={cn(
-                'text-body font-medium break-words',
-                !canRule && 'text-muted-foreground',
-              )}
-            >
-              Hacer lo mismo con {ruleText || entryKindLabel(entry.kind)}
-            </span>
-            <span className="text-small font-medium text-muted-foreground">
-              {canRule
-                ? 'Crea una regla y la aplica a los que ya tienes.'
-                : 'Elige una categoría para crear la regla.'}
-            </span>
-          </span>
-        </label>
+        </div>
 
         {error && (
           <Alert variant="attention" role="alert">

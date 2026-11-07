@@ -258,6 +258,24 @@ export interface Entry {
    * linked to it. Absent on any other movement, and from older APIs.
    */
   noted?: NotedPurchase
+  /**
+   * The text a rule made from this movement would match: the shop its description
+   * names, without card, city or order number, as printed. Absent from older APIs.
+   */
+  rule_hint?: string
+  /**
+   * The rule text names a person paid or paying by phone rather than a shop: a rule
+   * for them only fits a fixed payment, so it is never offered on its own.
+   */
+  rule_hint_person?: boolean
+}
+
+/** What a rule's text would reach before it exists. */
+export interface RuleReach {
+  /** Movements it matches: lines, and noted purchases that still count. */
+  matches: number
+  /** Of them, spending that has no category yet. */
+  uncategorized: number
 }
 
 /** The way a noted purchase reached chenchén first. */
