@@ -16,6 +16,9 @@
  *   MovementRow    one movement
  *   MovementList   movements grouped by day; tapping one opens Categorizar
  *   CategoryBar    a category's total and bar, or the "Sin categoría" to-do
+ *   PlanTrack      a plan figure's bar against what was planned: veranera up to it,
+ *                  ink past it (PlanBar: a category's cap with its caption;
+ *                  PlanCaption: "Quedan $180.00 de $300.00" alone)
  *   FilterChip     a filter's pill: off with a chevron, on with its value and an x
  *   SearchField    the search pill with a hidden label and a clear button
  *   KitAction      { label, to?, onClick?, icon?, disabled?, ariaLabel? } for Notice and
@@ -31,6 +34,7 @@ export { MovementList } from './MovementList'
 export { MovementRow } from './MovementRow'
 export { Notice } from './Notice'
 export { PageHeader } from './PageHeader'
+export { PlanBar, PlanCaption, PlanTrack } from './PlanBar'
 export { SearchField } from './SearchField'
 export { SectionCard } from './SectionCard'
 export { StatusChip } from './StatusChip'

@@ -25,7 +25,13 @@ import type {
   InvestmentTrade,
   McpResource,
   Me,
+  MonthPlan,
   NewShortcutKey,
+  PlanCapLine,
+  PlanItem,
+  PlanItemKind,
+  PlanLink,
+  PlanScope,
   Portfolio,
   Reconciliation,
   RuleReach,
@@ -339,6 +345,106 @@ export const decideTransfer = (input: {
   in_entry_id: string
   confirm: boolean
 }) => request<void>('/api/transfers/decisions', { method: 'POST', body: input })
+
+// --- the month's plan ------------------------------------------------------------
+
+/** The plan of a month (YYYY-MM); without one, the current month in Panama. */
+export const fetchPlan = (month?: string) =>
+  request<MonthPlan>(`/api/plan${month ? `?month=${encodeURIComponent(month)}` : ''}`)
+
+/**
+ * An item as a form saves it, for `month` on (`scope: 'from'`) or for it alone
+ * (`'only'`). Amounts travel as typed text ("650.00"). Only these fields: the API
+ * refuses one it does not know.
+ */
+export interface PlanItemInput {
+  kind: Exclude<PlanItemKind, 'purchase'>
+  month: string
+  scope: PlanScope
+  name: string
+  amount: string
+  /** 1 to 31; a paycheck and a payment need one. */
+  day?: number
+  match_text?: string
+  /** null or left out: no category. */
+  category_id?: string | null
+  /** A saving's account; null or left out: none. */
+  account_id?: string | null
+  /** A saving's goal; left out: none. */
+  target?: string
+  target_month?: string
+}
+
+/**
+ * Creates the item with the caller's id (201) or edits it (200), and answers with
+ * the month it was saved for. Sending the same again changes nothing, which is how
+ * an edit is undone: the previous values, sent again.
+ */
+export const savePlanItem = (id: string, input: PlanItemInput) =>
+  request<PlanItem>(`/api/plan/items/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: input,
+  })
+
+/** Takes `month` on, or that month alone, out of an item; one left with no month goes. */
+export const deletePlanItem = (id: string, month: string, scope: PlanScope) =>
+  request<void>(
+    `/api/plan/items/${encodeURIComponent(id)}?${new URLSearchParams({ month, scope })}`,
+    { method: 'DELETE' },
+  )
+
+/** A cap on an expense category, for `month` on or for it alone. */
+export interface PlanCapInput {
+  month: string
+  scope: PlanScope
+  amount: string
+}
+
+export const savePlanCap = (categoryId: string, input: PlanCapInput) =>
+  request<Omit<PlanCapLine, 'spent' | 'level'>>(
+    `/api/plan/caps/${encodeURIComponent(categoryId)}`,
+    { method: 'PUT', body: input },
+  )
+
+export const deletePlanCap = (categoryId: string, month: string, scope: PlanScope) =>
+  request<void>(
+    `/api/plan/caps/${encodeURIComponent(categoryId)}?${new URLSearchParams({ month, scope })}`,
+    { method: 'DELETE' },
+  )
+
+/**
+ * What the owner says about one month of a paycheck or a payment (a month that has
+ * passed too): this movement paid it (`assign`), this one did not (`reject`), or it
+ * was paid, or came in, where chenchén cannot see (`paid`, with no movement).
+ */
+export type PlanLinkSaying = { item_id: string; month: string } & (
+  { decision: 'assign' | 'reject'; movement_id: string } | { decision: 'paid' }
+)
+
+/** A saying with the caller's id, so a send whose answer was lost is safe to repeat. */
+export type PlanLinkInput = PlanLinkSaying & { id: string }
+
+/**
+ * 201 with the link it records, or 200 with the one already there: the same id, or
+ * the same word about the same movement and month. That one may have another id, so
+ * taking it back uses the id in the answer. Saying the opposite about a movement
+ * replaces what was said. Refusals, each with the server's sentence:
+ *   409 movement_in_plan    the movement already pays another item or month
+ *   422 movement_too_far    it is booked more than a month away from that month
+ *   404 entry_not_found     the movement is gone (a noted purchase discarded)
+ *   404 plan_item_not_found the item is not planned for that month
+ *   409 plan_link_id_taken  the id is someone else's: a new one goes through
+ */
+export const addPlanLink = (input: PlanLinkInput) =>
+  request<PlanLink>('/api/plan/links', { method: 'POST', body: input })
+
+/**
+ * Takes back what a link said: the month is recognised again as if it had never been
+ * said. 404 plan_link_not_found when it was taken back already, or went with its
+ * movement or its item's month.
+ */
+export const deletePlanLink = (id: string) =>
+  request<void>(`/api/plan/links/${encodeURIComponent(id)}`, { method: 'DELETE' })
 
 // --- rules ---------------------------------------------------------------------
 

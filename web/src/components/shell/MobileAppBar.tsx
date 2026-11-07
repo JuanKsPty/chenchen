@@ -15,6 +15,7 @@ import {
   ACCOUNTS_PATH,
   HOME_PATH,
   MOVEMENTS_PATH,
+  PLAN_PATH,
   RULES_PATH,
   SETTINGS_PATH,
   SPENDING_PATH,
@@ -159,6 +160,7 @@ function routeDefaults(pathname: string): RouteDefaults {
   if (pathname === MOVEMENTS_PATH) return { title: 'Movimientos' }
   if (pathname === SPENDING_PATH) return { title: 'Gastos' }
   if (pathname === RULES_PATH) return { title: 'Reglas', back: SPENDING_PATH }
+  if (pathname === PLAN_PATH) return { title: 'Plan del mes', back: SPENDING_PATH }
   if (pathname === SETTINGS_PATH) return { title: 'Ajustes' }
   return {}
 }

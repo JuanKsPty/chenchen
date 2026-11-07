@@ -95,6 +95,8 @@
    - scrim              behind sheets, dialogs and the overlay panel
    - chart-1 entradas, chart-2 (chart-out) salidas, chart-3 category bars,
      chart-5 the bar track
+   - foreground also inks a plan bar past its cap (kit/PlanBar), not chart-2,
+     whose dark value is about as light as the veranera beside it
 
    Inline SVG and style attributes should read these raw names
    (`var(--primary)`), not `--color-*`: the `@theme inline` block below only

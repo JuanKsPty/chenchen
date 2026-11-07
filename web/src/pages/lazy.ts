@@ -13,7 +13,7 @@
  *                              while a session restores on a signed-in address
  *   preloadAllPages()          every page, once the shell is up and the browser is
  *                              idle, so moving between sections never waits
- *   HomePage … SettingsPage    React.lazy components for SignedInApp's routes
+ *   HomePage … PlanPage        React.lazy components for SignedInApp's routes
  *   ConnectPage                /conectar, Claude's consent page: its own chunk, outside
  *                              the shell, which it never needs (App renders it)
  *   preloadConnectPage()       that chunk, early, while a session restores on it
@@ -28,6 +28,7 @@ import {
   ACCOUNTS_PATH,
   HOME_PATH,
   MOVEMENTS_PATH,
+  PLAN_PATH,
   RULES_PATH,
   SETTINGS_PATH,
   SPENDING_PATH,
@@ -40,6 +41,7 @@ const load = {
   movements: () => import('./MovementsPage'),
   spending: () => import('./SpendingPage'),
   rules: () => import('./RulesPage'),
+  plan: () => import('./PlanPage'),
   settings: () => import('./SettingsPage'),
 }
 
@@ -60,6 +62,7 @@ export const RulesPage = lazy(() => load.rules().then((m) => ({ default: m.Rules
 export const SettingsPage = lazy(() =>
   load.settings().then((m) => ({ default: m.SettingsPage })),
 )
+export const PlanPage = lazy(() => load.plan().then((m) => ({ default: m.PlanPage })))
 
 const loadConnect = () => import('./ConnectPage')
 
@@ -81,6 +84,7 @@ const ROUTES: [pattern: string, loader: () => Promise<unknown>][] = [
   [SPENDING_PATH, load.spending],
   [RULES_PATH, load.rules],
   ['/reglas', load.rules],
+  [PLAN_PATH, load.plan],
   [SETTINGS_PATH, load.settings],
   ['/seguridad', load.settings],
 ]

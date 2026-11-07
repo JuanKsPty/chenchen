@@ -716,3 +716,229 @@ export interface Proposal {
   status: 'pending' | 'applied' | 'rejected'
   expires_at: string
 }
+
+// --- the month's plan --------------------------------------------------------------
+
+/**
+ * Where a month stands against today in Panama, which the server decides: the
+ * browser's clock is never the authority on which month has passed.
+ */
+export type PlanState = 'current' | 'past' | 'future'
+
+/**
+ * How much of what is free went out. `no_free` is the plan's own shape, not a
+ * warning: what goes out and what is set aside come to the income or more.
+ */
+export type PlanLevel = 'ok' | 'near' | 'over' | 'no_free'
+
+export type PlanItemKind = 'income' | 'fixed' | 'saving' | 'purchase'
+
+/** Which months an edit holds for: the month and every one after it, or that month alone. */
+export type PlanScope = 'from' | 'only'
+
+/**
+ * An item of the plan with the values that hold for the month read. Months are
+ * YYYY-MM; `to` is null when it has no end.
+ */
+export interface PlanItem {
+  id: string
+  kind: PlanItemKind
+  name: string
+  amount: Amount
+  /** The day of the month it is expected, 1 to 31. Absent for a saving with none. */
+  day?: number
+  /** An expense category for a payment, an income one for a paycheck. */
+  category_id?: string
+  /** The text its movements contain, compared like a rule's; '' for none. */
+  match_text: string
+  from: string
+  to: string | null
+  /** A saving's goal. */
+  target?: Amount
+  target_month?: string
+  /** The savings or brokerage account a saving is kept in. */
+  account_id?: string
+}
+
+/**
+ * A movement the plan read: a printed line, or a noted purchase that still counts.
+ * As an item's candidate or hint it is only offered, and says nothing more.
+ */
+export interface PlanMovement {
+  id: string
+  origin: 'statement' | 'capture'
+  booked_on: string
+  /** Signed from the owner's point of view, as in Entry. */
+  amount: Amount
+  description: string
+}
+
+/**
+ * A movement that paid a payment or brought in a paycheck, and who said so: the plan
+ * by itself, by its text, amount and day (`auto`), or the owner (`assigned`), by the
+ * link `link_id`, which deleting takes back.
+ */
+export type PlanPaidMovement = PlanMovement &
+  ({ how: 'auto' } | { how: 'assigned'; link_id: string })
+
+/**
+ * Whether the owner said a month of an item was paid, or came in, where chenchén
+ * cannot see (an account it does not hold), and by which link: deleting it takes
+ * that back. It counts once, as planned.
+ */
+export type PlanMarkedPaid =
+  { marked_paid: false } | { marked_paid: true; paid_link_id: string }
+
+/**
+ * A paycheck's month: when it was due, whether it arrived and what it arrived as.
+ * `candidates` are deposits it could be, closest first, at most three, while it has
+ * not arrived.
+ */
+export type PlanIncomeLine = PlanItem &
+  PlanMarkedPaid & {
+    kind: 'income'
+    due_on: string
+    status: 'done' | 'upcoming' | 'late' | 'missed'
+    movements: PlanPaidMovement[]
+    candidates: PlanMovement[]
+  }
+
+/**
+ * A fixed payment's month. `paid` is what went out for it, null until a movement
+ * says. While it is still to be paid, `candidates` are the movements it could be,
+ * closest first, at most three, and `hint` a movement with its text that went out as
+ * a transfer between the owner's accounts: if it is not one, it is this payment.
+ */
+export type PlanFixedLine = PlanItem &
+  PlanMarkedPaid & {
+    kind: 'fixed'
+    due_on: string
+    status: 'out' | 'upcoming' | 'late' | 'missed'
+    paid: Amount | null
+    movements: PlanPaidMovement[]
+    candidates: PlanMovement[]
+    hint: { movement: PlanMovement; reason: 'transfer' } | null
+  }
+
+/** What a month sets aside. Progress and what reached the account come later: null. */
+export type PlanSavingLine = PlanItem & {
+  kind: 'saving'
+  status: string | null
+  saved_month: Amount | null
+  progress: Amount | null
+  needed_per_month: Amount | null
+}
+
+/** A cap on a category, and what its free spending, children included, took of it. */
+export interface PlanCapLine {
+  category_id: string
+  amount: Amount
+  from: string
+  to: string | null
+  spent: Amount
+  level: 'ok' | 'near' | 'over'
+}
+
+/** Half a month: the 1st to the 15th, or the 16th to its end. */
+export interface PlanQuincena {
+  from: string
+  to: string
+  /** Its share of what is free, by its days. */
+  free: Amount
+  spent: Amount
+  income_expected: Amount
+  fixed_due: Amount
+}
+
+/**
+ * A card's latest statement as the plan shows it: when it is due, and whether what
+ * reached it since it closed covers the minimum (or, with none, that something did).
+ * Information only: paying a card is a transfer, and its purchases already count as
+ * spending.
+ */
+export interface PlanCardDue {
+  account_id: string
+  closing_on: string
+  due_on: string
+  minimum_payment: Amount | null
+  paid: boolean
+}
+
+/**
+ * What the current month has to say, which the server works out so the web and
+ * Claude say the same: what is free, or a cap, at 80% or past it; a payment, or a
+ * card, due within three days. Only the current month has any.
+ */
+export type PlanAlert =
+  | { kind: 'free'; level: 'near' | 'over' }
+  | { kind: 'cap'; level: 'near' | 'over'; category_id: string }
+  | { kind: 'payment'; level: 'soon'; due_on: string; item_id: string }
+  | { kind: 'payment'; level: 'soon'; due_on: string; account_id: string }
+
+/** Which way a link goes: this movement paid it, this one did not, or it was paid outside. */
+export type PlanLinkDecision = 'assign' | 'reject' | 'paid'
+
+/**
+ * What the owner said about one month of a paycheck or a payment. `movement_id` is
+ * the movement as they named it, a line or a noted purchase; null for a month paid
+ * outside.
+ */
+export interface PlanLink {
+  id: string
+  item_id: string
+  month: string
+  decision: PlanLinkDecision
+  movement_id: string | null
+  created_at: string
+}
+
+/**
+ * GET /api/plan: a month's plan beside what happened in it.
+ *
+ *   free  = income − fixed − savings − purchases
+ *   left  = free − spent
+ *
+ * `spent` is the month's spending that no planned item took, so Gastos' total is
+ * `spent` plus what the payments took. Every list is present, empty when there is
+ * nothing in it.
+ */
+export interface MonthPlan {
+  month: string
+  today: string
+  state: PlanState
+  /** The month has any item or cap. */
+  planned: boolean
+  /** The month can still be written: the current one or up to 24 after it. */
+  editable: boolean
+  summary: {
+    income: Amount
+    fixed: Amount
+    savings: Amount
+    purchases: Amount
+    free: Amount
+    spent: Amount
+    left: Amount
+    /** Today counts in the current month; all of a month ahead, none of a past one. */
+    days_left: number
+    /** `left` over `days_left`, rounded down; null once nothing is left. */
+    per_day: Amount | null
+    level: PlanLevel
+  }
+  income: {
+    expected: Amount
+    actual: Amount
+    /** What came in that no paycheck of any month took. */
+    unplanned: Amount
+    items: PlanIncomeLine[]
+  }
+  fixed: PlanFixedLine[]
+  savings: PlanSavingLine[]
+  /** Empty until planned purchases are kept. */
+  purchases: unknown[]
+  caps: PlanCapLine[]
+  uncategorized: { spent: Amount; count: number }
+  quincenas: [PlanQuincena, PlanQuincena]
+  /** The credit cards with a due date, beside the month: they never come off it. */
+  cards: PlanCardDue[]
+  alerts: PlanAlert[]
+}
