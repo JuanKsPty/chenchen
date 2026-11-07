@@ -85,9 +85,13 @@ type Input struct {
 	// Parents maps a category to its parent, so a cap counts its children.
 	Parents map[uuid.UUID]uuid.UUID
 	// Movements are the spending and income booked from the month before
-	// Month to the one after, and Recognition which instance each paid.
+	// Month to the one after, with any the owner said paid one of Instances
+	// booked further away, and Recognition which instance each paid.
 	Movements   []store.PlanMovement
 	Recognition Recognition
+	// Cards are the owner's credit cards with a statement due, shown beside
+	// the month and never subtracted.
+	Cards []store.PlanCard
 }
 
 // State says where a month stands against today.
@@ -166,6 +170,9 @@ type Plan struct {
 	Caps          []CapLine
 	Uncategorized Uncategorized
 	Quincenas     [2]Quincena
+	// Cards are the credit cards whose latest statement is due in the month,
+	// or, in the current month, after it.
+	Cards []CardLine
 	// Alerts are said only for the current month.
 	Alerts []Alert
 	// Spending is everything spent in the month, exactly what Gastos adds up,
@@ -222,12 +229,37 @@ type Line struct {
 	Instance
 	Status Status
 	// Movements are the ones that paid it, by day.
-	Movements []store.PlanMovement
+	Movements []LineMovement
 	// Paid is, for a payment that went out, what went out for it.
 	Paid *money.Cents
 	// Committed is what it takes of the month: a payment's Paid once it went
 	// out, what was planned otherwise.
 	Committed money.Cents
+	// MarkedPaid is the link by which the owner said it was paid where the
+	// app cannot see; uuid.Nil when they did not.
+	MarkedPaid uuid.UUID
+	// Candidates are the movements it could be, while it is still to be
+	// paid, closest first; Hint a transfer it could be, or nil.
+	Candidates []store.PlanMovement
+	Hint       *Hint
+}
+
+// LineMovement is a movement that paid a line.
+type LineMovement struct {
+	store.PlanMovement
+	// Link is the link by which the owner said it paid the line; uuid.Nil
+	// when the plan recognised it by itself.
+	Link uuid.UUID
+}
+
+// CardLine is a credit card's latest statement beside the month. It is only
+// shown: the card's purchases already count as spending, and paying it is a
+// transfer.
+type CardLine struct {
+	store.PlanCard
+	// Paid says what reached the card since the statement closed covers its
+	// minimum payment, or, with no minimum, that something did.
+	Paid bool
 }
 
 // CapLine is a cap in a month: what the free spending of its category and
@@ -262,9 +294,11 @@ type Quincena struct {
 type Alert struct {
 	Kind  AlertKind
 	Level Level
-	// CategoryID is a cap's; ItemID and DueOn a payment's.
+	// CategoryID is a cap's; ItemID and DueOn a payment's; AccountID and
+	// DueOn a card's statement.
 	CategoryID *uuid.UUID
 	ItemID     *uuid.UUID
+	AccountID  *uuid.UUID
 	DueOn      civil.Date
 }
 
@@ -276,7 +310,9 @@ type Alert struct {
 // bucket: the payment it paid, whichever month that payment is of, or what
 // was free. A payment that went out takes what was paid, not what was
 // planned, and one still to go out keeps what was planned aside. A refund on
-// its own never settles a payment.
+// its own never settles a payment. A month the owner said was paid outside
+// keeps what was planned, which is how it counts, once, until a movement
+// recognised as it says what it cost.
 func Compute(in Input) Plan {
 	m := in.Month
 	current := MonthOf(in.Today)
@@ -313,14 +349,20 @@ func Compute(in Input) Plan {
 			continue
 		}
 		p.Planned = true
-		line := Line{Instance: inst, Committed: inst.Planned()}
+		line := Line{Instance: inst, Committed: inst.Planned(), MarkedPaid: in.Recognition.markedPaid(k),
+			Hint: in.Recognition.hint(k)}
 		for _, i := range paidBy[k] {
-			line.Movements = append(line.Movements, in.Movements[i])
+			line.Movements = append(line.Movements,
+				LineMovement{PlanMovement: in.Movements[i], Link: in.Recognition.assigned(i)})
 		}
+		for _, i := range in.Recognition.candidates(k) {
+			line.Candidates = append(line.Candidates, in.Movements[i])
+		}
+		marked := line.MarkedPaid != uuid.Nil
 		due := inst.Due()
 		switch inst.Item.Kind {
 		case KindIncome:
-			line.Status = incomeStatus(p.State, in.Today, due, len(line.Movements) > 0)
+			line.Status = incomeStatus(p.State, in.Today, due, len(line.Movements) > 0 || marked)
 			p.Income.Expected += inst.Planned()
 			p.Quincenas[half(due)].IncomeExpected += inst.Planned()
 			p.Income.Items = append(p.Income.Items, line)
@@ -328,7 +370,7 @@ func Compute(in Input) Plan {
 			if paid, out := paidFor(line.Movements); out {
 				line.Paid, line.Committed = &paid, paid
 			}
-			line.Status = fixedStatus(p.State, in.Today, due, line.Paid != nil)
+			line.Status = fixedStatus(p.State, in.Today, due, line.Paid != nil || marked)
 			p.Summary.Fixed += line.Committed
 			p.Quincenas[half(due)].FixedDue += line.Committed
 			p.Fixed = append(p.Fixed, line)
@@ -400,16 +442,30 @@ func Compute(in Input) Plan {
 		c := &p.Caps[j]
 		c.Level = capLevelOf(c.Spent, c.Version.Amount)
 	}
+	for _, c := range in.Cards {
+		if due := MonthOf(c.DueOn); due == m || p.State == StateCurrent && due.After(m) {
+			p.Cards = append(p.Cards, CardLine{PlanCard: c, Paid: cardPaid(c)})
+		}
+	}
 	if p.State == StateCurrent {
 		p.Alerts = alerts(p)
 	}
 	return p
 }
 
+// cardPaid says a card's statement is paid: what reached it since it closed
+// covers the minimum, or, when the statement gives none, something did.
+func cardPaid(c store.PlanCard) bool {
+	if c.MinimumPayment == nil {
+		return c.PaidSince > 0
+	}
+	return c.PaidSince >= *c.MinimumPayment
+}
+
 // paidFor is what went out for a payment: the spending among the movements
 // that paid it, refunds lowering it. out says one of them is an outflow; a
 // refund on its own gives money back, it does not pay.
-func paidFor(movements []store.PlanMovement) (paid money.Cents, out bool) {
+func paidFor(movements []LineMovement) (paid money.Cents, out bool) {
 	for _, mv := range movements {
 		if !slices.Contains(store.SpendKinds, mv.Kind) {
 			continue
@@ -497,8 +553,9 @@ func half(day civil.Date) int {
 }
 
 // alerts are what the current month has to say: what is free or a cap near
-// or over, and the payments that go out within alertDays. A plan that leaves
-// nothing free says so in its level instead.
+// or over, and the payments and card statements still to pay that are due
+// within alertDays. A plan that leaves nothing free says so in its level
+// instead.
 func alerts(p Plan) []Alert {
 	var out []Alert
 	if l := p.Summary.Level; l == LevelNear || l == LevelOver {
@@ -515,6 +572,12 @@ func alerts(p Plan) []Alert {
 		if due := f.Due(); f.Status == StatusUpcoming && !due.After(soon) {
 			id := f.Item.ID
 			out = append(out, Alert{Kind: AlertPayment, Level: LevelSoon, ItemID: &id, DueOn: due})
+		}
+	}
+	for _, c := range p.Cards {
+		if !c.Paid && !c.DueOn.Before(p.Today) && !c.DueOn.After(soon) {
+			id := c.AccountID
+			out = append(out, Alert{Kind: AlertPayment, Level: LevelSoon, AccountID: &id, DueOn: c.DueOn})
 		}
 	}
 	return out

@@ -98,8 +98,11 @@ El plan no cuenta el gasto a su manera: reparte en baldes el mismo gasto de Gast
   guarda su monto apartado.
 - **El ahorro se aparta siempre del ingreso** y nunca suma en «Llevas»: llega a su cuenta
   como transferencia, y una transferencia nunca es gasto.
-- **El pago de una tarjeta nunca es un pago fijo,** porque sus compras ya cuentan. Su fecha
-  de pago se muestra solo como aviso, sin restar.
+- **El pago de una tarjeta nunca es un pago fijo,** porque sus compras ya cuentan. Su último
+  estado (corte, fecha de pago y pago mínimo) se muestra junto al mes en que vence, y en el
+  mes actual también si vence después, pero nunca se resta. Está pagada cuando lo que entró
+  a la tarjeta como transferencia después del corte cubre el mínimo. Si falta y vence en
+  tres días o menos, el plan avisa.
 - **Queda una sola doble cuenta.** Un pago que el reconocimiento no ve conserva su monto
   apartado y además suma en «Llevas». Siempre se ve («Aún no lo vemos») y se arregla con un
   toque. Es el mismo tipo de error que las propinas del ADR 0002.
@@ -118,6 +121,50 @@ El plan no cuenta el gasto a su manera: reparte en baldes el mismo gasto de Gast
   «este no» o «lo pagué desde otra cuenta». El vínculo es lo único que se guarda. Se va si
   se borra el movimiento o si se quitan esos meses del ítem.
 
+### Vínculos: lo que dice la persona va primero
+
+Al leer, primero se aplican los vínculos y después el plan reconoce el resto solo.
+
+- **«Fue este»** (`assign`): ese movimiento paga ese mes del ítem, aunque no tenga su texto
+  ni su monto.
+  - Tiene que estar en ese mes o en uno de al lado, y ser un ingreso para un sueldo o un
+    gasto para un pago fijo.
+  - Paga una sola cosa a la vez. Para moverlo, primero se deshace el vínculo.
+- **«Este no»** (`reject`): ese movimiento nunca se reconoce ni se ofrece para ese mes del
+  ítem.
+- **«Lo pagué desde otra cuenta»** (`paid`): el mes queda pagado y conserva lo planeado,
+  que es como cuenta, una sola vez. Si después aparece su movimiento, cuenta lo pagado.
+- **Si dos vínculos nombran el mismo movimiento, vale el más antiguo.** Si la persona dice lo
+  contrario sobre el mismo movimiento y el mismo mes, vale lo último que dijo. Una línea es
+  el mismo movimiento que la compra anotada que el plan muestra como ella, unida a ella o
+  impresa con ella entre las que podría ser.
+- **Un vínculo puede corregir un mes que ya pasó:** cambia qué se reconoció, nunca lo
+  planeado. Ninguno pasa de 24 meses adelante.
+- **Un pago asignado a otro mes se carga a ese mes.** El alquiler de octubre pagado el 2 de
+  noviembre cuenta en los pagos fijos de octubre. En noviembre sigue en Gastos, pero no en
+  «Llevas».
+- **Un vínculo a una compra anotada la sigue hasta su línea,** sin reescribirse:
+  - pendiente, la paga la compra;
+  - unida a su línea, la paga la línea;
+  - impresa sin unir, la paga la línea de las que podría ser que otro vínculo de ese mes
+    nombra, o si no, la primera libre. Todas tienen su monto, así que el mes suma lo mismo
+    con cualquiera;
+  - descartada, o pasada por un estado que no la trae, no paga nada y el pago vuelve a
+    apartar lo planeado. Si se restaura, lo vuelve a pagar.
+- **Un vínculo solo paga con un movimiento de ese mes o de uno de al lado,** también al
+  leerse. Si la línea de una compra anotada se imprime, o se le corrige el día, a más de un
+  mes del mes que pagaba, no paga nada: ese mes vuelve a apartar lo planeado, y el
+  movimiento cuenta una vez, en su propio mes, que no lee los vínculos de meses tan lejanos.
+- **Lo que aún no se ve trae ayuda** para arreglarlo con un toque:
+  - hasta tres candidatos. Un pago fijo con texto ofrece los gastos con ese texto, aunque el
+    monto no cuadre; sin texto, los que están a 10 % de lo planeado y a 5 días de su día.
+    Un sueldo ofrece los ingresos a 25 % de lo planeado y a una semana de su día, con
+    cualquier texto;
+  - una pista cuando el banco imprimió el pago como transferencia: una transferencia que
+    sale ese mes con el texto del pago. Se arregla como siempre, desmarcando «Es una
+    transferencia entre tus cuentas» en el movimiento. El plan solo la lee: una
+    transferencia nunca cuenta como gasto.
+
 ### Niveles sin regañar
 
 - **El servidor calcula los niveles,** para que la web y Claude digan lo mismo:
@@ -135,23 +182,24 @@ herramienta de Claude se llama solo "plan", porque ya existe `sync_plan`.
 
 ## Consecuencias
 
-- **Esta primera entrega trae:**
+- **Ya llegó:**
   - el esquema completo, con las cinco tablas en una sola migración (00021), para quedar
     expuestos una sola vez a la regla de orden de goose;
   - guardar y quitar ingresos, pagos fijos, ahorro y topes, con sus versiones;
+  - leer el plan del mes, con sus cuentas, niveles y quincenas, y las rutas para
+    escribirlo (`/api/plan`);
+  - los vínculos, con los candidatos, la pista de la transferencia y las tarjetas;
   - este ADR.
 
-  Todavía no hay ruta HTTP ni pantalla: el plan aún no se ve.
+  Todavía no hay pantalla: el plan se lee y se escribe solo por la API.
 - **Lo que falta llega después** y enmienda este ADR donde haga falta:
-  - leer el plan del mes, con sus cuentas, niveles y quincenas, y las rutas para
-    escribirlo;
-  - los vínculos y el reconocimiento de las compras anotadas;
   - la pantalla bajo Gastos y la tarjeta de Inicio, con sus avisos;
   - las sugerencias de pagos fijos e ingresos sacadas del historial, y descartarlas;
   - las compras planeadas, que hoy se rechazan, y el avance de las metas según la cuenta
     ligada;
   - que Claude lea y edite el plan.
 - **Un pago fijo que no se reconoce cuenta dos veces** hasta que la persona lo vincula.
+  Siempre se ve, con sus candidatos o su pista.
 - **Los topes se quedan cortos mientras haya gasto sin categoría.** Lo que no tiene
   categoría cuenta en lo libre, pero en ningún tope.
 - **El plan es tan actual como el último estado importado** y las compras anotadas.
@@ -159,6 +207,7 @@ herramienta de Claude se llama solo "plan", porque ya existe `sync_plan`.
   pasado:
   - editar lo que vive en el ítem (nombre, categoría, cuenta, meta y texto), que vale para
     todos sus meses;
+  - un vínculo sobre un mes pasado, que cambia qué se reconoció en él;
   - borrar un movimiento vinculado, que se lleva su vínculo;
   - borrar una categoría, que se lleva sus topes, también los de meses pasados, y deja sus
     ítems sin categoría;

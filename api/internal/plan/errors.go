@@ -23,6 +23,20 @@ var (
 	// the same month would have to split what reaches it, and nothing says
 	// how; one after the other, they never have to.
 	ErrAccountHasGoal = errors.New("plan: the account already backs a goal")
+	// ErrLinkNotFound means no such link belongs to the caller: it was
+	// undone already, or went with its movement or the months of its item.
+	ErrLinkNotFound = errors.New("plan: link not found")
+	// ErrLinkIDTaken means the id a caller chose for a new link is someone
+	// else's link.
+	ErrLinkIDTaken = errors.New("plan: the id belongs to another link")
+	// ErrMovementInPlan means the owner already said the movement paid
+	// another month or another item. A movement pays one at a time; the
+	// other link has to go first.
+	ErrMovementInPlan = errors.New("plan: the movement already pays something in the plan")
+	// ErrMovementTooFar means the movement is booked more than linkMonths
+	// from the month it would pay. A payment a few days late lands in the
+	// month after; one further away is something else.
+	ErrMovementTooFar = errors.New("plan: the movement is booked too far from that month")
 )
 
 // The errors about one field of an item or a cap. Each is told to the owner
@@ -48,6 +62,14 @@ var (
 	// item can have while purchases are not kept.
 	ErrStartMonth = errors.New("plan: only a planned purchase starts being set aside in a month")
 	ErrFunding    = errors.New("plan: only a planned purchase says how it is paid")
+
+	// The fields of a link.
+	ErrDecision     = errors.New("plan: a link says assign, reject or paid")
+	ErrLinkMovement = errors.New("plan: a link that assigns or rejects names a movement")
+	ErrPaidMovement = errors.New("plan: a month paid outside names no movement")
+	ErrLinkItemKind = errors.New("plan: only a paycheck or a payment is paid by a movement")
+	ErrNotIncome    = errors.New("plan: a paycheck is paid by income")
+	ErrNotSpending  = errors.New("plan: a payment is paid by spending")
 )
 
 // fieldErrors are the errors about one request field, with what the owner is
@@ -74,6 +96,12 @@ var fieldErrors = []struct {
 	{ErrTargetNotGoal, "target", "Solo un ahorro tiene una meta."},
 	{ErrStartMonth, "start_month", "Las compras planeadas todavía no se pueden guardar."},
 	{ErrFunding, "funding", "Las compras planeadas todavía no se pueden guardar."},
+	{ErrDecision, "decision", "Elige si fue este movimiento, si no lo fue o si se pagó por otro lado."},
+	{ErrLinkMovement, "movement_id", "Elige el movimiento."},
+	{ErrPaidMovement, "movement_id", "Si se pagó por otro lado, no elijas un movimiento."},
+	{ErrLinkItemKind, "item_id", "Solo un ingreso o un pago fijo se reconoce por un movimiento."},
+	{ErrNotIncome, "movement_id", "Elige un ingreso: ese movimiento no es un ingreso."},
+	{ErrNotSpending, "movement_id", "Elige un gasto: una transferencia o un ingreso no es este pago."},
 }
 
 // FieldProblems is what err says about each request field, every field at

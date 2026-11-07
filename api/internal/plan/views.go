@@ -28,7 +28,9 @@ type View struct {
 	Caps          []CapLineView     `json:"caps"`
 	Uncategorized UncategorizedView `json:"uncategorized"`
 	Quincenas     [2]QuincenaView   `json:"quincenas"`
-	Alerts        []AlertView       `json:"alerts"`
+	// Cards are shown beside the month and never subtracted from it.
+	Cards  []CardView  `json:"cards"`
+	Alerts []AlertView `json:"alerts"`
 }
 
 // SummaryView is the month's account on the wire. PerDay is null when
@@ -86,43 +88,90 @@ func NewItemView(i Instance) ItemView {
 	return v
 }
 
-// MovementView is a movement that paid an item. How is "auto" when the plan
-// recognised it.
+// MovementView is a movement on the wire. Of one that paid an item, How says
+// who said so: "auto" when the plan recognised it, "assigned" when the owner
+// did, with the link that says it, which undoing it deletes. A movement only
+// offered has neither.
 type MovementView struct {
 	ID          uuid.UUID    `json:"id"`
 	Origin      string       `json:"origin"`
 	BookedOn    civil.Date   `json:"booked_on"`
 	Amount      money.Amount `json:"amount"`
 	Description string       `json:"description"`
-	How         string       `json:"how"`
+	How         string       `json:"how,omitempty"`
+	LinkID      *uuid.UUID   `json:"link_id,omitempty"`
 }
 
-func movementViews(movements []store.PlanMovement) []MovementView {
+func movementView(m store.PlanMovement) MovementView {
+	return MovementView{ID: m.ID, Origin: m.Origin, BookedOn: m.BookedOn, Amount: m.Amount.Amount(),
+		Description: m.Description}
+}
+
+// paidByViews are the movements that paid a line.
+func paidByViews(movements []LineMovement) []MovementView {
 	out := make([]MovementView, 0, len(movements))
 	for _, m := range movements {
-		out = append(out, MovementView{ID: m.ID, Origin: m.Origin, BookedOn: m.BookedOn, Amount: m.Amount.Amount(),
-			Description: m.Description, How: "auto"})
+		v := movementView(m.PlanMovement)
+		v.How = "auto"
+		if m.Link != uuid.Nil {
+			link := m.Link
+			v.How, v.LinkID = "assigned", &link
+		}
+		out = append(out, v)
 	}
 	return out
 }
 
+func candidateViews(movements []store.PlanMovement) []MovementView {
+	out := make([]MovementView, 0, len(movements))
+	for _, m := range movements {
+		out = append(out, movementView(m))
+	}
+	return out
+}
+
+// HintView is a movement pointed at, and why.
+type HintView struct {
+	Movement MovementView `json:"movement"`
+	Reason   HintReason   `json:"reason"`
+}
+
+// linkID is a link's id on the wire: null for none.
+func linkID(id uuid.UUID) *uuid.UUID {
+	if id == uuid.Nil {
+		return nil
+	}
+	return &id
+}
+
 // IncomeLineView is a paycheck's month: when it was due, whether it arrived
-// and what it arrived as.
+// and what it arrived as. MarkedPaid says the owner said it arrived where the
+// app cannot see, by the link PaidLinkID, which undoing it deletes.
+// Candidates are what it could be while it has not arrived.
 type IncomeLineView struct {
 	ItemView
-	DueOn     civil.Date     `json:"due_on"`
-	Status    Status         `json:"status"`
-	Movements []MovementView `json:"movements"`
+	DueOn      civil.Date     `json:"due_on"`
+	Status     Status         `json:"status"`
+	MarkedPaid bool           `json:"marked_paid"`
+	PaidLinkID *uuid.UUID     `json:"paid_link_id,omitempty"`
+	Movements  []MovementView `json:"movements"`
+	Candidates []MovementView `json:"candidates"`
 }
 
 // FixedView is a payment's month. Paid is what went out for it, null until
-// it does.
+// a movement says. MarkedPaid says the owner said it was paid where the app
+// cannot see, by the link PaidLinkID. While it is still to be paid,
+// Candidates are what it could be, and Hint a transfer it could be, or null.
 type FixedView struct {
 	ItemView
-	DueOn     civil.Date     `json:"due_on"`
-	Status    Status         `json:"status"`
-	Paid      *money.Amount  `json:"paid"`
-	Movements []MovementView `json:"movements"`
+	DueOn      civil.Date     `json:"due_on"`
+	Status     Status         `json:"status"`
+	Paid       *money.Amount  `json:"paid"`
+	MarkedPaid bool           `json:"marked_paid"`
+	PaidLinkID *uuid.UUID     `json:"paid_link_id,omitempty"`
+	Movements  []MovementView `json:"movements"`
+	Candidates []MovementView `json:"candidates"`
+	Hint       *HintView      `json:"hint"`
 }
 
 // SavingView is what the month sets aside.
@@ -172,13 +221,25 @@ type QuincenaView struct {
 	FixedDue       money.Amount `json:"fixed_due"`
 }
 
+// CardView is a credit card's latest statement beside the month. Paid says
+// what reached the card since it closed covers the minimum payment, or, with
+// none, that something did.
+type CardView struct {
+	AccountID      uuid.UUID     `json:"account_id"`
+	ClosingOn      civil.Date    `json:"closing_on"`
+	DueOn          civil.Date    `json:"due_on"`
+	MinimumPayment *money.Amount `json:"minimum_payment"`
+	Paid           bool          `json:"paid"`
+}
+
 // AlertView is an alert on the wire: a cap's names its category, a payment's
-// its item and day.
+// its item and day, a card's its account and day.
 type AlertView struct {
 	Kind       AlertKind  `json:"kind"`
 	Level      Level      `json:"level"`
 	CategoryID *uuid.UUID `json:"category_id,omitempty"`
 	ItemID     *uuid.UUID `json:"item_id,omitempty"`
+	AccountID  *uuid.UUID `json:"account_id,omitempty"`
 	DueOn      civil.Date `json:"due_on,omitzero"`
 }
 
@@ -199,6 +260,7 @@ func NewView(p Plan) View {
 		Purchases:     []struct{}{},
 		Caps:          make([]CapLineView, 0, len(p.Caps)),
 		Uncategorized: UncategorizedView{Spent: p.Uncategorized.Spent.Amount(), Count: p.Uncategorized.Count},
+		Cards:         make([]CardView, 0, len(p.Cards)),
 		Alerts:        make([]AlertView, 0, len(p.Alerts)),
 	}
 	if s.PerDay != nil {
@@ -207,14 +269,19 @@ func NewView(p Plan) View {
 	}
 	for _, l := range p.Income.Items {
 		v.Income.Items = append(v.Income.Items, IncomeLineView{ItemView: NewItemView(l.Instance), DueOn: l.Due(),
-			Status: l.Status, Movements: movementViews(l.Movements)})
+			Status: l.Status, MarkedPaid: l.MarkedPaid != uuid.Nil, PaidLinkID: linkID(l.MarkedPaid),
+			Movements: paidByViews(l.Movements), Candidates: candidateViews(l.Candidates)})
 	}
 	for _, l := range p.Fixed {
 		f := FixedView{ItemView: NewItemView(l.Instance), DueOn: l.Due(), Status: l.Status,
-			Movements: movementViews(l.Movements)}
+			MarkedPaid: l.MarkedPaid != uuid.Nil, PaidLinkID: linkID(l.MarkedPaid),
+			Movements: paidByViews(l.Movements), Candidates: candidateViews(l.Candidates)}
 		if l.Paid != nil {
 			paid := l.Paid.Amount()
 			f.Paid = &paid
+		}
+		if l.Hint != nil {
+			f.Hint = &HintView{Movement: movementView(l.Hint.Movement), Reason: l.Hint.Reason}
 		}
 		v.Fixed = append(v.Fixed, f)
 	}
@@ -228,9 +295,17 @@ func NewView(p Plan) View {
 		v.Quincenas[i] = QuincenaView{From: q.From, To: q.To, Free: q.Free.Amount(), Spent: q.Spent.Amount(),
 			IncomeExpected: q.IncomeExpected.Amount(), FixedDue: q.FixedDue.Amount()}
 	}
+	for _, c := range p.Cards {
+		card := CardView{AccountID: c.AccountID, ClosingOn: c.ClosingOn, DueOn: c.DueOn, Paid: c.Paid}
+		if c.MinimumPayment != nil {
+			minimum := c.MinimumPayment.Amount()
+			card.MinimumPayment = &minimum
+		}
+		v.Cards = append(v.Cards, card)
+	}
 	for _, a := range p.Alerts {
 		v.Alerts = append(v.Alerts, AlertView{Kind: a.Kind, Level: a.Level, CategoryID: a.CategoryID,
-			ItemID: a.ItemID, DueOn: a.DueOn})
+			ItemID: a.ItemID, AccountID: a.AccountID, DueOn: a.DueOn})
 	}
 	return v
 }

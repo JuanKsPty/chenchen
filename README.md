@@ -135,6 +135,12 @@ que suma Gastos, y nada de eso se guarda:
   por su mes. Un sueldo, por su texto, su monto y una semana alrededor de su día, aunque
   llegue en el mes de al lado. El cargo chico que va al lado de un pago, en la misma
   cuenta y el mismo día, como el impuesto de un seguro, se suma a ese pago.
+- **Cuando se equivoca, lo corriges** con `POST /api/plan/links` («fue este movimiento»,
+  «este no» o «lo pagué desde otra cuenta») y lo deshaces con `DELETE`. Un movimiento paga
+  una sola cosa, y si es de un mes vecino se carga a ese mes. Un pago que aún no se ve
+  ofrece hasta tres candidatos, y una pista si el banco lo imprimió como transferencia.
+- **Las tarjetas** muestran su fecha de pago y si ya cubriste el mínimo, sin restar nada:
+  sus compras ya cuentan.
 - **El ingreso extra nunca cambia lo libre** por sí solo, y el ahorro nunca cuenta como
   gasto: llega a su cuenta como transferencia.
 - **Al 80 %** de lo libre, o de un tope, el plan dice que está cerca; un centavo más allá

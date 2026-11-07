@@ -535,8 +535,9 @@ func monthOf(d civil.Date) Month {
 // Month is month m's plan beside what happened in it, as the owner reads it
 // today in Panama; the zero Month is the current one. It reads only: the
 // items and caps that hold around m, the movements of m and the months either
-// side, and, when there are caps, the categories they count. Nothing of it is
-// written.
+// side, what the owner said about which paid what, the transfers out of m
+// for hints, the cards with a statement due and, when there are caps, the
+// categories they count. Nothing of it is written.
 func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, error) {
 	today := civil.Of(s.now().In(civil.Panama))
 	if m.IsZero() {
@@ -572,11 +573,53 @@ func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, e
 	if err != nil {
 		return Plan{}, err
 	}
+	var said []Link
+	if len(versions) > 0 {
+		if said, err = links(ctx, q, userID, before, after); err != nil {
+			return Plan{}, err
+		}
+		if movements, err = withLinked(ctx, q, userID, movements, said); err != nil {
+			return Plan{}, err
+		}
+	}
+	transfers, err := q.PlanTransfersOut(ctx, userID, m.First(), m.Last())
+	if err != nil {
+		return Plan{}, err
+	}
+	cards, err := q.PlanCards(ctx, userID)
+	if err != nil {
+		return Plan{}, err
+	}
 	instances := Instances(items, versions, before, after)
 	return Compute(Input{
 		Month: m, Today: today, Instances: instances, Caps: caps, Parents: parents,
-		Movements: movements, Recognition: Match(instances, movements),
+		Movements: movements, Recognition: Match(instances, movements, said, transfers), Cards: cards,
 	}), nil
+}
+
+// withLinked adds to movements those the owner's links name that were booked
+// beyond the months read, such as next month's payment made in the month
+// after it, so the month they paid is seen paid by them. They are outside the
+// month read, so they never count in it.
+func withLinked(ctx context.Context, q *store.Queries, userID uuid.UUID, movements []store.PlanMovement, said []Link) ([]store.PlanMovement, error) {
+	read := make(map[uuid.UUID]bool, len(movements))
+	for _, mv := range movements {
+		read[mv.ID] = true
+	}
+	var missing []uuid.UUID
+	for _, l := range said {
+		for _, id := range l.names() {
+			if !read[id] && l.Decision == DecisionAssign {
+				read[id] = true
+				missing = append(missing, id)
+			}
+		}
+	}
+	more, err := q.PlanMovementsByID(ctx, userID, missing)
+	if err != nil {
+		return nil, err
+	}
+	return append(movements, more...), nil
 }
 
 // categoryParents maps each of the user's categories that has a parent to

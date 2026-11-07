@@ -118,7 +118,7 @@ func TestComputeSplitsTheMonthsSpendingWithoutLosingOrAddingACent(t *testing.T) 
 			rec.Paid[i] = r.IntN(len(instances)+1) - 1
 		}
 		if r.IntN(3) == 0 {
-			rec = plan.Match(instances, m.movements)
+			rec = plan.Match(instances, m.movements, nil, nil)
 		}
 		p := plan.Compute(m.input(rec))
 		s := p.Summary
@@ -203,7 +203,7 @@ func TestMatchOnlyRecognisesWhatTheItemCouldBe(t *testing.T) {
 	for n := range 2000 {
 		m := makeMonth(r)
 		instances := plan.Instances(m.items, m.versions, oct26, dec26)
-		rec := plan.Match(instances, m.movements)
+		rec := plan.Match(instances, m.movements, nil, nil)
 		paidBy := map[int][]store.PlanMovement{}
 		for i, k := range rec.Paid {
 			if k != plan.Unpaid {
@@ -228,7 +228,7 @@ func TestMatchOnlyRecognisesWhatTheItemCouldBe(t *testing.T) {
 		// The order the movements arrive in changes nothing.
 		shuffled := slices.Clone(m.movements)
 		r.Shuffle(len(shuffled), func(i, j int) { shuffled[i], shuffled[j] = shuffled[j], shuffled[i] })
-		again := plan.Match(instances, shuffled)
+		again := plan.Match(instances, shuffled, nil, nil)
 		paid := map[uuid.UUID]int{}
 		for i, k := range rec.Paid {
 			paid[m.movements[i].ID] = k
@@ -288,7 +288,7 @@ func TestTwoInstancesTakeTheMovementsClosestToTheirDayFirst(t *testing.T) {
 	// The 12th is a day from the 13th and two from the 10th, so it goes to
 	// the 13th, and the 16th, the last one free, to the 10th.
 	movements := []store.PlanMovement{line(16), line(12)}
-	rec := plan.Match(instances, movements)
+	rec := plan.Match(instances, movements, nil, nil)
 	got := []int{rec.Paid[0], rec.Paid[1]}
 	if instances[got[0]].Item.ID != first.ID || instances[got[1]].Item.ID != second.ID {
 		t.Errorf("the 16th paid %v and the 12th %v", instances[got[0]].Due(), instances[got[1]].Due())
@@ -327,13 +327,191 @@ func TestEachChargeOnTheSameCardAndDayKeepsItsOwnTax(t *testing.T) {
 			proteccion.ID: items[1].ID, proteccionTax.ID: items[1].ID}
 		movements := []store.PlanMovement{seguro, seguroTax, proteccion, proteccionTax}
 		for range 2 {
-			rec := plan.Match(instances, movements)
+			rec := plan.Match(instances, movements, nil, nil)
 			for i, k := range rec.Paid {
 				if k == plan.Unpaid || instances[k].Item.ID != want[movements[i].ID] {
 					t.Errorf("%s: %s %s went with %v", tt.what, movements[i].Description, -movements[i].Amount, k)
 				}
 			}
 			slices.Reverse(movements)
+		}
+	}
+}
+
+func TestWhatTheOwnerSaysComesFirstAndEveryMovementStillCountsOnce(t *testing.T) {
+	r := rand.New(rand.NewPCG(11, 2026))
+	for n := range 2000 {
+		m := makeMonth(r)
+		instances := plan.Instances(m.items, m.versions, oct26, dec26)
+		// What the owner said: any movement, any month of any item, even
+		// ones the plan would never have matched, and noted purchases a
+		// line or two could be. Some name the same movement twice.
+		var links []plan.Link
+		pick := func() uuid.UUID {
+			if len(m.movements) == 0 || r.IntN(8) == 0 {
+				return uuid.New()
+			}
+			return m.movements[r.IntN(len(m.movements))].ID
+		}
+		for range r.IntN(8) {
+			if len(instances) == 0 {
+				break
+			}
+			inst := instances[r.IntN(len(instances))]
+			l := plan.Link{ID: uuid.New(), ItemID: inst.Item.ID, Month: inst.Month,
+				Decision: []plan.Decision{plan.DecisionAssign, plan.DecisionReject, plan.DecisionPaid}[r.IntN(3)]}
+			switch {
+			case l.Decision == plan.DecisionPaid:
+			case r.IntN(3) == 0:
+				l.Lines = []uuid.UUID{pick(), pick()}
+			default:
+				l.Movement = pick()
+			}
+			links = append(links, l)
+		}
+		var transfers []store.PlanMovement
+		for range r.IntN(3) {
+			transfers = append(transfers, store.PlanMovement{ID: uuid.New(), Kind: store.KindTransfer,
+				BookedOn:    civil.Date{Year: 2026, Month: time.October, Day: 1}.AddDays(r.IntN(92)),
+				Amount:      -money.Cents(1 + r.IntN(100000)),
+				Description: texts[r.IntN(len(texts))]})
+		}
+		rec := plan.Match(instances, m.movements, links, transfers)
+
+		of := func(l plan.Link) int {
+			return slices.IndexFunc(instances, func(i plan.Instance) bool { return i.Item.ID == l.ItemID && i.Month == l.Month })
+		}
+		// near reports whether mv is booked within a month of m.
+		near := func(mv store.PlanMovement, m plan.Month) bool {
+			d := plan.MonthOf(mv.BookedOn).Sub(m)
+			return d >= -1 && d <= 1
+		}
+		// refused reports whether the owner said movement id is not instance
+		// k after they said link l, or at all when it is one of the lines the
+		// noted purchase of l could be.
+		refused := func(l plan.Link, k int, id uuid.UUID) bool {
+			said := links
+			if l.Movement == id {
+				said = links[slices.IndexFunc(links, func(o plan.Link) bool { return o.ID == l.ID })+1:]
+			}
+			return slices.ContainsFunc(said, func(o plan.Link) bool {
+				return o.Decision == plan.DecisionReject && of(o) == k && (o.Movement == id || slices.Contains(o.Lines, id))
+			})
+		}
+		type pair struct {
+			inst int
+			mov  uuid.UUID
+		}
+		said := map[uuid.UUID]plan.Link{}
+		rejected := map[pair]bool{}
+		for _, l := range links {
+			said[l.ID] = l
+			if l.Decision == plan.DecisionReject {
+				for _, id := range append([]uuid.UUID{l.Movement}, l.Lines...) {
+					rejected[pair{of(l), id}] = true
+				}
+			}
+		}
+		for i, mv := range m.movements {
+			k := rec.Paid[i]
+			if k == plan.Unpaid {
+				continue
+			}
+			inst := instances[k]
+			if id := rec.Assigned[i]; id != uuid.Nil {
+				// Paid as the owner said, by a movement that can pay it.
+				l := said[id]
+				if l.Decision != plan.DecisionAssign || of(l) != k ||
+					(l.Movement != mv.ID && !slices.Contains(l.Lines, mv.ID)) {
+					t.Fatalf("#%d: %s paid %s %s by link %+v", n, mv.Description, inst.Item.Name, inst.Month, l)
+				}
+				if inst.Item.Kind == plan.KindIncome && mv.Kind != store.KindIncome ||
+					inst.Item.Kind == plan.KindFixed && !slices.Contains(store.SpendKinds, mv.Kind) {
+					t.Fatalf("#%d: a %s paid a %s", n, mv.Kind, inst.Item.Kind)
+				}
+				// Booked near its month, and not refused for it afterwards,
+				// nor at all when it is one of the lines a purchase could be.
+				if !near(mv, l.Month) {
+					t.Fatalf("#%d: %s booked on %s paid %s", n, mv.Description, mv.BookedOn, l.Month)
+				}
+				if refused(l, k, mv.ID) {
+					t.Fatalf("#%d: %s paid %s %s after the owner said it is not it", n, mv.Description, inst.Item.Name, inst.Month)
+				}
+				continue
+			}
+			if rejected[pair{k, mv.ID}] {
+				t.Fatalf("#%d: %s was recognised as %s %s, which the owner said it is not", n, mv.Description, inst.Item.Name, inst.Month)
+			}
+		}
+		// The earliest link naming a movement it can pay holds it, unless a
+		// noted purchase said earlier took it, it is booked too far from the
+		// link's month, or the owner said afterwards that it is not it.
+		holder := map[uuid.UUID]bool{}
+		for _, l := range links {
+			k := of(l)
+			if l.Decision != plan.DecisionAssign || k < 0 {
+				continue
+			}
+			for _, id := range l.Lines {
+				holder[id] = true
+			}
+			if l.Movement == uuid.Nil || holder[l.Movement] {
+				continue
+			}
+			holder[l.Movement] = true
+			i := slices.IndexFunc(m.movements, func(mv store.PlanMovement) bool { return mv.ID == l.Movement })
+			if i < 0 {
+				continue
+			}
+			mv, inst := m.movements[i], instances[k]
+			if !near(mv, l.Month) || refused(l, k, mv.ID) {
+				continue
+			}
+			if inst.Item.Kind == plan.KindIncome && mv.Kind == store.KindIncome ||
+				inst.Item.Kind == plan.KindFixed && slices.Contains(store.SpendKinds, mv.Kind) {
+				if rec.Assigned[i] != l.ID {
+					t.Fatalf("#%d: %s went to link %s, not %s, said first", n, mv.Description, rec.Assigned[i], l.ID)
+				}
+			}
+		}
+		for k, inst := range instances {
+			marked := slices.ContainsFunc(links, func(l plan.Link) bool { return l.Decision == plan.DecisionPaid && of(l) == k })
+			if (rec.MarkedPaid[k] != uuid.Nil) != marked {
+				t.Fatalf("#%d: %s %s marked paid %s, said %v", n, inst.Item.Name, inst.Month, rec.MarkedPaid[k], marked)
+			}
+			if len(rec.Candidates[k]) > 3 {
+				t.Fatalf("#%d: %d movements offered", n, len(rec.Candidates[k]))
+			}
+			for _, i := range rec.Candidates[k] {
+				if rec.Paid[i] != plan.Unpaid || rejected[pair{k, m.movements[i].ID}] {
+					t.Fatalf("#%d: %s offered for %s, which it cannot be", n, m.movements[i].Description, inst.Item.Name)
+				}
+			}
+			if h := rec.Hints[k]; h != nil && (inst.Item.Kind != plan.KindFixed || inst.Item.MatchText == "" ||
+				plan.MonthOf(h.Movement.BookedOn) != inst.Month || !hasText(h.Movement, inst)) {
+				t.Fatalf("#%d: %s %s pointed at %+v", n, inst.Item.Name, inst.Month, h)
+			}
+		}
+
+		// However the owner corrected it, every movement of the month counts
+		// once.
+		p := plan.Compute(m.input(rec))
+		var spending money.Cents
+		for _, mv := range m.movements {
+			if plan.MonthOf(mv.BookedOn) == nov26 && slices.Contains(store.SpendKinds, mv.Kind) {
+				spending -= mv.Amount
+			}
+		}
+		if p.Spending != spending || p.Summary.Spent+p.Charged != spending {
+			t.Fatalf("#%d: spent %s and charged %s of %s, want %s", n, p.Summary.Spent, p.Charged, p.Spending, spending)
+		}
+		for _, l := range p.Fixed {
+			if l.MarkedPaid != uuid.Nil && l.Status != plan.StatusOut {
+				t.Fatalf("#%d: a payment marked paid is %s", n, l.Status)
+			}
+			if l.Paid == nil && l.Committed != l.Planned() {
+				t.Fatalf("#%d: a payment no movement paid commits %s of %s", n, l.Committed, l.Planned())
+			}
 		}
 	}
 }

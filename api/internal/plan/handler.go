@@ -12,6 +12,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/httpx"
 	"github.com/JuanKsPty/chenchen/api/internal/identity"
 	"github.com/JuanKsPty/chenchen/api/internal/money"
+	"github.com/JuanKsPty/chenchen/api/internal/movements"
 )
 
 // Handler serves /api/plan.
@@ -29,6 +30,8 @@ func (h *Handler) Routes() http.Handler {
 	r.Delete("/items/{id}", h.deleteItem)
 	r.Put("/caps/{category_id}", h.saveCap)
 	r.Delete("/caps/{category_id}", h.deleteCap)
+	r.Post("/links", h.link)
+	r.Delete("/links/{id}", h.unlink)
 	return r
 }
 
@@ -211,6 +214,61 @@ func (h *Handler) deleteCap(w http.ResponseWriter, r *http.Request) {
 	httpx.NoContent(w)
 }
 
+// linkRequest is what the owner says about one month of an item: that a
+// movement paid it, that one did not, or that it was paid outside. The id is
+// the caller's, so sending it again is safe.
+type linkRequest struct {
+	ID         uuid.UUID  `json:"id"`
+	ItemID     uuid.UUID  `json:"item_id"`
+	Month      string     `json:"month"`
+	MovementID *uuid.UUID `json:"movement_id"`
+	Decision   string     `json:"decision"`
+}
+
+// link answers POST /api/plan/links: 201 with the link it records, or 200
+// with the one already there when it was said before, by its id or about the
+// same movement and month.
+func (h *Handler) link(w http.ResponseWriter, r *http.Request) {
+	var body linkRequest
+	if err := httpx.Decode(w, r, &body); err != nil {
+		httpx.Fail(w, r, err)
+		return
+	}
+	m, err := ParseMonth(body.Month)
+	if err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	in := LinkInput{ID: body.ID, ItemID: body.ItemID, Month: m, Decision: Decision(body.Decision)}
+	if body.MovementID != nil {
+		in.MovementID = *body.MovementID
+	}
+	link, created, err := h.svc.Link(r.Context(), identity.MustFromContext(r.Context()), in)
+	if err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	httpx.JSON(w, r, status, NewLinkView(link))
+}
+
+// unlink answers DELETE /api/plan/links/{id}: what the link said is undone.
+func (h *Handler) unlink(w http.ResponseWriter, r *http.Request) {
+	id, err := uuid.Parse(chi.URLParam(r, "id"))
+	if err != nil {
+		httpx.Fail(w, r, translate(ErrLinkNotFound))
+		return
+	}
+	if err := h.svc.Unlink(r.Context(), identity.MustFromContext(r.Context()), id); err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	httpx.NoContent(w)
+}
+
 // monthAndScope reads ?month=YYYY-MM&scope=from|only, which a removal needs
 // both of.
 func monthAndScope(r *http.Request) (Month, Scope, error) {
@@ -272,8 +330,8 @@ func translateWith(err error, unread map[string]string) error {
 var notMoreThanZero = map[string]error{"amount": ErrAmount, "target": ErrTarget}
 
 // translate maps the plan's errors to HTTP responses. Something of another
-// owner's (an item, a category, an account) is not found, never forbidden,
-// so an id cannot be probed.
+// owner's (an item, a link, a movement, a category, an account) is not
+// found, never forbidden, so an id cannot be probed.
 func translate(err error) error {
 	if problems := FieldProblems(err); len(problems) > 0 {
 		return httpx.Invalid(problems).WithCause(err)
@@ -294,6 +352,17 @@ func translate(err error) error {
 			"Lo que ya está en tu plan no cambia de tipo; agrégalo como algo nuevo.").WithCause(err)
 	case errors.Is(err, ErrAccountHasGoal):
 		return httpx.Conflict("account_has_goal", "Esa cuenta ya tiene una meta.").WithCause(err)
+	case errors.Is(err, ErrLinkNotFound):
+		return httpx.NotFound("plan_link_not_found", "Eso ya se había deshecho.").WithCause(err)
+	case errors.Is(err, ErrLinkIDTaken):
+		return httpx.Conflict("plan_link_id_taken", "No pudimos guardarlo así. Intenta otra vez.").WithCause(err)
+	case errors.Is(err, ErrMovementInPlan):
+		return httpx.Conflict("movement_in_plan", "Ese movimiento ya está en tu plan.").WithCause(err)
+	case errors.Is(err, ErrMovementTooFar):
+		return httpx.Unprocessable("movement_too_far",
+			"Elige un movimiento de ese mes o de uno de al lado.").WithCause(err)
+	case errors.Is(err, movements.ErrNotFound):
+		return httpx.NotFound("entry_not_found", "El movimiento no existe.").WithCause(err)
 	case errors.Is(err, accounts.ErrNotFound):
 		return httpx.NotFound("account_not_found", "La cuenta no existe.").WithCause(err)
 	case errors.Is(err, categories.ErrNotFound), errors.Is(err, categories.ErrNotOwned):

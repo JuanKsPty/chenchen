@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/google/uuid"
@@ -324,7 +325,8 @@ func FoldRuleText(s string) string { return foldRuleText(s) }
 // planKinds are the effective kinds the plan reads: what counts as spending,
 // which it splits into what paid a planned item and what was free, and what
 // counts as income, which says whether a paycheck arrived. A transfer or a
-// trade is never either, so the plan never sees one.
+// trade is never either, so the plan never counts one; PlanTransfersOut reads
+// transfers apart, only to point at a payment the bank called one.
 var planKinds = append(append([]string{}, SpendKinds...), IncomeKinds...)
 
 // PlanMovement is a movement as the plan reads it: what Gastos and the
@@ -354,13 +356,47 @@ func (q *Queries) PlanMovements(ctx context.Context, userID uuid.UUID, from, to 
 	if err != nil {
 		return nil, err
 	}
+	return q.planMovements(ctx, "store.PlanMovements", where, args)
+}
+
+// PlanMovementsByID lists those of the given movements that the plan reads,
+// oldest first: what an owner's link names beyond the months PlanMovements
+// read, such as a payment for next month made in the month after it. A
+// movement that is not spending or income, or not the user's, is left out,
+// as PlanMovements would leave it.
+func (q *Queries) PlanMovementsByID(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) ([]PlanMovement, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	where, args, err := EntryFilter{UserID: userID, Kinds: planKinds}.where()
+	if err != nil {
+		return nil, err
+	}
+	args = append(args, ids)
+	return q.planMovements(ctx, "store.PlanMovementsByID", fmt.Sprintf("%s AND e.id = ANY($%d)", where, len(args)), args)
+}
+
+// PlanTransfersOut lists the transfers out of the user's accounts booked from
+// from to to, both inclusive, oldest first. They are never spending, and the
+// plan never counts them: it only reads them to tell the owner when a payment
+// it is waiting for went out as one, which the bank sometimes calls a
+// transfer to another person.
+func (q *Queries) PlanTransfersOut(ctx context.Context, userID uuid.UUID, from, to civil.Date) ([]PlanMovement, error) {
+	where, args, err := EntryFilter{UserID: userID, From: from, To: to, Kinds: []string{KindTransfer}}.where()
+	if err != nil {
+		return nil, err
+	}
+	return q.planMovements(ctx, "store.PlanTransfersOut", where+" AND e.amount_cents < 0", args)
+}
+
+func (q *Queries) planMovements(ctx context.Context, op, where string, args []any) ([]PlanMovement, error) {
 	rows, err := q.q.Query(ctx, `
 		SELECT e.id, e.origin, e.account_id, e.booked_on, e.amount_cents, COALESCE(e.user_kind, e.kind)::text,
 		       e.category_id, e.bank_category, e.description
 		FROM `+movementSource+` WHERE `+where+`
 		ORDER BY e.booked_on, e.id`, args...)
 	if err != nil {
-		return nil, wrap("store.PlanMovements", err)
+		return nil, wrap(op, err)
 	}
 	defer rows.Close()
 	var out []PlanMovement
@@ -369,10 +405,233 @@ func (q *Queries) PlanMovements(ctx context.Context, userID uuid.UUID, from, to 
 		var amount int64
 		if err := rows.Scan(&m.ID, &m.Origin, &m.AccountID, &m.BookedOn, &amount, &m.Kind,
 			&m.CategoryID, &m.BankCategory, &m.Description); err != nil {
-			return nil, wrap("store.PlanMovements", err)
+			return nil, wrap(op, err)
 		}
 		m.Amount = money.Cents(amount)
 		out = append(out, m)
 	}
-	return out, wrap("store.PlanMovements", rows.Err())
+	return out, wrap(op, rows.Err())
+}
+
+// What the owner can say about one month of an item (plan_links.decision):
+// this movement paid it, this one did not, or it was paid where the app
+// cannot see.
+const (
+	PlanAssign = "assign"
+	PlanReject = "reject"
+	PlanPaid   = "paid"
+)
+
+// Constraint names of plan_links a caller may need to distinguish.
+const (
+	PlanLinksPKey = "plan_links_pkey"
+	// PlanLinkEntryAssigned and PlanLinkCaptureAssigned say a movement
+	// already pays another item.
+	PlanLinkEntryAssigned   = "plan_links_entry_assigned_idx"
+	PlanLinkCaptureAssigned = "plan_links_capture_assigned_idx"
+)
+
+// PlanLink is where the owner corrected how one month of an item was
+// recognised. EntryID or CaptureID is the movement it names, as the owner
+// named it; neither for PlanPaid.
+type PlanLink struct {
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	ItemID   uuid.UUID
+	Month    civil.Date
+	Decision string
+	// EntryID is a printed line, CaptureID a purchase the owner noted.
+	EntryID   *uuid.UUID
+	CaptureID *uuid.UUID
+	CreatedAt time.Time
+
+	// What a noted purchase the link names is now, filled by PlanLinksBetween
+	// only: its state (Capture*), its line once linked to one, and the lines
+	// it could be once printed, oldest first.
+	CaptureState string
+	CaptureLine  *uuid.UUID
+	CaptureLines []uuid.UUID
+}
+
+// Movement is the id of the movement the link names, or uuid.Nil.
+func (l PlanLink) Movement() uuid.UUID {
+	switch {
+	case l.EntryID != nil:
+		return *l.EntryID
+	case l.CaptureID != nil:
+		return *l.CaptureID
+	default:
+		return uuid.Nil
+	}
+}
+
+const planLinkColumns = `id, user_id, item_id, month, decision, entry_id, capture_id, created_at`
+
+func scanPlanLink(s scanner, extra ...any) (PlanLink, error) {
+	var l PlanLink
+	err := s.Scan(append([]any{&l.ID, &l.UserID, &l.ItemID, &l.Month, &l.Decision, &l.EntryID, &l.CaptureID,
+		&l.CreatedAt}, extra...)...)
+	return l, err
+}
+
+// InsertPlanLink records what the owner said about one month of an item. An
+// id already taken, by this owner or another, is a ConstraintError on
+// PlanLinksPKey; a movement that already pays another item, one on
+// PlanLinkEntryAssigned or PlanLinkCaptureAssigned. A movement or an item of
+// someone else's is refused by the foreign keys.
+func (q *Queries) InsertPlanLink(ctx context.Context, l PlanLink) (PlanLink, error) {
+	created, err := scanPlanLink(q.q.QueryRow(ctx, `
+		INSERT INTO plan_links (id, user_id, item_id, month, decision, entry_id, capture_id)
+		VALUES ($1, $2, $3, $4, $5, $6, $7)
+		RETURNING `+planLinkColumns,
+		l.ID, l.UserID, l.ItemID, l.Month, l.Decision, l.EntryID, l.CaptureID))
+	return created, wrap("store.InsertPlanLink", err)
+}
+
+// PlanLinkByID returns one of the user's links. One that belongs to someone
+// else is ErrNotFound, like one that does not exist.
+func (q *Queries) PlanLinkByID(ctx context.Context, userID, id uuid.UUID) (PlanLink, error) {
+	l, err := scanPlanLink(q.q.QueryRow(ctx,
+		`SELECT `+planLinkColumns+` FROM plan_links WHERE id = $1 AND user_id = $2`, id, userID))
+	return l, wrap("store.PlanLinkByID", err)
+}
+
+// PlanLinksOnPair lists, earliest said first, what the user said about
+// movement for month of an item: that it paid it or that it did not. A link
+// counts when it names movement itself or, for a line, a noted purchase that
+// is that line, either linked to it or printed with it among the lines it
+// could be. The plan shows such a purchase as its line, so what the owner
+// says about the line is said about the purchase.
+func (q *Queries) PlanLinksOnPair(ctx context.Context, userID, itemID uuid.UUID, month civil.Date, movement uuid.UUID) ([]PlanLink, error) {
+	rows, err := q.q.Query(ctx, `
+		SELECT `+planLinkColumns+` FROM plan_links
+		WHERE user_id = $1 AND item_id = $2 AND month = $3 AND decision IN ('assign', 'reject')
+		  AND (entry_id = $4 OR capture_id = $4
+		       OR capture_id IN (SELECT id FROM captures WHERE user_id = $1 AND entry_id = $4)
+		       OR capture_id IN (SELECT capture_id FROM capture_candidates WHERE user_id = $1 AND entry_id = $4))
+		ORDER BY created_at, id`, userID, itemID, month, movement)
+	if err != nil {
+		return nil, wrap("store.PlanLinksOnPair", err)
+	}
+	defer rows.Close()
+	var out []PlanLink
+	for rows.Next() {
+		l, err := scanPlanLink(rows)
+		if err != nil {
+			return nil, wrap("store.PlanLinksOnPair", err)
+		}
+		out = append(out, l)
+	}
+	return out, wrap("store.PlanLinksOnPair", rows.Err())
+}
+
+// PlanLinkPaidOutside returns where the user said month of an item was paid
+// where the app cannot see; ErrNotFound when they did not.
+func (q *Queries) PlanLinkPaidOutside(ctx context.Context, userID, itemID uuid.UUID, month civil.Date) (PlanLink, error) {
+	l, err := scanPlanLink(q.q.QueryRow(ctx, `
+		SELECT `+planLinkColumns+` FROM plan_links
+		WHERE user_id = $1 AND item_id = $2 AND month = $3 AND decision = 'paid'`, userID, itemID, month))
+	return l, wrap("store.PlanLinkPaidOutside", err)
+}
+
+// PlanLinkAssigning returns the user's earliest link saying movement paid an
+// item: the line or noted purchase itself, or, for a line, the noted purchase
+// linked to it, which is the same purchase. A printed purchase that could be
+// the line is not counted: it could as well be another. ErrNotFound when none
+// does.
+func (q *Queries) PlanLinkAssigning(ctx context.Context, userID, movement uuid.UUID) (PlanLink, error) {
+	l, err := scanPlanLink(q.q.QueryRow(ctx, `
+		SELECT `+planLinkColumns+` FROM plan_links
+		WHERE user_id = $1 AND decision = 'assign'
+		  AND (entry_id = $2 OR capture_id = $2
+		       OR capture_id IN (SELECT id FROM captures WHERE user_id = $1 AND entry_id = $2))
+		ORDER BY created_at, id LIMIT 1`, userID, movement))
+	return l, wrap("store.PlanLinkAssigning", err)
+}
+
+// DeletePlanLink forgets one of the user's links.
+func (q *Queries) DeletePlanLink(ctx context.Context, userID, id uuid.UUID) error {
+	return q.execOne(ctx, "store.DeletePlanLink",
+		`DELETE FROM plan_links WHERE id = $1 AND user_id = $2`, id, userID)
+}
+
+// PlanLinksBetween lists the user's links about the months from from to to,
+// both first days of months, earliest said first, each with what the noted
+// purchase it names is now (capture_states), so the link can follow it to its
+// line. The candidate lines of a printed purchase come oldest first, the
+// order CaptureCandidates gives.
+func (q *Queries) PlanLinksBetween(ctx context.Context, userID uuid.UUID, from, to civil.Date) ([]PlanLink, error) {
+	rows, err := q.q.Query(ctx, `
+		SELECT `+prefixed("l.", planLinkColumns)+`, COALESCE(c.state, ''), c.entry_id,
+		       COALESCE((SELECT array_agg(e.id ORDER BY e.booked_on, e.id)
+		                   FROM capture_candidates k JOIN entries e ON e.id = k.entry_id
+		                  WHERE k.capture_id = l.capture_id AND c.state = 'printed'), '{}')
+		FROM plan_links l LEFT JOIN capture_states c ON c.id = l.capture_id AND c.user_id = l.user_id
+		WHERE l.user_id = $1 AND l.month BETWEEN $2 AND $3
+		ORDER BY l.created_at, l.id`, userID, from, to)
+	if err != nil {
+		return nil, wrap("store.PlanLinksBetween", err)
+	}
+	defer rows.Close()
+	var out []PlanLink
+	for rows.Next() {
+		var state string
+		var line *uuid.UUID
+		var lines []uuid.UUID
+		l, err := scanPlanLink(rows, &state, &line, &lines)
+		if err != nil {
+			return nil, wrap("store.PlanLinksBetween", err)
+		}
+		l.CaptureState, l.CaptureLine, l.CaptureLines = state, line, lines
+		out = append(out, l)
+	}
+	return out, wrap("store.PlanLinksBetween", rows.Err())
+}
+
+// PlanCard is a credit card's latest statement, as the plan shows it beside
+// the month: when it closed, when it is due and its minimum payment, and what
+// reached the card as payments since it closed.
+type PlanCard struct {
+	AccountID      uuid.UUID
+	ClosingOn      civil.Date
+	DueOn          civil.Date
+	MinimumPayment *money.Cents
+	// PaidSince is the sum of the money that came into the card as transfers
+	// booked after ClosingOn: what paid it.
+	PaidSince money.Cents
+}
+
+// PlanCards lists the user's credit cards that have a statement with a due
+// date, by that date: for each, the latest checkpoint that carries one, the
+// statement Cuentas shows (its as_of is the day the statement closed). A card
+// someone else pays is left out: its statement is not the owner's to pay.
+func (q *Queries) PlanCards(ctx context.Context, userID uuid.UUID) ([]PlanCard, error) {
+	rows, err := q.q.Query(ctx, `
+		SELECT a.id, s.as_of, s.due_on, s.minimum_payment_cents,
+		       COALESCE((SELECT sum(e.amount_cents) FROM entries e
+		                  WHERE e.user_id = a.user_id AND e.account_id = a.id AND e.amount_cents > 0
+		                    AND COALESCE(e.user_kind, e.kind) = 'transfer' AND e.booked_on > s.as_of), 0)
+		FROM accounts a
+		CROSS JOIN LATERAL (
+		    SELECT c.as_of, c.due_on, c.minimum_payment_cents FROM balance_checkpoints c
+		     WHERE c.account_id = a.id AND c.user_id = a.user_id AND c.due_on IS NOT NULL
+		     ORDER BY c.as_of DESC, c.created_at DESC LIMIT 1) s
+		WHERE a.user_id = $1 AND a.type = 'credit_card' AND NOT a.paid_by_other
+		ORDER BY s.due_on, a.id`, userID)
+	if err != nil {
+		return nil, wrap("store.PlanCards", err)
+	}
+	defer rows.Close()
+	var out []PlanCard
+	for rows.Next() {
+		var c PlanCard
+		var minimum *int64
+		var paid int64
+		if err := rows.Scan(&c.AccountID, &c.ClosingOn, &c.DueOn, &minimum, &paid); err != nil {
+			return nil, wrap("store.PlanCards", err)
+		}
+		c.MinimumPayment, c.PaidSince = centsPtr(minimum), money.Cents(paid)
+		out = append(out, c)
+	}
+	return out, wrap("store.PlanCards", rows.Err())
 }
