@@ -3,8 +3,9 @@
  *
  *   planKey(month?)        ['reports', 'plan', month ?? 'current']
  *   usePlan(month?)        GET /api/plan. The current month is asked for without a
- *                          month, so the plan page, Gastos' card and Inicio share one
- *                          entry, and the server (Panama time) says which month that is
+ *                          month, so the plan page, Gastos' card and Inicio (its glance
+ *                          and its notices) share one entry, and the server (Panama
+ *                          time) says which month that is
  *   useSavePlanItem()({id, input}) · useDeletePlanItem()({id, month, scope})
  *   useSavePlanCap()({categoryId, input}) · useDeletePlanCap()({categoryId, month, scope})
  *   usePlanLinks(about, onDone, onFailure)

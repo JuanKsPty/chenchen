@@ -25,6 +25,14 @@
  *     importarlo."), whose "Revisar" calls onReviewUploads. It is the first of the
  *     pending ones: what it holds changes balances. Inicio shows it before the first
  *     import too (HomePage), since the first file of an account is imported there.
+ *   - last, at most two pending notices from this month's plan (plan/planNotices):
+ *     "Lo libre de noviembre ya se usó", "Alimentación va por encima de su tope",
+ *     "Queda poco libre en noviembre", "2 pagos salen pronto", each to the plan. Each
+ *     appears when something rose past what this device last saw (plan/seen), and
+ *     opening the plan quiets it. Only once the month has a plan, and none with no
+ *     accounts: Inicio's empty state is about the first import, and the plan cannot
+ *     see a payment go out before it, so neither the plan nor the categories are
+ *     asked for there.
  * Renders nothing when there is nothing to say. Counts only, no amounts, on the
  * pending ones: Inicio shows at most five figures before its first list.
  */
@@ -33,6 +41,7 @@ import type { ReactNode } from 'react'
 
 import type { Account } from '@/api/types'
 import { Amount, Notice } from '@/components/kit'
+import { usePlanNotices } from '@/components/plan/planNotices'
 import {
   accountRowTitle,
   accountStatus,
@@ -73,7 +82,7 @@ export function HomeNotices({
   // says nothing either; the rest of Inicio does not wait on it.
   const fromClaude = uploads.data?.uploads.length ?? 0
 
-  const items: { key: string; notice: ReactNode }[] = [
+  const items: Item[] = [
     ...mismatches.map(({ account, status }) => ({
       key: account.id,
       notice: (
@@ -183,6 +192,30 @@ export function HomeNotices({
     })
   }
 
+  if (accounts.length === 0) return <NoticeList items={items} className={className} />
+  return <WithPlanNotices items={items} accounts={accounts} className={className} />
+}
+
+type Item = { key: string; notice: ReactNode }
+
+/**
+ * The notices above, then the plan's. A component of its own so that the plan and
+ * the categories are asked for only when it mounts, never on Inicio's empty state.
+ */
+function WithPlanNotices({
+  items,
+  accounts,
+  className,
+}: {
+  items: Item[]
+  accounts: Account[]
+  className?: string
+}) {
+  const planNotices = usePlanNotices(accounts)
+  return <NoticeList items={[...items, ...planNotices]} className={className} />
+}
+
+function NoticeList({ items, className }: { items: Item[]; className?: string }) {
   if (items.length === 0) return null
 
   return (

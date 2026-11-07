@@ -34,6 +34,10 @@
  * With nothing planned yet: "Arma tu plan del mes", whose "Armar mi plan" opens the
  * income (so does ?armar=1, Gastos' invite). The sections appear once their data
  * does, so the page, not the shell, scrolls to #topes, #pagos or #ahorro.
+ *
+ * Opening this month's plan marks what it has to say (near or past what is free or a
+ * cap, payments due soon) as seen on this device (plan/seen), so Inicio's notices
+ * about it wait until something rises again.
  */
 import { ArrowLeftRightIcon, FileUpIcon } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
@@ -58,6 +62,7 @@ import { IncomeSheet } from '@/components/plan/IncomeSheet'
 import { planMonth } from '@/components/plan/month'
 import { PlanHero } from '@/components/plan/PlanHero'
 import { SavingsCard } from '@/components/plan/SavingsCard'
+import { markPlanSeen } from '@/components/plan/seen'
 import { usePlan } from '@/components/plan/usePlan'
 import { monthWord } from '@/components/plan/words'
 import { problemMessage } from '@/components/settings/problem'
@@ -88,6 +93,11 @@ export function PlanPage() {
   const [params, setParams] = useSearchParams()
   const { month, current, last } = planMonth(parseSpendingMonth(params))
   const plan = usePlan(current ? undefined : month)
+  const shown = plan.data
+  // Seeing this month's plan is seeing all Inicio's notices would say about it.
+  useEffect(() => {
+    if (shown?.state === 'current') markPlanSeen(shown)
+  }, [shown])
   const accounts = useAccounts()
   const categories = useCategories()
   const transfers = useTransferSuggestions()
