@@ -148,6 +148,14 @@ que suma Gastos, y nada de eso se guarda:
   servidor, en hora de Panamá.
 - **Cada valor vale por tramos de meses.** Un mes pasado conserva el plan que tuvo, y una
   edición vale desde un mes o solo para ese mes, hasta 24 meses adelante.
+- **El historial sugiere qué planear** (`GET /api/plan/suggestions`): lo que entró o salió
+  una vez al mes, con el mismo monto (±10 %), en al menos dos de los últimos tres meses
+  cerrados y sin haber dejado de llegar, y lo que apartas cada mes en una cuenta de ahorro
+  o de inversión. Un sueldo de quincena son dos sugerencias, y el impuesto de un cargo se
+  suma a él. Nunca sugiere transferencias, el pago de la tarjeta ni lo que el plan ya
+  tiene, y un pago por Yappy a una persona se llama «Yappy de cada mes», sin su nombre.
+  Lo que descartas (`PUT /api/plan/dismissals`) no vuelve hasta que lo deshaces con
+  `DELETE`.
 
 Como todo lo demás, el plan nunca mueve un saldo ([ADR 0005](docs/adr/0005-plan-del-mes.md)).
 

@@ -165,6 +165,65 @@ Al leer, primero se aplican los vínculos y después el plan reconoce el resto s
     transferencia entre tus cuentas» en el movimiento. El plan solo la lee: una
     transferencia nunca cuenta como gasto.
 
+### Sugerencias: lo que se repite en el historial
+
+`GET /api/plan/suggestions` propone los sueldos, los pagos fijos y el ahorro que el
+historial muestra y el plan aún no tiene. Nada se planea hasta que la persona lo acepta.
+
+- **Se calculan cada vez que se piden,** con una función pura, sobre las líneas impresas
+  de los últimos cuatro meses cerrados y del actual. Las compras anotadas no cuentan: su
+  texto lo escribe la persona. Solo se guarda lo que la persona descarta
+  (`plan_dismissals`), y descartar se deshace.
+- **Las líneas se agrupan por el texto que sugeriría una regla:** el comercio o la persona
+  que nombran. Así el plan reconoce el próximo con ese mismo texto. Si la línea no lo
+  contiene, se agrupan por la descripción entera. Lo que entra y lo que sale van aparte.
+- **Nunca se sugiere** una transferencia, una compraventa, un reembolso ni una línea que
+  puede ser la mitad de una transferencia sin confirmar, como el pago de la tarjeta desde
+  la cuenta corriente.
+- **Es de cada mes** si en la mayoría de los meses apareció una sola vez, en al menos dos
+  de los últimos tres meses cerrados, y en el último o ya en este. Un cargo que dejó de
+  salir no se sugiere. Un mes queda cerrado para un pago cuando llegó su línea o cuando ya
+  no puede llegar: el día 1, la quincena de fin de mes que a veces llega el 2 todavía
+  viene en camino, y no falta. Un pago que casi siempre cae al principio del mes cuenta
+  para el mes en que se cargó: el del 4 que una vez se cargó el 31 sigue siendo del 4.
+- **Dos veces al mes, como un sueldo de quincena, son dos sugerencias,** cada una con su
+  día, mientras las dos siguen llegando. Se separan por el día del mes en que caen, leído
+  en círculo, y no por su lugar dentro del mes del calendario: son dos grupos de días a
+  medio mes uno del otro, cada uno a no más de cinco días de su día de siempre, que
+  llegaron juntos en al menos dos meses. Una línea lejos de los dos grupos, como un bono o
+  un reembolso del mismo empleador, se deja fuera, mientras sean menos de una de cada
+  cuatro. La quincena de fin de mes que se atrasa al 1, al 2 o al 3 del mes siguiente
+  sigue siendo la de fin de mes y cuenta para el mes que paga, así que un mes del
+  calendario con tres o cuatro líneas, o con una sola porque al estado le falta una, no
+  rompe la cuenta. La de mitad de mes es la primera y la de fin de mes, la segunda. Dos
+  cargos de un mismo comercio el mismo día también son dos, el primero y el segundo de
+  cada mes.
+- **Con el mismo monto:** los meses recientes ya cerrados no se apartan de la mediana más
+  de un 10 % (un dólar como mínimo), y la línea de este mes solo cuenta si tampoco. Se
+  sugiere el último monto y el día mediano. Si la quincena de fin de mes llegó tarde la
+  mayoría de las veces, su mediana cae pasado el fin de mes y se planea el último día,
+  nunca el 2.
+- **Un cargo de menos de un dólar,** en la misma cuenta y el mismo día que otro cada vez,
+  es su impuesto y se le suma: $3.50 + $0.18 son $3.68. Cualquier otro de menos de un
+  dólar no vale la pena planearlo.
+- **Lo que el plan ya tiene no se repite:** un grupo cuyo texto contiene el de un ítem del
+  mismo tipo, o al revés, o que tiene una línea que el plan ya reconoció este mes. De dos
+  quincenas, cada ítem toma la más cercana a su día y la otra se sigue sugiriendo.
+- **El ahorro** sale de lo que llegó a cada cuenta de ahorro o de inversión como
+  transferencia, neto de lo que salió. Si fue positivo en al menos dos de los últimos tres
+  meses, se sugiere el promedio en dólares enteros, salvo que el plan ya aparte en esa
+  cuenta. Los intereses y los dividendos no cuentan.
+- **Un pago por Yappy a una persona se llama «Yappy de cada mes»,** sin su nombre. El
+  texto con que se reconoce sí lo lleva, porque es lo que imprime el estado, y solo lo ve
+  su dueño. Una transferencia de banco a una persona se imprime igual que una a una
+  empresa, así que se llama por su texto, como cualquier otro pago.
+- **Descartar se recuerda por la clave de la sugerencia:** su texto, o la cuenta en el
+  ahorro. Una quincena lleva además `#1` si es la de mitad de mes o `#2` si es la de fin
+  de mes, solo mientras las dos siguen llegando, y descartar un pago también descarta las
+  dos quincenas en que se convierta.
+- **Se proponen hasta 20:** primero los ingresos, luego los pagos fijos y al final el
+  ahorro. Dentro de cada tipo van primero los vistos en más meses.
+
 ### Niveles sin regañar
 
 - **El servidor calcula los niveles,** para que la web y Claude digan lo mismo:
@@ -189,12 +248,12 @@ herramienta de Claude se llama solo "plan", porque ya existe `sync_plan`.
   - leer el plan del mes, con sus cuentas, niveles y quincenas, y las rutas para
     escribirlo (`/api/plan`);
   - los vínculos, con los candidatos, la pista de la transferencia y las tarjetas;
+  - las sugerencias sacadas del historial, y descartarlas;
   - este ADR.
 
   Todavía no hay pantalla: el plan se lee y se escribe solo por la API.
 - **Lo que falta llega después** y enmienda este ADR donde haga falta:
   - la pantalla bajo Gastos y la tarjeta de Inicio, con sus avisos;
-  - las sugerencias de pagos fijos e ingresos sacadas del historial, y descartarlas;
   - las compras planeadas, que hoy se rechazan, y el avance de las metas según la cuenta
     ligada;
   - que Claude lea y edite el plan.

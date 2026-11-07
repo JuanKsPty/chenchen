@@ -635,3 +635,96 @@ func (q *Queries) PlanCards(ctx context.Context, userID uuid.UUID) ([]PlanCard, 
 	}
 	return out, wrap("store.PlanCards", rows.Err())
 }
+
+// PlanDismissal is a suggestion the owner turned down, so it is not offered
+// again: a payment or an income by the key it was found by, a saving by
+// 'account:<uuid>'.
+type PlanDismissal struct {
+	Kind string
+	Key  string
+}
+
+// InsertPlanDismissal records that the owner turned a suggestion down.
+// Saying it again changes nothing, so a form that lost the answer can send it
+// again.
+func (q *Queries) InsertPlanDismissal(ctx context.Context, userID uuid.UUID, d PlanDismissal) error {
+	_, err := q.q.Exec(ctx, `
+		INSERT INTO plan_dismissals (user_id, kind, key) VALUES ($1, $2, $3)
+		ON CONFLICT DO NOTHING`, userID, d.Kind, d.Key)
+	return wrap("store.InsertPlanDismissal", err)
+}
+
+// DeletePlanDismissal forgets that the owner turned a suggestion down, which
+// is how they undo it. One that is not there is already forgotten, so undoing
+// twice is undoing once.
+func (q *Queries) DeletePlanDismissal(ctx context.Context, userID uuid.UUID, d PlanDismissal) error {
+	_, err := q.q.Exec(ctx, `DELETE FROM plan_dismissals WHERE user_id = $1 AND kind = $2 AND key = $3`,
+		userID, d.Kind, d.Key)
+	return wrap("store.DeletePlanDismissal", err)
+}
+
+// PlanDismissals lists the suggestions the user turned down.
+func (q *Queries) PlanDismissals(ctx context.Context, userID uuid.UUID) ([]PlanDismissal, error) {
+	rows, err := q.q.Query(ctx,
+		`SELECT kind, key FROM plan_dismissals WHERE user_id = $1 ORDER BY kind, key`, userID)
+	if err != nil {
+		return nil, wrap("store.PlanDismissals", err)
+	}
+	defer rows.Close()
+	var out []PlanDismissal
+	for rows.Next() {
+		var d PlanDismissal
+		if err := rows.Scan(&d.Kind, &d.Key); err != nil {
+			return nil, wrap("store.PlanDismissals", err)
+		}
+		out = append(out, d)
+	}
+	return out, wrap("store.PlanDismissals", rows.Err())
+}
+
+// PlanInflow is what reached one of the owner's savings or brokerage accounts
+// as transfers in one month, net of what left it as transfers: what they set
+// aside in it that month. Interest, dividends and trades are not set aside by
+// the owner, so they are not in it.
+type PlanInflow struct {
+	AccountID uuid.UUID
+	// Alias is the name the owner gave the account; empty when none.
+	Alias string
+	// Month is the month's first day.
+	Month civil.Date
+	Net   money.Cents
+	// LastIn is the last day money came in that month; zero when none did.
+	LastIn civil.Date
+}
+
+// PlanInflows lists, by account and month, what the user set aside in each of
+// their savings and brokerage accounts from from to to, both inclusive: one
+// row per account and month that had a transfer in or out. Printed lines
+// only: a noted purchase is never a transfer.
+func (q *Queries) PlanInflows(ctx context.Context, userID uuid.UUID, from, to civil.Date) ([]PlanInflow, error) {
+	rows, err := q.q.Query(ctx, `
+		SELECT a.id, a.alias, date_trunc('month', e.booked_on)::date AS month, sum(e.amount_cents),
+		       max(e.booked_on) FILTER (WHERE e.amount_cents > 0)
+		FROM entries e
+		JOIN accounts a ON a.id = e.account_id AND a.user_id = e.user_id
+		WHERE e.user_id = $1 AND a.type IN ('savings', 'brokerage')
+		  AND COALESCE(e.user_kind, e.kind) = 'transfer'
+		  AND e.booked_on BETWEEN $2 AND $3
+		GROUP BY a.id, a.alias, month
+		ORDER BY a.id, month`, userID, from, to)
+	if err != nil {
+		return nil, wrap("store.PlanInflows", err)
+	}
+	defer rows.Close()
+	var out []PlanInflow
+	for rows.Next() {
+		var in PlanInflow
+		var net int64
+		if err := rows.Scan(&in.AccountID, &in.Alias, &in.Month, &net, &in.LastIn); err != nil {
+			return nil, wrap("store.PlanInflows", err)
+		}
+		in.Net = money.Cents(net)
+		out = append(out, in)
+	}
+	return out, wrap("store.PlanInflows", rows.Err())
+}

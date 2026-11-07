@@ -32,6 +32,9 @@ func (h *Handler) Routes() http.Handler {
 	r.Delete("/caps/{category_id}", h.deleteCap)
 	r.Post("/links", h.link)
 	r.Delete("/links/{id}", h.unlink)
+	r.Get("/suggestions", h.suggestions)
+	r.Put("/dismissals", h.dismiss)
+	r.Delete("/dismissals", h.undismiss)
 	return r
 }
 
@@ -263,6 +266,51 @@ func (h *Handler) unlink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Unlink(r.Context(), identity.MustFromContext(r.Context()), id); err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	httpx.NoContent(w)
+}
+
+// suggestions answers GET /api/plan/suggestions: the paychecks, payments and
+// savings the owner's history suggests planning, by kind.
+func (h *Handler) suggestions(w http.ResponseWriter, r *http.Request) {
+	found, err := h.svc.Suggestions(r.Context(), identity.MustFromContext(r.Context()))
+	if err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, NewSuggestionsView(found))
+}
+
+// dismissalRequest names a suggestion by its kind and key.
+type dismissalRequest struct {
+	Kind string `json:"kind"`
+	Key  string `json:"key"`
+}
+
+// dismiss answers PUT /api/plan/dismissals: the suggestion is not offered
+// again. Saying it twice is saying it once.
+func (h *Handler) dismiss(w http.ResponseWriter, r *http.Request) {
+	var body dismissalRequest
+	if err := httpx.Decode(w, r, &body); err != nil {
+		httpx.Fail(w, r, err)
+		return
+	}
+	d := Dismissal{Kind: body.Kind, Key: body.Key}
+	if err := h.svc.Dismiss(r.Context(), identity.MustFromContext(r.Context()), d); err != nil {
+		httpx.Fail(w, r, translate(err))
+		return
+	}
+	httpx.NoContent(w)
+}
+
+// undismiss answers DELETE /api/plan/dismissals?kind=&key=: the suggestion
+// is offered again while the history suggests it. Taking back what is not
+// there changes nothing.
+func (h *Handler) undismiss(w http.ResponseWriter, r *http.Request) {
+	d := Dismissal{Kind: r.URL.Query().Get("kind"), Key: r.URL.Query().Get("key")}
+	if err := h.svc.Undismiss(r.Context(), identity.MustFromContext(r.Context()), d); err != nil {
 		httpx.Fail(w, r, translate(err))
 		return
 	}

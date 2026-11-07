@@ -70,6 +70,10 @@ var (
 	ErrLinkItemKind = errors.New("plan: only a paycheck or a payment is paid by a movement")
 	ErrNotIncome    = errors.New("plan: a paycheck is paid by income")
 	ErrNotSpending  = errors.New("plan: a payment is paid by spending")
+
+	// ErrSuggestionKey is a dismissal's: it names a suggestion by its key, of
+	// 1 to 120 characters, as the suggestions gave it.
+	ErrSuggestionKey = errors.New("plan: a suggestion is named by its key, of 1 to 120 characters")
 )
 
 // fieldErrors are the errors about one request field, with what the owner is
@@ -102,6 +106,7 @@ var fieldErrors = []struct {
 	{ErrLinkItemKind, "item_id", "Solo un ingreso o un pago fijo se reconoce por un movimiento."},
 	{ErrNotIncome, "movement_id", "Elige un ingreso: ese movimiento no es un ingreso."},
 	{ErrNotSpending, "movement_id", "Elige un gasto: una transferencia o un ingreso no es este pago."},
+	{ErrSuggestionKey, "key", "Elige una de las sugerencias."},
 }
 
 // FieldProblems is what err says about each request field, every field at
