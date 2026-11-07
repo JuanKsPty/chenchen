@@ -21,7 +21,8 @@
  * On the right (under it on a narrow card), the account it comes from, as a <dl>:
  * Ingreso esperado ("Entraron $650.00", then each paycheck and where it stands:
  * "Sueldo · Entró el 16 nov", "Sueldo · Llega el 30 nov"), Pagos fijos, Ahorro,
- * Libre para gastar, and "Editar ingreso". Income that came in unplanned is said
+ * Compras planeadas when the month sets any aside, Libre para gastar, and "Editar
+ * ingreso". Income that came in unplanned is said
  * there (useAddToFree): when a paycheck still waiting may be that money, "que no
  * reconocimos" and the way to say which it was; otherwise "que no estaban en tu
  * plan", with "Sumar a lo libre" when that would count it exactly once. It never
@@ -210,7 +211,11 @@ function Quincena({
   )
 }
 
-/** Where what is free comes from: Ingreso esperado − Pagos fijos − Ahorro. */
+/**
+ * Where what is free comes from: Ingreso esperado − Pagos fijos − Ahorro − Compras
+ * planeadas, the last only when the month sets something aside for one (or bought
+ * one beyond what was set aside): a line of $0.00 would only be noise.
+ */
 function Equation({
   plan,
   onEditIncome,

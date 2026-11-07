@@ -4,14 +4,17 @@
  *   item  the saving to edit, or null for a new one
  *
  * "Nuevo ahorro" / "Ahorro": what the owner sets aside each month. ¿Para qué?, Aporte
- * al mes and, optional, ¿Dónde lo guardas?: one of their savings or brokerage
- * accounts, where the money goes as a transfer (never spending). The contribution
- * is always taken out of what is free. A goal and its date come later; a saving
- * that already has them keeps them when it is edited here.
+ * al mes, and, optional, Meta (how much they want to get to), ¿Para cuándo? (the month
+ * to get there by, which needs a goal) and ¿Dónde lo guardas?: one of their savings
+ * or brokerage accounts, where the money goes as a transfer (never spending). The
+ * contribution is always taken out of what is free. With an account, the Ahorro card
+ * reads it: what reached it this month, and what it holds against the goal; with a
+ * goal and a date, about how much each month to it would take.
  *
- * An account backs one goal at a time: the server's refusal is said under that
- * field. Edits and "Quitar ahorro" ask "Desde este mes" or "Solo este mes". Otherwise
- * FixedPaymentDialog's rules.
+ * Only the contribution changes by month; the name, the goal, its date and the
+ * account hold for every month of the saving. An account backs one goal at a time:
+ * the server's refusal is said under that field. Edits and "Quitar ahorro" ask "Desde
+ * este mes" or "Solo este mes". Otherwise FixedPaymentDialog's rules.
  */
 import { useId, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
@@ -26,16 +29,19 @@ import { problemMessage } from '@/components/settings/problem'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose } from '@/components/ui/dialog'
 import { useReturnFocus } from '@/lib/focus'
+import { shiftMonth } from '@/lib/format'
 import { useAccounts } from '@/lib/queries'
 import { amountProblem, amountToCents, isClean, type Errors } from '@/lib/validate'
 import {
   focusFirstProblem,
   FormFailure,
-  ITEM_FIELDS,
   itemInput,
   MAX_NAME,
   MoneyField,
+  MonthField,
+  monthsFrom,
   nameProblem,
+  optionalAmountProblem,
   planAmount,
   RemoveButton,
   SavingAccountField,
@@ -44,10 +50,20 @@ import {
   SubmitButton,
   TextField,
   useOpenRound,
-  type ItemField,
 } from './forms'
 import { useDeletePlanItem, usePlanUndo, useSavePlanItem } from './usePlan'
 import { scopeNote } from './words'
+
+/** The fields this form shows, by the names the server reports problems under. */
+const FIELDS = ['name', 'amount', 'target', 'target_month', 'account_id', 'scope'] as const
+type GoalField = (typeof FIELDS)[number]
+
+/**
+ * How far ahead a goal's date can be picked: five years. A goal can be further off
+ * than anything the plan sets aside month by month, and the server puts no limit on
+ * it; a longer list would only be harder to scroll.
+ */
+const GOAL_MONTHS = 60
 
 export function GoalDialog({
   plan,
@@ -95,20 +111,23 @@ function GoalForm({
   const remove = useDeletePlanItem()
   const undo = usePlanUndo()
   const month = plan.month
+  const months = monthsFrom(month, shiftMonth(month, GOAL_MONTHS))
 
   const [id] = useState(() => item?.id ?? crypto.randomUUID())
   const [name, setName] = useState(item?.name ?? '')
   const [amount, setAmount] = useState(item?.amount.formatted ?? '')
+  const [target, setTarget] = useState(item?.target?.formatted ?? '')
+  const [targetMonth, setTargetMonth] = useState(item?.target_month ?? '')
   const [account, setAccount] = useState(item?.account_id ?? '')
   // A saving planned for this month alone is edited for it alone unless asked.
   const [scope, setScope] = useState<PlanScope>(
     item && item.from === month && item.to === month ? 'only' : 'from',
   )
-  const [errors, setErrors] = useState<Errors<ItemField>>({})
+  const [errors, setErrors] = useState<Errors<GoalField>>({})
   const [failure, setFailure] = useState<string | null>(null)
   const busy = save.isPending || remove.isPending
 
-  const edit = (field: ItemField, set: (value: string) => void) => (value: string) => {
+  const edit = (field: GoalField, set: (value: string) => void) => (value: string) => {
     set(value)
     if (errors[field]) setErrors((current) => ({ ...current, [field]: undefined }))
   }
@@ -118,7 +137,7 @@ function GoalForm({
     const fields =
       error instanceof ApiError && error.code === 'account_has_goal'
         ? { account_id: error.message }
-        : serverProblems(error, ITEM_FIELDS)
+        : serverProblems(error, FIELDS)
     if (fields) {
       setErrors(fields)
       focusFirstProblem(formRef)
@@ -131,9 +150,13 @@ function GoalForm({
   const submit = (event: React.FormEvent) => {
     event.preventDefault()
     if (busy) return
-    const found: Errors<ItemField> = {
+    const goal = planAmount(target)
+    const found: Errors<GoalField> = {
       name: nameProblem(name),
       amount: amountProblem(planAmount(amount)),
+      target: optionalAmountProblem(goal),
+      // A date to reach nothing says nothing: the month needs a goal.
+      target_month: targetMonth && !goal ? 'Pon una meta para darle fecha.' : undefined,
     }
     setErrors(found)
     setFailure(null)
@@ -142,14 +165,17 @@ function GoalForm({
       return
     }
     const input: PlanItemInput = {
-      // What this dialog does not show yet (a day, a goal and its month) goes back
-      // as it was, so editing the contribution never drops it.
+      // What this dialog does not show (a day) goes back as it was, so editing the
+      // contribution never drops it.
       ...(item ? itemInput(item, month, scope) : { kind: 'saving' as const, month, scope }),
       name: name.trim(),
       amount: planAmount(amount),
       account_id: account || null,
       match_text: '',
       category_id: null,
+      // Left out, the saving has none: a goal cleared here is cleared.
+      target: goal || undefined,
+      target_month: targetMonth || undefined,
     }
     if (item && unchanged(item, input)) return onDone()
     save.mutate(
@@ -243,6 +269,22 @@ function GoalForm({
           error={errors.amount}
           description="Sale de lo libre cada mes."
         />
+        <div className="grid grid-cols-2 items-start gap-3">
+          <MoneyField
+            label="Meta (opcional)"
+            value={target}
+            onChange={edit('target', setTarget)}
+            error={errors.target}
+          />
+          <MonthField
+            label="¿Para cuándo?"
+            value={targetMonth}
+            onChange={edit('target_month', setTargetMonth)}
+            months={months}
+            none="Sin fecha"
+            error={errors.target_month}
+          />
+        </div>
         <SavingAccountField
           value={account}
           onChange={edit('account_id', setAccount)}
@@ -261,10 +303,13 @@ function GoalForm({
   )
 }
 
+/** Whether the form still says what the saving already was: nothing to send. */
 function unchanged(line: PlanSavingLine, input: PlanItemInput): boolean {
   return (
     line.name === input.name &&
     line.amount.cents === amountToCents(input.amount) &&
-    (line.account_id ?? null) === input.account_id
+    (line.account_id ?? null) === input.account_id &&
+    (line.target?.cents ?? null) === (input.target ? amountToCents(input.target) : null) &&
+    (line.target_month ?? '') === (input.target_month ?? '')
   )
 }

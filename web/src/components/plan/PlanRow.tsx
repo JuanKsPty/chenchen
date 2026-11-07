@@ -1,12 +1,17 @@
 /**
- * <PlanRow icon title subtitle amount onClick? />
+ * <PlanRow icon title subtitle amount onClick? footer? />
  *
- * One item of the plan in a card's list (a fixed payment, a saving, a card's due
- * date): its tile, its name in 600, a line in small muted under it, and its amount
- * at the right. With `onClick` the row is a <button> whose accessible name is all it
- * says; without it, plain text (a month that can no longer be changed, or a card,
- * which is only there to be read). 64px tall on a phone and 56 from md, like a rule
- * or a movement; the status line wraps rather than losing its date.
+ * One item of the plan in a card's list (a fixed payment, a saving, a planned
+ * purchase, a card's due date): its tile, its name in 600, a line in small muted
+ * under it, and its amount at the right. With `onClick` the row is a <button> whose
+ * accessible name is all it says; without it, plain text (a month that can no longer
+ * be changed, or a card, which is only there to be read). 64px tall on a phone and 56
+ * from md, like a rule or a movement; the status line wraps rather than losing its
+ * date.
+ *
+ * `footer` goes under the text and the amount, across both, inside the row: a track
+ * and its caption ("Apartado en el plan: $440.00 de $1,100.00"), which the row's
+ * name then says too, since the track itself is only drawn.
  *
  * Its list goes in a <ul className={PLAN_LIST}>, which pulls the rows out to the
  * card's edge so their content lines up with the card's heading.
@@ -25,12 +30,14 @@ export function PlanRow({
   subtitle,
   amount,
   onClick,
+  footer,
 }: {
   icon: LucideIcon
   title: string
   subtitle: ReactNode
   amount?: ReactNode
   onClick?: (event: MouseEvent<HTMLButtonElement>) => void
+  footer?: ReactNode
 }) {
   const content = (
     <>
@@ -42,6 +49,11 @@ export function PlanRow({
         </span>
       </span>
       {amount ?? <span />}
+      {footer && (
+        <span className="col-span-2 col-start-2 -mt-1 flex min-w-0 flex-col gap-1.5 pb-1">
+          {footer}
+        </span>
+      )}
     </>
   )
   const layout =

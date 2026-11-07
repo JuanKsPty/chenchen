@@ -130,12 +130,16 @@ function takeBackLink(id: string): Promise<void> {
 }
 
 /**
- * What a sheet says about one month of a paycheck or a payment (`about`). Each
- * answer calls `onDone` (the sheet closes) with a toast whose "Deshacer" takes it
- * back; a refusal goes to `onFailure`, for the sheet to show, which hears null when
- * an answer starts.
+ * What a sheet says about one month of a paycheck, a payment or a planned purchase
+ * (`about`). Each answer calls `onDone` (the sheet closes) with a toast whose
+ * "Deshacer" takes it back; a refusal goes to `onFailure`, for the sheet to show,
+ * which hears null when an answer starts.
  *
- *   assign(movementId, words)  this movement paid it, or brought it in
+ *   assign(movementId, words, month?)
+ *                              this movement paid it, or brought it in, or bought
+ *                              it. `month` says it of another month than `about`'s:
+ *                              a purchase is bought in the month its movement was
+ *                              booked, which its candidates can be from
  *   markPaid(words)            it was paid, or came in, where chenchén cannot see
  *   unmarkPaid(linkId, words)  takes that back, by the link that said it
  *   notThis(movement, words)   "No es este": the movement did not pay it
@@ -203,8 +207,8 @@ export function usePlanLinks(
 
   return {
     busy,
-    assign: (movementId: string, words: string) =>
-      say({ ...about, decision: 'assign', movement_id: movementId }, words),
+    assign: (movementId: string, words: string, month = about.month) =>
+      say({ ...about, month, decision: 'assign', movement_id: movementId }, words),
     markPaid: (words: string) => say({ ...about, decision: 'paid' }, words),
     unmarkPaid: (linkId: string, words: string) =>
       takeBack(linkId, { ...about, decision: 'paid' }, words),

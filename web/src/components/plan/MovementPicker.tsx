@@ -1,14 +1,16 @@
 /**
- * What the plan's sheets share to say which movement paid a payment or brought in
- * a paycheck.
+ * What the plan's sheets share to say which movement paid a payment, brought in a
+ * paycheck or bought a planned purchase.
  *
  *   MovementLine    a movement in words: what it says, its day and its amount
- *   MovementChoice  the same as a 56px button: "Fue este: …"
+ *   MovementChoice  the same as a 56px button: "Fue este: …" (`pick` says it for
+ *                   a purchase: "Fue esta: …")
  *   MonthMovements  the rest of the month's spending (side 'out') or income ('in'),
  *                   all of it, closest to what was planned first, six before "Ver
  *                   más"
- *   PaidMovements   what paid it, under `title`, each with "No es este", which the
- *                   sheet sends (usePlanLinks' notThis)
+ *   PaidMovements   what paid it, under `title`, each with "No es este" (`reject`:
+ *                   "No es esta" for a purchase), which the sheet sends
+ *                   (usePlanLinks' notThis)
  *
  * MonthMovements is its own component so the month's list is fetched only once a
  * sheet is open (the sheets render, closed, with the page).
@@ -76,10 +78,12 @@ export function MovementChoice({
   movement,
   busy,
   onPick,
+  pick = 'Fue este',
 }: {
   movement: Choice
   busy: boolean
   onPick: (movement: Choice) => void
+  pick?: string
 }) {
   return (
     <button
@@ -90,7 +94,7 @@ export function MovementChoice({
       }}
       className="flex min-h-14 w-full cursor-pointer items-center rounded-2xl px-3 py-2 text-left text-foreground transition-colors duration-180 ease-out hover:bg-muted active:bg-muted"
     >
-      <span className="sr-only">Fue este: </span>
+      <span className="sr-only">{`${pick}: `}</span>
       <MovementLine movement={movement} className="w-full" />
     </button>
   )
@@ -112,6 +116,7 @@ export function MonthMovements({
   placed,
   busy,
   onPick,
+  pick,
 }: {
   month: string
   side: Side
@@ -119,6 +124,7 @@ export function MonthMovements({
   placed: Set<string>
   busy: boolean
   onPick: (movement: Choice) => void
+  pick?: string
 }) {
   const { from, to } = monthBounds(month)
   const pages = useEntryPages({ from, to, kinds: KINDS[side], limit: MONTH_PAGE })
@@ -174,7 +180,7 @@ export function MonthMovements({
       <ul className="-mx-3 flex flex-col">
         {shown.map((e) => (
           <li key={e.id}>
-            <MovementChoice movement={e} busy={busy} onPick={onPick} />
+            <MovementChoice movement={e} busy={busy} onPick={onPick} pick={pick} />
           </li>
         ))}
       </ul>
@@ -192,11 +198,13 @@ export function PaidMovements({
   movements,
   busy,
   onNotThis,
+  reject = 'No es este',
 }: {
   title: string
   movements: PlanPaidMovement[]
   busy: boolean
   onNotThis: (movement: PlanPaidMovement) => void
+  reject?: string
 }) {
   const titleId = useId()
   if (movements.length === 0) return null
@@ -212,11 +220,11 @@ export function PaidMovements({
             <Button
               variant="ghost"
               className="-mr-3"
-              aria-label={`No es este: ${m.description}`}
+              aria-label={`${reject}: ${m.description}`}
               aria-disabled={busy || undefined}
               onClick={() => onNotThis(m)}
             >
-              No es este
+              {reject}
             </Button>
           </li>
         ))}

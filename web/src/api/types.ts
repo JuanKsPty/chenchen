@@ -737,8 +737,20 @@ export type PlanItemKind = 'income' | 'fixed' | 'saving' | 'purchase'
 export type PlanScope = 'from' | 'only'
 
 /**
+ * How a planned purchase is set aside, in the plan only: a share of its price every
+ * month up to the month it is bought in (`monthly`), all of it in that month
+ * (`that_month`), or nothing, since what the owner already saved pays it
+ * (`savings`). No account is ever said to hold it.
+ */
+export type PlanFunding = 'monthly' | 'that_month' | 'savings'
+
+/**
  * An item of the plan with the values that hold for the month read. Months are
  * YYYY-MM; `to` is null when it has no end.
+ *
+ * A planned purchase's are those of all of it: `amount` is its price, `from` the
+ * month it is set aside from (`start_month`) and `to` the month it is to be bought
+ * in (`target_month`).
  */
 export interface PlanItem {
   id: string
@@ -747,7 +759,7 @@ export interface PlanItem {
   amount: Amount
   /** The day of the month it is expected, 1 to 31. Absent for a saving with none. */
   day?: number
-  /** An expense category for a payment, an income one for a paycheck. */
+  /** An expense category for a payment or a purchase, an income one for a paycheck. */
   category_id?: string
   /** The text its movements contain, compared like a rule's; '' for none. */
   match_text: string
@@ -755,7 +767,12 @@ export interface PlanItem {
   to: string | null
   /** A saving's goal. */
   target?: Amount
+  /** When a saving's goal is to be reached, or the month a purchase is to be bought in. */
   target_month?: string
+  /** The month a purchase was first planned for, which the plan keeps. */
+  start_month?: string
+  /** How a purchase is set aside. */
+  funding?: PlanFunding
   /** The savings or brokerage account a saving is kept in. */
   account_id?: string
 }
@@ -820,13 +837,50 @@ export type PlanFixedLine = PlanItem &
     hint: { movement: PlanMovement; reason: 'transfer' } | null
   }
 
-/** What a month sets aside. Progress and what reached the account come later: null. */
+/**
+ * What a month sets aside, and, for a saving kept in an account, what the account
+ * says of it. `progress` is what the account holds, as Cuentas shows it, and
+ * `saved_month` what reached it as transfers this month, net (interest and dividends
+ * are income, and a withdrawal subtracts); both null for a saving tied to no account.
+ * `needed_per_month` is what each month to `target_month` would have to set aside to
+ * reach `target`: null without both, or once reached.
+ *
+ * `status` says where the month stands: all of it reached the account (`done`), some
+ * (`partial`), nothing yet while the month lasts (`pending`), nothing in a month that
+ * ended (`missed`), or it cannot tell, with no account (`unlinked`).
+ */
 export type PlanSavingLine = PlanItem & {
   kind: 'saving'
-  status: string | null
+  status: 'done' | 'partial' | 'pending' | 'missed' | 'unlinked'
   saved_month: Amount | null
   progress: Amount | null
   needed_per_month: Amount | null
+}
+
+/**
+ * A planned purchase in the month. `share` is what the month sets aside for it and
+ * `set_aside_before` what the months before did: plan figures, never a balance.
+ *
+ * `status`: still being set aside before its month (`setting_aside`), due this month
+ * (`this_month`), bought (`bought`, in the month it was bought, with what it cost,
+ * `paid`, and the day, `bought_on`), or its month ended without it (`missed`).
+ * `movements` are what bought it; while it was not bought, `candidates` are the
+ * outflows it could be, closest to its price first, at most three, from any month it
+ * can be bought in.
+ */
+export type PlanPurchaseLine = PlanItem & {
+  kind: 'purchase'
+  to: string
+  target_month: string
+  start_month: string
+  funding: PlanFunding
+  status: 'setting_aside' | 'this_month' | 'bought' | 'missed'
+  share: Amount
+  set_aside_before: Amount
+  paid: Amount | null
+  bought_on: string | null
+  movements: PlanPaidMovement[]
+  candidates: PlanMovement[]
 }
 
 /** A cap on a category, and what its free spending, children included, took of it. */
@@ -879,9 +933,9 @@ export type PlanAlert =
 export type PlanLinkDecision = 'assign' | 'reject' | 'paid'
 
 /**
- * What the owner said about one month of a paycheck or a payment. `movement_id` is
- * the movement as they named it, a line or a noted purchase; null for a month paid
- * outside.
+ * What the owner said about one month of a paycheck, a payment or a planned purchase
+ * (the month it was bought in). `movement_id` is the movement as they named it, a
+ * line or a noted purchase; null for a month paid outside.
  */
 export interface PlanLink {
   id: string
@@ -937,7 +991,7 @@ export interface PlanSuggestions {
  *   left  = free − spent
  *
  * `spent` is the month's spending that no planned item took, so Gastos' total is
- * `spent` plus what the payments took. Every list is present, empty when there is
+ * `spent` plus what the payments and the purchases took. Every list is present, empty when there is
  * nothing in it.
  */
 export interface MonthPlan {
@@ -971,8 +1025,8 @@ export interface MonthPlan {
   }
   fixed: PlanFixedLine[]
   savings: PlanSavingLine[]
-  /** Empty until planned purchases are kept. */
-  purchases: unknown[]
+  /** The purchases the month sets aside for, is due, or bought. */
+  purchases: PlanPurchaseLine[]
   caps: PlanCapLine[]
   uncategorized: { spent: Amount; count: number }
   quincenas: [PlanQuincena, PlanQuincena]

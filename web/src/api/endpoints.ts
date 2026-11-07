@@ -28,6 +28,7 @@ import type {
   MonthPlan,
   NewShortcutKey,
   PlanCapLine,
+  PlanFunding,
   PlanItem,
   PlanItemKind,
   PlanLink,
@@ -358,14 +359,20 @@ export const fetchPlan = (month?: string) =>
  * An item as a form saves it, for `month` on (`scope: 'from'`) or for it alone
  * (`'only'`). Amounts travel as typed text ("650.00"). Only these fields: the API
  * refuses one it does not know.
+ *
+ * A planned purchase is always saved from `month` on: `amount` is its price,
+ * `target_month` the month it is to be bought in (from `month` to 24 months after the
+ * current one) and `funding` how it is set aside. The server works out its shares
+ * from `month` on and keeps the month it was first planned for, so nobody sends a
+ * start month.
  */
 export interface PlanItemInput {
-  kind: Exclude<PlanItemKind, 'purchase'>
+  kind: PlanItemKind
   month: string
   scope: PlanScope
   name: string
   amount: string
-  /** 1 to 31; a paycheck and a payment need one. */
+  /** 1 to 31; a paycheck and a payment need one, a purchase has none. */
   day?: number
   match_text?: string
   /** null or left out: no category. */
@@ -374,7 +381,10 @@ export interface PlanItemInput {
   account_id?: string | null
   /** A saving's goal; left out: none. */
   target?: string
+  /** When a saving's goal is to be reached, or the month a purchase is bought in. */
   target_month?: string
+  /** A purchase's: how it is set aside. */
+  funding?: PlanFunding
 }
 
 /**
@@ -388,7 +398,11 @@ export const savePlanItem = (id: string, input: PlanItemInput) =>
     body: input,
   })
 
-/** Takes `month` on, or that month alone, out of an item; one left with no month goes. */
+/**
+ * Takes `month` on, or that month alone, out of an item; one left with no month goes.
+ * A purchase only from `month` on: the months before keep what they set aside, and
+ * saving it again plans it again.
+ */
 export const deletePlanItem = (id: string, month: string, scope: PlanScope) =>
   request<void>(
     `/api/plan/items/${encodeURIComponent(id)}?${new URLSearchParams({ month, scope })}`,
@@ -418,6 +432,10 @@ export const deletePlanCap = (categoryId: string, month: string, scope: PlanScop
  * What the owner says about one month of a paycheck or a payment (a month that has
  * passed too): this movement paid it (`assign`), this one did not (`reject`), or it
  * was paid, or came in, where chenchén cannot see (`paid`, with no movement).
+ *
+ * For a planned purchase the month is the one it was bought in, any from the month it
+ * was planned for to the one after it was due; it is only ever bought by a movement,
+ * never said to be paid (the server refuses `paid`).
  */
 export type PlanLinkSaying = { item_id: string; month: string } & (
   { decision: 'assign' | 'reject'; movement_id: string } | { decision: 'paid' }

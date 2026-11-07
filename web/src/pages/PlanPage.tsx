@@ -17,15 +17,16 @@
  *   - "1 transferencia por confirmar · Mientras tanto, cuenta como gasto.": a card
  *     payment not yet paired counts as spending, so it is said before the figures
  *   - PlanHero: "Te quedan", the figure, the quincenas and the account, with each
- *     paycheck and where it stands
- *   - Topes por categoría (#topes), Pagos fijos (#pagos), Ahorro (#ahorro)
+ *     paycheck and where it stands, and "− Compras planeadas" when any are set aside
+ *   - Topes por categoría (#topes), Pagos fijos (#pagos), Compras planeadas
+ *     (#planeadas), Ahorro (#ahorro)
  *
- * A paycheck or a payment opens its sheet: which movement it was, or that it was
- * paid outside, and taking either back; a past month too, since that is how it gets
- * right. Next month, where nothing has gone out yet, a payment opens its dialog.
- * "Editar" in a sheet closes it and opens the dialog, and focus then goes back to the
- * row that opened the sheet: the sheet's own button is gone by the time the dialog
- * closes.
+ * A paycheck, a payment or a planned purchase opens its sheet: which movement it was,
+ * or that it was paid outside, and taking either back; a past month too, since that
+ * is how it gets right. Next month, where nothing has gone out yet, a payment or a
+ * purchase opens its dialog. "Editar" in a sheet closes it and opens the dialog, and
+ * focus then goes back to the row that opened the sheet: the sheet's own button is
+ * gone by the time the dialog closes.
  *
  * From 56rem of page (not of window: the assistant panel takes room) the hero and
  * the caps take 7 of 12 columns and the rest 5, each column flowing on its own;
@@ -37,7 +38,9 @@
  * address then drops it, so a reload or "Atrás" never opens it again. Once there is
  * a plan, this month's cards offer what else the history suggests: "¿También son
  * fijos?", "¿También es un sueldo?", "¿También es ahorro?". The sections appear once
- * their data does, so the page, not the shell, scrolls to #topes, #pagos or #ahorro.
+ * their data does, so the page, not the shell, scrolls to #topes, #pagos, #planeadas
+ * or #ahorro; each also keeps clear of the bar when the browser jumps to it itself
+ * (a hash typed on this page).
  *
  * Opening this month's plan marks what it has to say (near or past what is free or a
  * cap, payments due soon) as seen on this device (plan/seen), so Inicio's notices
@@ -51,6 +54,7 @@ import type {
   PlanCapLine,
   PlanFixedLine,
   PlanIncomeLine,
+  PlanPurchaseLine,
   PlanSavingLine,
 } from '@/api/types'
 import { useImport } from '@/components/import/ImportProvider'
@@ -66,6 +70,9 @@ import { IncomeSheet } from '@/components/plan/IncomeSheet'
 import { planMonth } from '@/components/plan/month'
 import { PlanHero } from '@/components/plan/PlanHero'
 import { PlanSetupDialog } from '@/components/plan/PlanSetupDialog'
+import { PurchaseDialog } from '@/components/plan/PurchaseDialog'
+import { PurchasesCard } from '@/components/plan/PurchasesCard'
+import { PurchaseSheet } from '@/components/plan/PurchaseSheet'
 import { SavingsCard } from '@/components/plan/SavingsCard'
 import { markPlanSeen } from '@/components/plan/seen'
 import { usePlan, usePlanSuggestions } from '@/components/plan/usePlan'
@@ -89,8 +96,24 @@ import { useDocumentTitle } from '@/lib/title'
 
 const TITLE = 'Plan del mes'
 
+/**
+ * A section #topes, #pagos, #planeadas or #ahorro can land on, clear of the bar for
+ * the browser's own jump too: 56 + 16 below lg, 64 + 16 from lg, as the page's own
+ * scroll leaves it.
+ */
+const SECTION = 'scroll-mt-18 lg:scroll-mt-20'
+
 /** Which editor is open; the item it edits is kept apart, so it stays while it closes. */
-type Open = 'setup' | 'income' | 'incomeSheet' | 'fixed' | 'sheet' | 'saving' | 'cap'
+type Open =
+  | 'setup'
+  | 'income'
+  | 'incomeSheet'
+  | 'fixed'
+  | 'sheet'
+  | 'purchase'
+  | 'purchaseSheet'
+  | 'saving'
+  | 'cap'
 
 export function PlanPage() {
   useDocumentTitle(TITLE)
@@ -110,17 +133,32 @@ export function PlanPage() {
   const names = useMemo(() => categoryNames(tree), [tree])
   const { openImport } = useImport()
 
+  // Suggestions are offered by the setup (nothing planned yet, a month that can be
+  // planned) and under this month's cards; any other month asks for none.
+  const offerable =
+    shown !== undefined && shown.editable && (shown.state === 'current' || !shown.planned)
+  const suggestions = usePlanSuggestions(offerable)
+
+  // The page scrolls to a section only once everything above it is in: the
+  // transfers notice on top, and the suggestions under the hero and the fixed
+  // payments, which are asked for only once the plan is.
   const hash = useLocation().hash
   const section = Object.values(PLAN_SECTIONS).find((id) => hash === `#${id}`) ?? null
   useScrollToSection(
     section,
-    !plan.isPending && !categories.isPending && !accounts.isPending,
+    !plan.isPending &&
+      !categories.isPending &&
+      !accounts.isPending &&
+      !transfers.isPending &&
+      (!offerable || !suggestions.isPending),
   )
 
   const [open, setOpen] = useState<Open | null>(null)
   const [fixed, setFixed] = useState<PlanFixedLine | null>(null)
   const [sheet, setSheet] = useState<PlanFixedLine | null>(null)
   const [paycheck, setPaycheck] = useState<PlanIncomeLine | null>(null)
+  const [purchase, setPurchase] = useState<PlanPurchaseLine | null>(null)
+  const [purchaseSheet, setPurchaseSheet] = useState<PlanPurchaseLine | null>(null)
   const [saving, setSaving] = useState<PlanSavingLine | null>(null)
   const [cap, setCap] = useState<PlanCapLine | null>(null)
   // The row that opened the sheet on screen, and, for a dialog a sheet opened, the
@@ -147,11 +185,6 @@ export function PlanPage() {
   }
 
   const data = plan.data
-  // Suggestions are offered by the setup (nothing planned yet, a month that can be
-  // planned) and under this month's cards; any other month asks for none.
-  const suggestions = usePlanSuggestions(
-    data !== undefined && data.editable && (data.state === 'current' || !data.planned),
-  )
 
   // ?armar=1 opens the setup on arrival, once the plan says there is nothing
   // planned to set up over, and leaves the address either way.
@@ -224,6 +257,16 @@ export function PlanPage() {
     }
   }
 
+  const openPurchase = (line: PlanPurchaseLine, opener: HTMLElement) => {
+    if (data.state === 'future') {
+      setPurchase(line)
+      openDialog('purchase')
+    } else {
+      setPurchaseSheet(line)
+      openSheet('purchaseSheet', opener)
+    }
+  }
+
   let body: ReactNode
   if (!data.planned && data.state === 'past') {
     body = (
@@ -267,6 +310,7 @@ export function PlanPage() {
               headingRef={heroHeading}
             />
             <CapsCard
+              className={SECTION}
               plan={data}
               names={categories.data ? names : undefined}
               failed={categories.isError && !categories.data}
@@ -290,6 +334,7 @@ export function PlanPage() {
           </div>
           <div className="flex min-w-0 flex-col gap-4 lg:gap-6 @4xl:col-span-5">
             <FixedCard
+              className={SECTION}
               plan={data}
               accounts={accounts.data?.accounts}
               onAdd={
@@ -303,7 +348,21 @@ export function PlanPage() {
               onOpen={openFixed}
               suggestions={offered?.fixed}
             />
+            <PurchasesCard
+              className={SECTION}
+              plan={data}
+              onAdd={
+                editable
+                  ? () => {
+                      setPurchase(null)
+                      openDialog('purchase')
+                    }
+                  : undefined
+              }
+              onOpen={openPurchase}
+            />
             <SavingsCard
+              className={SECTION}
               plan={data}
               accounts={accounts.data?.accounts}
               onAdd={
@@ -400,6 +459,23 @@ export function PlanPage() {
           openFromSheet('fixed')
         }}
       />
+      <PurchaseDialog
+        plan={data}
+        item={purchase}
+        open={open === 'purchase'}
+        onOpenChange={close}
+        returnTo={handoff}
+      />
+      <PurchaseSheet
+        plan={data}
+        line={purchaseSheet}
+        open={open === 'purchaseSheet'}
+        onOpenChange={close}
+        onEdit={(line) => {
+          setPurchase(line)
+          openFromSheet('purchase')
+        }}
+      />
       <GoalDialog plan={data} item={saving} open={open === 'saving'} onOpenChange={close} />
       <CapDialog plan={data} cap={cap} open={open === 'cap'} onOpenChange={close} />
     </div>
@@ -437,9 +513,10 @@ function PlanSkeleton() {
 }
 
 /**
- * Scrolls #topes, #pagos or #ahorro (`id`; null for none) into view once, 16px under
- * whichever bar shows, after the plan and what names its rows have loaded, so no
- * skeleton can push the section away again. A copy of Gastos' own.
+ * Scrolls #topes, #pagos, #planeadas or #ahorro (`id`; null for none) into view once,
+ * 16px under whichever bar shows, once `ready` says everything above it is in place,
+ * so nothing that arrives later can push the section away again. A copy of Gastos'
+ * own.
  */
 function useScrollToSection(id: string | null, ready: boolean) {
   const done = useRef(false)

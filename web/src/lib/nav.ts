@@ -42,6 +42,7 @@ import type { EntryKind } from '@/api/types'
  *   isPlanSetupRequested(params)   true when ?armar=1 is present
  *   PLAN_CAPS_HREF                 /gastos/plan#topes
  *   PLAN_PAYMENTS_HREF             /gastos/plan#pagos
+ *   PLAN_PURCHASES_HREF            /gastos/plan#planeadas
  *   PLAN_SAVINGS_HREF              /gastos/plan#ahorro
  *   The plan's month is read back with parseSpendingMonth: the same ?mes.
  */
@@ -65,19 +66,19 @@ export const SECURITY_HREF = `${SETTINGS_PATH}#seguridad`
 export const TRANSFERS_HREF = `${SPENDING_PATH}#transferencias`
 /** Gastos, scrolled to the noted purchases a statement does not confirm. */
 export const CAPTURES_HREF = `${SPENDING_PATH}#compras`
-/**
- * The plan's sections, by the id each one carries. Planned purchases (#planeadas)
- * join them when the plan keeps purchases.
- */
+/** The plan's sections, by the id each one carries. */
 export const PLAN_SECTIONS = {
   caps: 'topes',
   payments: 'pagos',
+  purchases: 'planeadas',
   savings: 'ahorro',
 } as const
 /** The plan, scrolled to the caps per category. */
 export const PLAN_CAPS_HREF = `${PLAN_PATH}#${PLAN_SECTIONS.caps}`
 /** The plan, scrolled to the fixed payments and the cards' due dates. */
 export const PLAN_PAYMENTS_HREF = `${PLAN_PATH}#${PLAN_SECTIONS.payments}`
+/** The plan, scrolled to the planned purchases. */
+export const PLAN_PURCHASES_HREF = `${PLAN_PATH}#${PLAN_SECTIONS.purchases}`
 /** The plan, scrolled to what is set aside each month. */
 export const PLAN_SAVINGS_HREF = `${PLAN_PATH}#${PLAN_SECTIONS.savings}`
 

@@ -4,10 +4,11 @@
  *   useOpenRound(open)      a key that changes each time a dialog opens: its form
  *                           remounts blank (and picks its ids) once per opening,
  *                           counted on opening so what was typed stays while it closes
- *   TextField · MoneyField · DayField · CategoryField
+ *   TextField · MoneyField · DayField · MonthField · CategoryField
  *                           a labelled field with its hint and, when it has one, its
  *                           problem under it (aria-invalid, so a form can focus the
  *                           first one)
+ *   monthsFrom(first, last) the months from `first` to `last`, for a MonthField
  *   ScopeField              "Desde este mes" / "Solo este mes": which months an edit
  *                           or a removal holds for
  *   CheckRow                a checkbox in a label row at least 44px tall, with an
@@ -25,12 +26,13 @@
  *   useReturnFocusOr(fallback?)
  *                           useReturnFocus, falling back to `fallback` when what had
  *                           focus left with a sheet
- *   nameProblem · dayProblem · planAmount · centsText · itemInput · focusFirstProblem
+ *   nameProblem · dayProblem · optionalAmountProblem · planAmount · centsText ·
+ *   itemInput · focusFirstProblem
  *   unlessGone(error)       a delete's catch: taking out what is gone already is done
  *
  * Every amount the plan keeps is more than zero (an income, a payment, a contribution
  * or a cap of $0 is said by taking it out), so amountProblem's refusal of zero is
- * right for all of them.
+ * right for all of them; a saving's goal may be left blank, which is no goal.
  */
 import { CircleAlertIcon } from 'lucide-react'
 import { useId, useMemo, useState, type ReactNode, type RefObject } from 'react'
@@ -65,6 +67,8 @@ import { Spinner } from '@/components/ui/spinner'
 import { shortAccountLabel } from '@/lib/account'
 import type { CategoryOption } from '@/lib/categories'
 import { useReturnFocus } from '@/lib/focus'
+import { monthTitle, shiftMonth } from '@/lib/format'
+import { amountProblem } from '@/lib/validate'
 
 /** The server's limits on a name and on the text a movement is recognised by. */
 export const MAX_NAME = 60
@@ -121,6 +125,11 @@ export function nameProblem(text: string): string | undefined {
 export function dayProblem(text: string, missing: string): string | undefined {
   const day = Number(text)
   return Number.isInteger(day) && day >= 1 && day <= 31 ? undefined : missing
+}
+
+/** An amount that may be left blank (a saving's goal): blank is fine, anything else is checked. */
+export function optionalAmountProblem(text: string): string | undefined {
+  return text.trim() ? amountProblem(text) : undefined
 }
 
 /**
@@ -313,6 +322,65 @@ export function DayField({
         {DAYS.map((day) => (
           <NativeSelectOption key={day} value={day}>
             {`Día ${day}`}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      {description && <FieldDescription id={`${id}-hint`}>{description}</FieldDescription>}
+      {error && <FieldError id={`${id}-error`}>{error}</FieldError>}
+    </Field>
+  )
+}
+
+/** The months from `first` to `last` (YYYY-MM), both included; none when `last` is earlier. */
+export function monthsFrom(first: string, last: string): string[] {
+  const months: string[] = []
+  for (let month = first; month <= last; month = shiftMonth(month, 1)) months.push(month)
+  return months
+}
+
+/**
+ * A month, as a native select of `months` named by their titles ("Marzo 2027"), and
+ * `none` for the empty choice: "Elige el mes" where one is needed, "Sin fecha" where
+ * none is fine. A `value` outside `months` (a goal's date that has passed) stays a
+ * choice, so editing never drops what was saved.
+ */
+export function MonthField({
+  label,
+  value,
+  onChange,
+  months,
+  none,
+  error,
+  description,
+}: {
+  label: string
+  value: string
+  onChange: (value: string) => void
+  months: string[]
+  none: string
+  error?: string
+  description?: ReactNode
+}) {
+  const id = useId()
+  const choices = value && !months.includes(value) ? [value, ...months] : months
+  return (
+    <Field data-invalid={error ? true : undefined}>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <NativeSelect
+        id={id}
+        className="w-full"
+        value={value}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(
+          description ? `${id}-hint` : undefined,
+          error && `${id}-error`,
+        )}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <NativeSelectOption value="">{none}</NativeSelectOption>
+        {choices.map((month) => (
+          <NativeSelectOption key={month} value={month}>
+            {monthTitle(month)}
           </NativeSelectOption>
         ))}
       </NativeSelect>

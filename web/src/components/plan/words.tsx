@@ -20,6 +20,22 @@
  *   seenIncome(income)    "Vimos $650.00 dos veces al mes, cerca del 16 y del 30.", from
  *                         the paychecks the history suggests; null with none
  *   freeLine(free, income)  "$1,061.02 libres al mes.", or why nothing would be
+ *   purchaseStatus(line, plan)  "Marzo 2027 · apartas $220.00 al mes", "Este mes ·
+ *                         $1,100.00 apartados en el plan", "La compraste el 12 mar ·
+ *                         $1,050.00", "No la compraste en marzo"
+ *   setAsideHint(funding, left, from, target)
+ *                         "Apartas $220.00 al mes de noviembre a marzo.", "Apartas
+ *                         $1,100.00 en marzo.", "No resta de lo libre: la pagas con tus
+ *                         ahorros.": what a purchase will set aside, before it is saved
+ *   savingStatus(line, plan, where)  "Este mes apartaste $150.00 de $200.00", "Ya
+ *                         apartaste los $200.00 de este mes", "Aún no llega nada este
+ *                         mes", "No llegó nada en octubre", "Sin cuenta: solo cuenta lo
+ *                         que planeas"
+ *   goalNeeded(line)      "Para marzo te faltan unos $550 al mes"
+ *
+ * A purchase's money is set aside in the plan only: "apartado en el plan", never a
+ * balance, and no account is said to hold it. A saving's progress is what its account
+ * holds, as Cuentas shows it.
  *
  * A figure below zero is never written "−$32.40": the label changes instead ("Por
  * encima de lo libre"), and the figure is how far. Nothing here scolds, warns or
@@ -27,10 +43,25 @@
  */
 import type { ReactNode } from 'react'
 
-import type { MonthPlan, PlanFixedLine, PlanIncomeLine, PlanSuggestion } from '@/api/types'
+import type {
+  MonthPlan,
+  PlanFixedLine,
+  PlanFunding,
+  PlanIncomeLine,
+  PlanPurchaseLine,
+  PlanSavingLine,
+  PlanSuggestion,
+} from '@/api/types'
 import { Amount } from '@/components/kit'
 import { monthInSentence, monthName } from '@/components/spending/period'
-import { aboutMoney, formatCivilDayMonth, money, shiftMonth } from '@/lib/format'
+import {
+  aboutMoney,
+  formatCivilDayMonth,
+  money,
+  monthTitle,
+  shiftMonth,
+} from '@/lib/format'
+import { purchaseShares, setAsideSoFar } from './shares'
 
 export const monthWord = monthInSentence
 
@@ -240,4 +271,117 @@ export function freeLine(free: number, income: number): ReactNode {
       <Amount amount={free} size="inline" /> libres al mes.
     </>
   )
+}
+
+/**
+ * Where a planned purchase stands in the month read, from the server's status. Every
+ * figure is the plan's: what it sets aside, never what an account holds.
+ *   - still being set aside: its month, and this month's share ("Marzo 2027 · apartas
+ *     $220.00 al mes"); all of it in its month ("Marzo 2027 · apartas todo ese mes");
+ *     or paid with savings ("Marzo 2027 · con tus ahorros")
+ *   - due this month: what the plan set aside for it by now ("Este mes · $1,100.00
+ *     apartados en el plan"), or, paid with savings, "Este mes · con tus ahorros"
+ *   - bought: the day, and what it cost when that is not its price, which the row
+ *     shows beside it ("La compraste el 12 mar · $1,050.00")
+ *   - its month ended without it: "No la compraste en marzo", plainly
+ */
+export function purchaseStatus(line: PlanPurchaseLine, plan: MonthPlan): string {
+  switch (line.status) {
+    case 'bought': {
+      const when = line.bought_on
+        ? `La compraste el ${formatCivilDayMonth(line.bought_on)}`
+        : 'Ya la compraste'
+      return line.paid && line.paid.cents !== line.amount.cents
+        ? `${when} · ${money(line.paid)}`
+        : when
+    }
+    case 'missed':
+      return `No la compraste en ${monthWord(line.target_month)}`
+    case 'this_month': {
+      const when = plan.state === 'current' ? 'Este mes' : `En ${monthWord(plan.month)}`
+      if (line.funding === 'savings') return `${when} · con tus ahorros`
+      return `${when} · ${money(setAsideSoFar(line))} apartados en el plan`
+    }
+    default: {
+      const when = monthTitle(line.target_month)
+      if (line.funding === 'savings') return `${when} · con tus ahorros`
+      if (line.funding === 'that_month') return `${when} · apartas todo ese mes`
+      return line.share.cents > 0
+        ? `${when} · apartas ${money(line.share)} al mes`
+        : `${when} · ya está apartada en el plan`
+    }
+  }
+}
+
+/**
+ * What a purchase would set aside, said before it is saved, from the shares the
+ * server will write (purchaseShares): `left` of the price spread over the months from
+ * `from` to `target`, all of it in `target`, or nothing with savings. Null until
+ * there is a price and a month to say it of. Shares that differ by a cent say both,
+ * so the hint never rounds what the plan will hold.
+ */
+export function setAsideHint(
+  funding: PlanFunding,
+  left: number | null,
+  from: string,
+  target: string,
+): string | null {
+  if (funding === 'savings') return 'No resta de lo libre: la pagas con tus ahorros.'
+  if (left === null || !target) return null
+  if (left <= 0) return 'Ya está apartada en el plan.'
+  const shares = funding === 'monthly' ? purchaseShares(left, from, target) : [left]
+  if (shares.length <= 1) return `Apartas ${money(left)} en ${monthWord(target)}.`
+  const low = Math.min(...shares)
+  const high = Math.max(...shares)
+  const each = low === high ? money(low) : `${money(low)} o ${money(high)}`
+  return `Apartas ${each} al mes de ${monthWord(from)} a ${monthWord(target)}.`
+}
+
+/**
+ * Where a saving stands in the month read, from what reached its account as
+ * transfers (`saved_month`) against what the month sets aside. Next month nothing has
+ * arrived yet, so it says where the money goes instead (`where`, "Al mes, en
+ * Inversión"). With no account the plan cannot tell, and says so.
+ */
+export function savingStatus(line: PlanSavingLine, plan: MonthPlan, where: string): string {
+  const planned = line.amount.cents
+  const saved = line.saved_month?.cents ?? 0
+  const past = plan.state === 'past'
+  const month = monthWord(plan.month)
+  if (line.status === 'unlinked') return 'Sin cuenta: solo cuenta lo que planeas'
+  if (plan.state === 'future') return where
+  switch (line.status) {
+    case 'done':
+      if (saved > planned) {
+        const more = money(saved - planned)
+        return past
+          ? `En ${month} apartaste ${money(saved)} · ${more} más de lo previsto`
+          : `Este mes apartaste ${money(saved)} · ${more} más de lo previsto`
+      }
+      return past
+        ? `Apartaste los ${money(planned)} de ${month}`
+        : `Ya apartaste los ${money(planned)} de este mes`
+    case 'partial':
+      return past
+        ? `En ${month} apartaste ${money(saved)} de ${money(planned)}`
+        : `Este mes apartaste ${money(saved)} de ${money(planned)}`
+    case 'missed':
+      return `No llegó nada en ${month}`
+    default:
+      return 'Aún no llega nada este mes'
+  }
+}
+
+/**
+ * What each month to a goal's date would have to set aside to reach it, roughly:
+ * "Para marzo te faltan unos $550 al mes". Null without a goal and a date, or once
+ * it is reached.
+ */
+export function goalNeeded(line: PlanSavingLine): string | null {
+  const needed = line.needed_per_month
+  if (!needed || !line.target_month || needed.cents <= 0) return null
+  const when = monthWord(line.target_month)
+  return needed.cents < 100
+    ? `Para ${when} te falta menos de $1 al mes`
+    : `Para ${when} te faltan unos ${aboutMoney(needed)} al mes`
 }

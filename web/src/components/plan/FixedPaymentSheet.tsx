@@ -116,10 +116,11 @@ function SheetBody({
   // The link by which the owner said it was paid from another account, if they did.
   const mark = line.marked_paid ? line.paid_link_id : null
 
-  // Every movement that already has a place: the plan's payments, and the ones
-  // offered above the month's list.
+  // Every movement that already has a place: the plan's payments and purchases, and
+  // the ones offered above the month's list.
   const placed = new Set<string>([
     ...plan.fixed.flatMap((f) => f.movements.map((m) => m.id)),
+    ...plan.purchases.flatMap((p) => p.movements.map((m) => m.id)),
     ...line.candidates.map((c) => c.id),
     ...(hint ? [hint.movement.id] : []),
   ])
