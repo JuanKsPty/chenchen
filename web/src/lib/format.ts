@@ -11,6 +11,9 @@ import type { Account, Amount, EntryKind, Institution } from '@/api/types'
  *   signedMoney(amount)  "+$3,800.00" / "−$84.37" / "$0.00": a movement, sign glued to the $
  *   moneyParts(amount, {signed}?)  { whole: "$84,213", cents: ".25" } for smaller cents
  *   moneyFromText("100.00")  a decimal string the API sent as text
+ *   aboutMoney(amount)   "$22": whole dollars, rounded down, for a figure said with
+ *                        "unos" ("unos $22 al día"). The one rounding the app allows:
+ *                        the word says it is not exact; every other figure keeps cents
  *
  * Civil dates (YYYY-MM-DD, no zone; always built from their parts so a Panamanian
  * browser never shows the day before):
@@ -69,6 +72,25 @@ export function signedMoney(amount: Amount | number): string {
   if (cents > 0) return `+${formatted}`
   if (cents < 0) return `${MINUS}${formatted}`
   return formatted
+}
+
+const wholeDollars = new Intl.NumberFormat('es-PA', {
+  style: 'currency',
+  currency: 'USD',
+  currencyDisplay: 'narrowSymbol',
+  minimumFractionDigits: 0,
+  maximumFractionDigits: 0,
+})
+
+/**
+ * "$22" for 2,299 cents: whole dollars, the cents dropped rather than rounded up, so
+ * "unos $22 al día" never promises a cent more than there is. Integer division on
+ * the cents; the formatter only ever sees a whole number.
+ */
+export function aboutMoney(amount: Amount | number): string {
+  const cents = centsOf(amount)
+  const formatted = wholeDollars.format(Math.floor(Math.abs(cents) / 100))
+  return cents < 0 ? `${MINUS}${formatted}` : formatted
 }
 
 /** Formats a decimal string the API gave as text, e.g. the chat's "100.00". */

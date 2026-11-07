@@ -28,9 +28,10 @@
 // The app's own assistant writes nothing: its propose_* tools only store a
 // proposal, which the owner applies or discards from the chat. Claude, reached
 // over HTTP (NewServer, ADR-0004), may also note a purchase, file a movement
-// or annotate it, which no balance reads, and hand in a statement the bank
-// itself produced — only when the owner's grant allows writing, and with the
-// owner approving each call in their conversation.
+// or annotate it, and keep the month's plan, none of which a balance reads,
+// and hand in a statement the bank itself produced — only when the owner's
+// grant allows writing, and with the owner approving each call in their
+// conversation.
 package mcpserver
 
 import (
@@ -48,6 +49,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/civil"
 	"github.com/JuanKsPty/chenchen/api/internal/investments"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
+	"github.com/JuanKsPty/chenchen/api/internal/plan"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
@@ -68,6 +70,9 @@ type Deps struct {
 	Investments *investments.Service
 	Rules       *rules.Service
 	Proposals   *proposals.Service
+	// Plan is the month's plan: both servers read it, and Claude, allowed to
+	// write, keeps it (ADR-0005).
+	Plan *plan.Service
 	// Captures and Uploads serve Claude's tools only (NewServer): noting a
 	// purchase, and handing in a statement.
 	Captures *captures.Service

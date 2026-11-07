@@ -193,7 +193,8 @@ type proposalResult struct {
 	Note       string `json:"note"`
 }
 
-// addAnalystReads adds the reports both servers share.
+// addAnalystReads adds the reports both servers share, the month's plan
+// among them.
 func addAnalystReads(server *mcp.Server, deps Deps, userID uuid.UUID) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name:        ToolListCategories,
@@ -404,6 +405,8 @@ func addAnalystReads(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		}
 		return nil, out, nil
 	})
+
+	addPlanRead(server, deps, userID)
 }
 
 // addProposals adds the propose_* tools. The app's assistant gets them all,

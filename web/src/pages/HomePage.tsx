@@ -8,6 +8,7 @@ import { RecentMovements } from '@/components/home/RecentMovements'
 import { TopCategories } from '@/components/home/TopCategories'
 import { UploadReviewDialog } from '@/components/import/UploadReviewDialog'
 import { Notice, PageHeader } from '@/components/kit'
+import { PlanGlance } from '@/components/plan/PlanGlance'
 import { useAccounts } from '@/lib/queries'
 import { useSession } from '@/lib/session'
 import { useDocumentTitle } from '@/lib/title'
@@ -17,10 +18,11 @@ import { useDocumentTitle } from '@/lib/title'
  * spec pageLayout).
  *
  * From lg, a 12-column grid with 24px gaps: Patrimonio (7) beside the notices and
- * "En qué se te va" (5); under them Recientes (7) and "Este mes" (5), each column
- * flowing on its own height. Below lg, one column 16px apart, in reading order:
- * Patrimonio, notices, En qué se te va, Este mes, Recientes. That is at most five
- * figures before the first list.
+ * "En qué se te va" (5); under them Recientes (7), and the month's plan and "Este
+ * mes" (5), each column flowing on its own height. Below lg, one column 16px apart,
+ * in reading order: Patrimonio, notices, En qué se te va, Plan de noviembre, Este
+ * mes, Recientes. That is at most five figures before the first list; the plan's
+ * glance comes after it, and shows only when the month has a plan.
  *
  * The greeting is the page's h1 from lg ("Buenas, Juan. Así va tu chenchén.");
  * below lg the mobile bar shows it, and the h1 stays for screen readers.
@@ -67,10 +69,10 @@ export function HomePage() {
     )
   } else {
     // From lg the two columns flow on their own: the right one (notices, En qué se
-    // te va, Este mes) spans both rows, and the second row is `1fr` so that it, not
-    // the first, takes up the right column's extra height. Patrimonio then keeps its
-    // own height instead of stretching into a tall veranera slab, and Recientes
-    // starts right under it. DOM order is the phone's reading order.
+    // te va, the plan, Este mes) spans both rows, and the second row is `1fr` so
+    // that it, not the first, takes up the right column's extra height. Patrimonio
+    // then keeps its own height instead of stretching into a tall veranera slab, and
+    // Recientes starts right under it. DOM order is the phone's reading order.
     body = (
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-12 lg:grid-rows-[auto_1fr] lg:gap-6">
         <NetWorthCard
@@ -81,6 +83,7 @@ export function HomePage() {
         <div className="flex min-w-0 flex-col gap-4 lg:col-span-5 lg:col-start-8 lg:row-span-2 lg:row-start-1 lg:gap-6 lg:self-start">
           {list && <HomeNotices accounts={list} onReviewUploads={reviewUploads} />}
           <TopCategories />
+          <PlanGlance />
           <MonthFlow />
         </div>
         <RecentMovements

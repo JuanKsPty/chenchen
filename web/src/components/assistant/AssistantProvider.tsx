@@ -88,6 +88,7 @@ export const TOOL_LABELS: Record<string, string> = {
   list_transfer_suggestions: 'Buscó transferencias sin confirmar',
   get_portfolio: 'Consultó tus inversiones',
   list_rules: 'Consultó tus reglas',
+  get_month_plan: 'Revisó tu plan del mes',
   propose_recategorize: 'Propuso una categoría',
   propose_note: 'Propuso una nota',
   propose_rule: 'Propuso una regla',

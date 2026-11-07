@@ -1,16 +1,20 @@
 /**
- * <MonthPicker month size? className? />
+ * <MonthPicker month size? max? href? className? />
  *
  *   month  the month on screen, YYYY-MM
  *   size   'bar'  (default) 40px chevrons and a small label: beside the desktop h1
  *          'wide' 44px chevrons, body label, stretched: the mobile page's first row
+ *   max    the last month it steps to, YYYY-MM; the current month by default. The
+ *          plan passes next month, which can already be planned.
+ *   href   the page's link for a month (undefined for the current one); Gastos'
+ *          spendingHref by default, the plan's planHref
  *
  * "‹ Octubre 2026 ›" on a surface2 pill. The chevrons are links to ?mes (the current
  * month drops the parameter), so the month lives in the URL and Back works. There is
- * nothing after the current month: its "›" is disabled. Stepping onto the current
- * month with "›" would leave focus on that disabled button (lost to the page), so
- * focus moves to "‹" instead. The label is a polite live region, so a screen reader
- * hears the new month after each step.
+ * nothing after `max`: its "›" is disabled. Stepping onto `max` with "›" would leave
+ * focus on that disabled button (lost to the page), so focus moves to "‹" instead.
+ * The label is a polite live region, so a screen reader hears the new month after
+ * each step.
  */
 import { ChevronLeftIcon, ChevronRightIcon } from 'lucide-react'
 import { useEffect, useRef } from 'react'
@@ -24,16 +28,21 @@ import { cn } from '@/lib/utils'
 export function MonthPicker({
   month,
   size = 'bar',
+  max,
+  href = spendingHref,
   className,
 }: {
   month: string
   size?: 'bar' | 'wide'
+  max?: string
+  href?: (ym?: string) => string
   className?: string
 }) {
   const now = currentMonth()
+  const last = max ?? now
   const previous = shiftMonth(month, -1)
   const next = shiftMonth(month, 1)
-  const hrefOf = (ym: string) => spendingHref(ym === now ? undefined : ym)
+  const hrefOf = (ym: string) => href(ym === now ? undefined : ym)
   const buttonSize = size === 'wide' ? 'icon' : 'icon-bar'
   const buttonClass = 'hover:bg-line'
   const previousRef = useRef<HTMLAnchorElement>(null)
@@ -72,7 +81,7 @@ export function MonthPicker({
       >
         {monthTitle(month)}
       </span>
-      {next <= now ? (
+      {next <= last ? (
         <Button asChild variant="plain" size={buttonSize} className={buttonClass}>
           <Link
             to={hrefOf(next)}
@@ -80,7 +89,7 @@ export function MonthPicker({
             onClick={(event) => {
               // Only when focus is on this link, which the step is about to remove.
               refocusPrevious.current =
-                next === now && document.activeElement === event.currentTarget
+                next === last && document.activeElement === event.currentTarget
             }}
           >
             <ChevronRightIcon aria-hidden="true" />

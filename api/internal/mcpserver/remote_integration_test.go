@@ -24,10 +24,12 @@ var (
 		mcpserver.ToolListAccounts, mcpserver.ToolListMovements, mcpserver.ToolListCategories, mcpserver.ToolSpending,
 		mcpserver.ToolCashFlow, mcpserver.ToolExplainDrift, mcpserver.ToolTransferSuggest, mcpserver.ToolPortfolio,
 		mcpserver.ToolListRules, mcpserver.ToolListPending, mcpserver.ToolSyncPlan, mcpserver.ToolImportStatus,
+		mcpserver.ToolMonthPlan,
 	}
 	writeTools = []string{
 		mcpserver.ToolNotePurchase, mcpserver.ToolSetCategory, mcpserver.ToolSetNote, mcpserver.ToolPrepareImport,
 		mcpserver.ToolProposeRule, mcpserver.ToolProposeTransfer, mcpserver.ToolProposeCheckpoint,
+		mcpserver.ToolSavePlanItem, mcpserver.ToolRemovePlanItem,
 	}
 )
 
@@ -453,7 +455,8 @@ func TestTheAppSuggestsARuleAndSaysWhatItWouldReach(t *testing.T) {
 
 // What Claude writes never anchors a balance or rewrites movements in bulk:
 // the stated balance and the rule stay proposals for the owner, and nothing
-// else it can call touches either.
+// else it can call touches either. Keeping the plan writes no line and no
+// noted purchase either: the plan is only what the owner expects.
 func TestNoWriteToolTouchesCheckpointsOrRules(t *testing.T) {
 	r := newRig(t)
 	r.importAsOwner(t, r.owner, "junio.csv", june)
@@ -462,6 +465,16 @@ func TestNoWriteToolTouchesCheckpointsOrRules(t *testing.T) {
 	food := r.category(t, r.owner)
 	checkpoints, rules := r.count(t, "balance_checkpoints"), r.count(t, "category_rules")
 	cs := r.client(t, first(r.connect(t, r.owner, oauth.ScopeRead, oauth.ScopeWrite)))
+
+	entries, captures := r.count(t, "entries"), r.count(t, "captures")
+	var saved planItemOut
+	mustCall(t, cs, mcpserver.ToolSavePlanItem, map[string]any{"kind": "fixed", "name": "Cafe de cada mes",
+		"amount": "3.50", "day": 4, "match_text": "CAFE DE PRUEBA", "category_id": food.String()}, &saved)
+	mustCall(t, cs, mcpserver.ToolSavePlanItem, map[string]any{"item_id": saved.Item.ItemID, "amount": "3.75"}, nil)
+	mustCall(t, cs, mcpserver.ToolRemovePlanItem, map[string]any{"item_id": saved.Item.ItemID}, nil)
+	if e, c := r.count(t, "entries"), r.count(t, "captures"); e != entries || c != captures {
+		t.Errorf("keeping the plan wrote lines %d → %d, purchases %d → %d", entries, e, captures, c)
+	}
 
 	day := civil.Of(time.Now().In(civil.Panama)).String()
 	for _, tt := range []struct {

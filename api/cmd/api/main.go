@@ -30,6 +30,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
 	"github.com/JuanKsPty/chenchen/api/internal/oauth"
+	"github.com/JuanKsPty/chenchen/api/internal/plan"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
@@ -106,6 +107,7 @@ func run() error {
 	reportsSvc := reports.NewService(db)
 	transfersSvc := transfers.NewService(db)
 	rulesSvc := rules.NewService(db, categoriesSvc)
+	planSvc := plan.NewService(db)
 	proposalsSvc := proposals.NewService(db, accountsSvc, categoriesSvc, movementsSvc, rulesSvc, transfersSvc)
 	// The statements Claude sends. Without a public URL there is no address
 	// to hand out, but the owner's list still answers, empty.
@@ -119,6 +121,7 @@ func run() error {
 		Investments: investmentsSvc,
 		Rules:       rulesSvc,
 		Proposals:   proposalsSvc,
+		Plan:        planSvc,
 		Captures:    capturesSvc,
 		Uploads:     uploadsSvc,
 	}
@@ -182,6 +185,7 @@ func run() error {
 		OAuth:   oauthHandler,
 		MCP:     mcpHandler,
 		Uploads: uploads.NewHandler(uploadsSvc),
+		Plan:    plan.NewHandler(planSvc),
 	})
 
 	go housekeeping(ctx, authSvc, oauthSvc, uploadsSvc, []*httpx.RateLimiter{

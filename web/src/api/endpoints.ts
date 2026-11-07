@@ -25,7 +25,16 @@ import type {
   InvestmentTrade,
   McpResource,
   Me,
+  MonthPlan,
   NewShortcutKey,
+  PlanCapLine,
+  PlanFunding,
+  PlanItem,
+  PlanItemKind,
+  PlanLink,
+  PlanScope,
+  PlanSuggestion,
+  PlanSuggestions,
   Portfolio,
   Reconciliation,
   RuleReach,
@@ -339,6 +348,145 @@ export const decideTransfer = (input: {
   in_entry_id: string
   confirm: boolean
 }) => request<void>('/api/transfers/decisions', { method: 'POST', body: input })
+
+// --- the month's plan ------------------------------------------------------------
+
+/** The plan of a month (YYYY-MM); without one, the current month in Panama. */
+export const fetchPlan = (month?: string) =>
+  request<MonthPlan>(`/api/plan${month ? `?month=${encodeURIComponent(month)}` : ''}`)
+
+/**
+ * An item as a form saves it, for `month` on (`scope: 'from'`) or for it alone
+ * (`'only'`). Amounts travel as typed text ("650.00"). Only these fields: the API
+ * refuses one it does not know.
+ *
+ * A planned purchase is always saved from `month` on: `amount` is its price,
+ * `target_month` the month it is to be bought in (from `month` to 24 months after the
+ * current one) and `funding` how it is set aside. The server works out its shares
+ * from `month` on and keeps the month it was first planned for, so nobody sends a
+ * start month.
+ */
+export interface PlanItemInput {
+  kind: PlanItemKind
+  month: string
+  scope: PlanScope
+  name: string
+  amount: string
+  /** 1 to 31; a paycheck and a payment need one, a purchase has none. */
+  day?: number
+  match_text?: string
+  /** null or left out: no category. */
+  category_id?: string | null
+  /** A saving's account; null or left out: none. */
+  account_id?: string | null
+  /** A saving's goal; left out: none. */
+  target?: string
+  /** When a saving's goal is to be reached, or the month a purchase is bought in. */
+  target_month?: string
+  /** A purchase's: how it is set aside. */
+  funding?: PlanFunding
+}
+
+/**
+ * Creates the item with the caller's id (201) or edits it (200), and answers with
+ * the month it was saved for. Sending the same again changes nothing, which is how
+ * an edit is undone: the previous values, sent again.
+ */
+export const savePlanItem = (id: string, input: PlanItemInput) =>
+  request<PlanItem>(`/api/plan/items/${encodeURIComponent(id)}`, {
+    method: 'PUT',
+    body: input,
+  })
+
+/**
+ * Takes `month` on, or that month alone, out of an item; one left with no month goes.
+ * A purchase only from `month` on: the months before keep what they set aside, and
+ * saving it again plans it again.
+ */
+export const deletePlanItem = (id: string, month: string, scope: PlanScope) =>
+  request<void>(
+    `/api/plan/items/${encodeURIComponent(id)}?${new URLSearchParams({ month, scope })}`,
+    { method: 'DELETE' },
+  )
+
+/** A cap on an expense category, for `month` on or for it alone. */
+export interface PlanCapInput {
+  month: string
+  scope: PlanScope
+  amount: string
+}
+
+export const savePlanCap = (categoryId: string, input: PlanCapInput) =>
+  request<Omit<PlanCapLine, 'spent' | 'level'>>(
+    `/api/plan/caps/${encodeURIComponent(categoryId)}`,
+    { method: 'PUT', body: input },
+  )
+
+export const deletePlanCap = (categoryId: string, month: string, scope: PlanScope) =>
+  request<void>(
+    `/api/plan/caps/${encodeURIComponent(categoryId)}?${new URLSearchParams({ month, scope })}`,
+    { method: 'DELETE' },
+  )
+
+/**
+ * What the owner says about one month of a paycheck or a payment (a month that has
+ * passed too): this movement paid it (`assign`), this one did not (`reject`), or it
+ * was paid, or came in, where chenchén cannot see (`paid`, with no movement).
+ *
+ * For a planned purchase the month is the one it was bought in, any from the month it
+ * was planned for to the one after it was due; it is only ever bought by a movement,
+ * never said to be paid (the server refuses `paid`).
+ */
+export type PlanLinkSaying = { item_id: string; month: string } & (
+  { decision: 'assign' | 'reject'; movement_id: string } | { decision: 'paid' }
+)
+
+/** A saying with the caller's id, so a send whose answer was lost is safe to repeat. */
+export type PlanLinkInput = PlanLinkSaying & { id: string }
+
+/**
+ * 201 with the link it records, or 200 with the one already there: the same id, or
+ * the same word about the same movement and month. That one may have another id, so
+ * taking it back uses the id in the answer. Saying the opposite about a movement
+ * replaces what was said. Refusals, each with the server's sentence:
+ *   409 movement_in_plan    the movement already pays another item or month
+ *   422 movement_too_far    it is booked more than a month away from that month
+ *   404 entry_not_found     the movement is gone (a noted purchase discarded)
+ *   404 plan_item_not_found the item is not planned for that month
+ *   409 plan_link_id_taken  the id is someone else's: a new one goes through
+ */
+export const addPlanLink = (input: PlanLinkInput) =>
+  request<PlanLink>('/api/plan/links', { method: 'POST', body: input })
+
+/**
+ * Takes back what a link said: the month is recognised again as if it had never been
+ * said. 404 plan_link_not_found when it was taken back already, or went with its
+ * movement or its item's month.
+ */
+export const deletePlanLink = (id: string) =>
+  request<void>(`/api/plan/links/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/**
+ * The paychecks, payments and savings the owner's history suggests planning, that
+ * the plan does not have yet and the owner has not turned down.
+ */
+export const fetchPlanSuggestions = () => request<PlanSuggestions>('/api/plan/suggestions')
+
+/** A suggestion as a dismissal names it: its kind and its key, as the server gave them. */
+export type PlanDismissal = Pick<PlanSuggestion, 'kind' | 'key'>
+
+/** Turns a suggestion down: it is not offered again. Saying it twice is saying it once. */
+export const dismissPlanSuggestion = ({ kind, key }: PlanDismissal) =>
+  request<void>('/api/plan/dismissals', { method: 'PUT', body: { kind, key } })
+
+/**
+ * Takes turning it down back: it is offered again while the history suggests it.
+ * The key travels in the query, where a paycheck's "#1" has to be encoded.
+ */
+export const undismissPlanSuggestion = ({ kind, key }: PlanDismissal) =>
+  request<void>(`/api/plan/dismissals?${new URLSearchParams({ kind, key })}`, {
+    method: 'DELETE',
+  })
 
 // --- rules ---------------------------------------------------------------------
 

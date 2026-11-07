@@ -7,6 +7,8 @@
  *     the page below lg (where the top bar already says "Gastos")
  *   - "Salidas de octubre": the total, a line comparing it with last month, and
  *     "Entradas y salidas" for the four months ending with this one
+ *   - "Plan de octubre": what is left of what the month's plan left free, and the
+ *     way into it (or, this month with no plan, an invite to make one)
  *   - "Por categoría": every category by amount, "Sin categoría" last, "Ver reglas"
  *   - "Entradas de octubre" by category, and beside it (or under it) the transfers
  *     waiting for a yes or no, #transferencias, and the purchases the owner noted that
@@ -24,11 +26,13 @@ import { useLocation, useSearchParams } from 'react-router-dom'
 
 import { useImport } from '@/components/import/ImportProvider'
 import { EmptyState, PageHeader } from '@/components/kit'
+import { usePlan } from '@/components/plan/usePlan'
 import { CAPTURES_ID, CaptureReview } from '@/components/spending/CaptureReview'
 import { IncomeByCategory, SpendingByCategory } from '@/components/spending/CategoryCards'
 import { MonthPicker } from '@/components/spending/MonthPicker'
 import { OutflowCard } from '@/components/spending/OutflowCard'
 import { spendingPeriod, type SpendingPeriod } from '@/components/spending/period'
+import { PlanCard } from '@/components/spending/PlanCard'
 import {
   TRANSFERS_ID,
   TransferSuggestions,
@@ -94,6 +98,7 @@ export function SpendingPage() {
       />
 
       <OutflowCard period={period} />
+      <PlanCard period={period} />
       <SpendingByCategory period={period} />
 
       <div className="grid grid-cols-[repeat(auto-fit,minmax(min(22rem,100%),1fr))] items-start gap-4 lg:gap-6">
@@ -122,7 +127,8 @@ function useScrollToSection(id: string | null, period: SpendingPeriod) {
   })
   const spend = useCategoryTotals({ from: period.from, to: period.to, kind: 'spend' })
   const income = useCategoryTotals({ from: period.from, to: period.to, kind: 'income' })
-  const ready = [suggestions, review, categories, flow, spend, income].every(
+  const plan = usePlan(period.current ? undefined : period.month)
+  const ready = [suggestions, review, categories, flow, spend, income, plan].every(
     (q) => !q.isPending,
   )
 

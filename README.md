@@ -119,6 +119,59 @@ mismo filtro para Movimientos, el CSV, Gastos y el asistente.
 si quieres, a lo que ya importaste, pero **nunca pisa una categoría que elegiste a
 mano**.
 
+### El plan del mes
+
+> Ingreso esperado − pagos fijos − ahorro − compras planeadas = **libre para gastar**
+
+`GET /api/plan?month=AAAA-MM` dice cuánto te queda para gastar en el mes y cuánto por
+día. Guardas lo que esperas (`PUT /api/plan/items/{id}` y `PUT /api/plan/caps/{categoría}`):
+cada sueldo con su día, los pagos que salen cada mes, lo que apartas, lo que piensas
+comprar y, si quieres, un tope por categoría. Lo real se calcula cada vez que se lee, con
+los mismos movimientos que suma Gastos, y nada de eso se guarda:
+
+- **Cada salida del mes cae en un solo lugar:** el pago fijo que pagó, la compra planeada
+  que compró, o lo libre. Un pago que ya salió cuesta lo que se pagó; uno que no ha salido
+  guarda su monto.
+- **Un pago se reconoce** por su texto, comparado como una regla, por su monto (±25 %) y
+  por su mes. Un sueldo, por su texto, su monto y una semana alrededor de su día, aunque
+  llegue en el mes de al lado. El cargo chico que va al lado de un pago, en la misma
+  cuenta y el mismo día, como el impuesto de un seguro, se suma a ese pago.
+- **Cuando se equivoca, lo corriges** con `POST /api/plan/links` («fue este movimiento»,
+  «este no» o «lo pagué desde otra cuenta») y lo deshaces con `DELETE`. Un movimiento paga
+  una sola cosa, y si es de un mes vecino se carga a ese mes. Un pago que aún no se ve
+  ofrece hasta tres candidatos, y una pista si el banco lo imprimió como transferencia.
+- **Las tarjetas** muestran su fecha de pago y si ya cubriste el mínimo, sin restar nada:
+  sus compras ya cuentan.
+- **El ingreso extra nunca cambia lo libre** por sí solo, y el ahorro nunca cuenta como
+  gasto: llega a su cuenta como transferencia.
+- **Una compra planeada se aparta en el plan, nunca en un saldo,** de una de tres formas:
+  un poco cada mes hasta el mes de la compra (las partes suman exacto su precio), todo
+  ese mes, o con tus ahorros, que no toca lo libre. El servidor escribe las partes, y
+  cambiar el precio o el mes reparte lo que falta desde el mes que editas. Se reconoce
+  cuando un solo gasto a 10 % del precio, con su texto o su categoría, puede ser ella,
+  entre el mes en que la planeaste y el siguiente al de la compra. El mes en que la
+  compras cuenta lo pagado menos lo que ya habías apartado: antes o más cara, ese mes
+  paga el resto; más barata, libera lo de más.
+- **El avance de una meta es el saldo de su cuenta,** el mismo que muestra Cuentas, y «este
+  mes apartaste» son las transferencias que llegaron a ella en el mes, menos las que
+  salieron. Los intereses y los dividendos no cuentan.
+- **Al 80 %** de lo libre, o de un tope, el plan dice que está cerca; un centavo más allá
+  del total, que va por encima. El día de hoy, el mes y los días que quedan los decide el
+  servidor, en hora de Panamá.
+- **Cada valor vale por tramos de meses.** Un mes pasado conserva el plan que tuvo, y una
+  edición vale desde un mes o solo para ese mes, hasta 24 meses adelante.
+- **El historial sugiere qué planear** (`GET /api/plan/suggestions`): lo que entró o salió
+  una vez al mes, con el mismo monto (±10 %), en al menos dos de los últimos tres meses
+  cerrados y sin haber dejado de llegar, y lo que apartas cada mes en una cuenta de ahorro
+  o de inversión. Un sueldo de quincena son dos sugerencias, y el impuesto de un cargo se
+  suma a él. Nunca sugiere transferencias, el pago de la tarjeta ni lo que el plan ya
+  tiene, ni las compras planeadas, y un pago por Yappy a una persona se llama «Yappy de
+  cada mes», sin su nombre.
+  Lo que descartas (`PUT /api/plan/dismissals`) no vuelve hasta que lo deshaces con
+  `DELETE`.
+
+Como todo lo demás, el plan nunca mueve un saldo ([ADR 0005](docs/adr/0005-plan-del-mes.md)).
+
 ---
 
 ## Imports
@@ -174,7 +227,7 @@ REST.
 | `list_accounts`, `list_movements`, `list_categories`, `list_rules` | `propose_recategorize` |
 | `spending_by_category`, `cash_flow` | `propose_note`, `propose_rule` |
 | `explain_drift`, `list_transfer_suggestions` | `propose_transfer_decision` |
-| `get_portfolio` | `propose_checkpoint` |
+| `get_portfolio`, `get_month_plan` | `propose_checkpoint` |
 
 **Ninguna herramienta escribe.** Una herramienta `propose_*` comprueba el cambio contra
 tus datos y lo guarda como propuesta, con un resumen que escribe el servidor y no el
@@ -183,14 +236,19 @@ aplicar se vuelve a comprobar, y un `UPDATE` condicional hace que dos clics la a
 una sola vez. Nada de lo que puede proponer cambia un saldo, y ninguna herramienta mueve
 dinero.
 
+`get_month_plan` dice lo mismo que el plan del mes: cuánto te queda libre, cuánto por día
+y cómo va cada ingreso, pago fijo, ahorro y compra planeada. Si lo gastado pasa de lo
+libre, el asistente lo dice con la cifra y sin regañar. El plan lo editas tú, en Gastos.
+
 **Claude, desde fuera.** Con `PUBLIC_URL`, el mismo servidor responde en `/api/mcp` a
 Claude (claude.ai, su app y Claude Code), con un token propio por OAuth
 ([ADR 0004](docs/adr/0004-claude-por-mcp.md)). Ahí lee lo mismo, más
 `list_pending_purchases`, `sync_plan` e `import_status`. Si la persona lo permite, además
-anota compras (`note_purchase`), pone categoría y nota (`set_category`, `set_note`) y
-entrega estados de cuenta (`prepare_import`). Nada de eso mueve un saldo, salvo el archivo
-que generó el propio banco, que entra solo si continúa una cuenta que ya existe y cuadra
-con ella; si no, queda por revisar en la app.
+anota compras (`note_purchase`), pone categoría y nota (`set_category`, `set_note`),
+guarda y quita cosas de tu plan del mes (`save_plan_item`, `remove_plan_item`) y entrega
+estados de cuenta (`prepare_import`). Nada de eso mueve un saldo, salvo el archivo que
+generó el propio banco, que entra solo si continúa una cuenta que ya existe y cuadra con
+ella; si no, queda por revisar en la app.
 
 **Ninguna herramienta acepta un `user_id`.** La identidad viene del token de la petición
 y queda fijada en el servidor MCP antes de que el modelo diga nada, así que no hay
@@ -249,6 +307,7 @@ api/
   internal/accounts       saldos, anclas, conciliación
   internal/movements      búsqueda, filtros, categoría, nota, CSV
   internal/reports        gasto, ingreso y flujo
+  internal/plan           el plan del mes: lo que esperas al lado de lo que pasó
   internal/transfers      pares de transferencias entre tus cuentas
   internal/rules          reglas de categoría
   internal/proposals      lo que propone el asistente

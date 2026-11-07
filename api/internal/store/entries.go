@@ -424,6 +424,41 @@ func (q *Queries) SumBefore(ctx context.Context, accountID, entryID uuid.UUID) (
 	return money.Cents(total), wrap("store.SumBefore", err)
 }
 
+// SumsAtCheckpoints totals, for each of the user's checkpoints named in ids,
+// the entries its balance includes, by checkpoint: SumBefore its entry when it
+// names one, SumThroughDay its day otherwise. It answers in one query what
+// those two answer one checkpoint at a time, for a reader of several balances
+// at once. Printed lines only, never captures (ADR-0002).
+func (q *Queries) SumsAtCheckpoints(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]money.Cents, error) {
+	out := make(map[uuid.UUID]money.Cents, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.q.Query(ctx, `
+		SELECT c.id, COALESCE((
+		    SELECT SUM(e.amount_cents) FROM entries e
+		    WHERE e.account_id = c.account_id AND CASE
+		        WHEN c.before_entry_id IS NULL THEN e.balance_on <= c.as_of
+		        ELSE (e.balance_on, COALESCE(e.booked_at, '-infinity'::timestamptz), e.seq, e.id)
+		           < (SELECT x.balance_on, COALESCE(x.booked_at, '-infinity'::timestamptz), x.seq, x.id
+		              FROM entries x WHERE x.id = c.before_entry_id)
+		    END), 0)
+		FROM balance_checkpoints c WHERE c.user_id = $1 AND c.id = ANY($2)`, userID, ids)
+	if err != nil {
+		return nil, wrap("store.SumsAtCheckpoints", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id uuid.UUID
+		var total int64
+		if err := rows.Scan(&id, &total); err != nil {
+			return nil, wrap("store.SumsAtCheckpoints", err)
+		}
+		out[id] = money.Cents(total)
+	}
+	return out, wrap("store.SumsAtCheckpoints", rows.Err())
+}
+
 // queryEntries runs a query whose rows scan reads: scanEntry for entryColumns,
 // scanMovement for movementColumns.
 func (q *Queries) queryEntries(ctx context.Context, op string, scan func(scanner) (Entry, error),

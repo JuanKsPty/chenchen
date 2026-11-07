@@ -29,6 +29,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/investments"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
 	"github.com/JuanKsPty/chenchen/api/internal/oauth"
+	"github.com/JuanKsPty/chenchen/api/internal/plan"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
@@ -71,6 +72,9 @@ type Deps struct {
 	// at, mounted only with MCP, and the owner's list of the ones that wait,
 	// behind a session.
 	Uploads *uploads.Handler
+	// Plan is the month's plan. Nil leaves its routes out, for a rig that
+	// does not need it.
+	Plan *plan.Handler
 }
 
 // NewRouter builds the handler for the whole API.
@@ -149,6 +153,9 @@ func NewRouter(d Deps) http.Handler {
 			r.Mount("/proposals", d.Proposals.Routes())
 			r.Mount("/chat", d.Chat.Routes())
 			r.Mount("/captures", d.Captures.Routes())
+			if d.Plan != nil {
+				r.Mount("/plan", d.Plan.Routes())
+			}
 		})
 
 		r.NotFound(func(w http.ResponseWriter, r *http.Request) {

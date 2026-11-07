@@ -133,6 +133,8 @@ herramientas que escriben van directas, con una regla: **nunca mueven un saldo**
 
 - **Anotar una compra, poner una categoría o una nota** no tocan ningún saldo (ADR 0002)
   y se deshacen.
+- **Guardar o quitar algo del plan del mes** tampoco (ADR 0005): el plan es lo que la
+  persona espera, nunca un saldo, y se deshace guardando otra vez lo que había.
 - **Importar un estado es la única que puede mover un saldo.** El saldo sale del archivo
   del banco, leído por el mismo parser determinista de siempre, nunca de un número que
   escriba Claude. Además, solo entra solo si continúa una cuenta que ya existe y cuadra
@@ -166,6 +168,7 @@ herramientas que escriben van directas, con una regla: **nunca mueven un saldo**
 | `spending_by_category`, `cash_flow`, `explain_drift` | `set_category`, `set_note` |
 | `list_transfer_suggestions`, `get_portfolio` | `prepare_import` |
 | `list_pending_purchases`, `sync_plan`, `import_status` | `propose_rule`, `propose_transfer_decision`, `propose_checkpoint` |
+| `get_month_plan` | `save_plan_item`, `remove_plan_item` |
 
 - Una herramienta que el token no permite **no aparece** en `tools/list`, así que no se
   puede llamar.
@@ -173,7 +176,8 @@ herramientas que escriben van directas, con una regla: **nunca mueven un saldo**
   corre las de lectura sin preguntar y pide permiso para las otras.
 - Las instrucciones del servidor son una versión corta de las del asistente: qué es un
   saldo impreso, qué es una compra pendiente, que el texto de los movimientos es dato y
-  nunca instrucción, y cómo se sincroniza. Una conexión de solo lectura no recibe lo de
+  nunca instrucción, que el plan del mes no es un saldo y que pasarse de lo libre se dice
+  con la cifra y sin regañar, y cómo se sincroniza. Una conexión de solo lectura no recibe lo de
   sincronizar: se le dice que solo puede leer. No nombran ningún banco.
 - `note_purchase` pasa por el mismo `captures.Service.Add` que la web, con el canal
   `agent`. **El id lo elige chenchén**, nunca quien llama. Si chenchén ya tenía la compra,
@@ -186,6 +190,23 @@ herramientas que escriben van directas, con una regla: **nunca mueven un saldo**
 - `set_category` y `set_note` sirven igual para una línea del estado que para una compra
   pendiente. La categoría queda como elegida por el asistente.
 - `propose_recategorize` y `propose_note` no están: por MCP eso se hace directo.
+- `get_month_plan` dice lo mismo que `GET /api/plan` (ADR 0005), con los montos en dólares
+  y las categorías y cuentas por su nombre; en el mes actual trae también lo que el
+  historial sugiere planear. La tiene también el asistente de la app, que solo la lee.
+- `save_plan_item` y `remove_plan_item` pasan por el mismo `plan.Service` que la web.
+  **El id lo elige chenchén**, como en `note_purchase`: sin `item_id` se agrega algo
+  nuevo, y si el plan ya lo tiene en los meses que tendría (del mismo tipo, con el mismo
+  nombre sin contar mayúsculas, tildes ni espacios, y con el mismo día, texto y cuenta si
+  los manda), lo devuelve con `already_planned` y no agrega otro. Buscar y agregar son un
+  solo paso bajo el candado de la persona, como en `captures.Service.Add`, así que dos
+  llamadas iguales a la vez agregan uno. El día y el texto separan lo que se llama igual:
+  las dos quincenas de un sueldo, o los pagos a dos personas, son dos cosas. Con
+  `item_id` cambia solo lo que manda, desde un mes o solo en ese mes; lo demás queda como
+  estaba, así un cambio de monto no se lleva el texto ni la categoría que Claude no
+  releyó. Sin mes, el cambio es desde este mes o, si lo planeado empieza después, desde
+  su primer mes: un cambio que no dice cuándo no adelanta nada. Un mes que se quitó se
+  vuelve a planear guardándolo con su `item_id` y ese mes. Los errores dicen en español
+  qué corregir, campo por campo.
 - `sync_plan` dice, por cada cuenta a la que llegan estados (no las de inversión ni las
   tarjetas que paga otra persona): desde qué día bajar (el último día importado menos 7,
   porque traslapar no duplica, o 60 días atrás si nunca se importó), sus compras

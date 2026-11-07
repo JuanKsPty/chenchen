@@ -13,6 +13,7 @@ import {
   ACCOUNTS_PATH,
   HOME_PATH,
   MOVEMENTS_PATH,
+  PLAN_PATH,
   RULES_PATH,
   SECURITY_HREF,
   SETTINGS_PATH,
@@ -23,6 +24,7 @@ import {
   AccountsPage,
   HomePage,
   MovementsPage,
+  PlanPage,
   preloadAllPages,
   RulesPage,
   SettingsPage,
@@ -46,6 +48,7 @@ export default function SignedInApp() {
         <Route path={MOVEMENTS_PATH} element={<MovementsPage />} />
         <Route path={SPENDING_PATH} element={<SpendingPage />} />
         <Route path={RULES_PATH} element={<RulesPage />} />
+        <Route path={PLAN_PATH} element={<PlanPage />} />
         <Route path={SETTINGS_PATH} element={<SettingsPage />} />
 
         {/* Somebody who signs in from a form, or opens the portada with a session,
