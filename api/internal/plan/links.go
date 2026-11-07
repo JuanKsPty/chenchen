@@ -141,9 +141,14 @@ func (in LinkInput) check() error {
 // recognised, never what it planned, but none reaches past MonthsAhead. The
 // month must be one the item is planned for, and a movement must be booked
 // within linkMonths of it. A movement said to pay a paycheck must be income,
-// and one said to pay a payment spending; it pays one item at a time, so
-// saying it pays a second one is ErrMovementInPlan until the first link goes.
-// Something of someone else's is not found.
+// and one said to pay a payment or to buy a purchase spending; it pays one
+// item at a time, so saying it pays a second one is ErrMovementInPlan until
+// the first link goes. Something of someone else's is not found.
+//
+// For a planned purchase, the month is the month it was bought in, one from
+// the month it was planned for to the month after it was due, the months it
+// can be bought in. It is bought by a movement, never said to be paid
+// outside: what it cost is what the movement says.
 func (s *Service) Link(ctx context.Context, userID uuid.UUID, in LinkInput) (link store.PlanLink, created bool, err error) {
 	if in.Month.IsZero() {
 		return store.PlanLink{}, false, ErrInvalidMonth
@@ -176,6 +181,9 @@ func (s *Service) Link(ctx context.Context, userID uuid.UUID, in LinkInput) (lin
 		item, err := linkedItem(ctx, q, userID, in.ItemID, in.Month)
 		if err != nil {
 			return err
+		}
+		if item.Kind == KindPurchase && in.Decision == DecisionPaid {
+			return fmt.Errorf("%w: %s", ErrPaidPurchase, item.ID)
 		}
 		want := store.PlanLink{ID: in.ID, UserID: userID, ItemID: item.ID, Month: in.Month.First(),
 			Decision: string(in.Decision)}
@@ -252,7 +260,8 @@ func (s *Service) Link(ctx context.Context, userID uuid.UUID, in LinkInput) (lin
 }
 
 // linkedItem is the item a link is about, under the user's lock: one of
-// theirs, a paycheck or a payment, planned for month m.
+// theirs, a paycheck or a payment planned for month m, or a purchase that can
+// be bought in it. A saving is recognised by its account, never by a link.
 func linkedItem(ctx context.Context, q *store.Queries, userID, itemID uuid.UUID, m Month) (store.PlanItem, error) {
 	item, err := q.PlanItemByID(ctx, userID, itemID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -261,7 +270,14 @@ func linkedItem(ctx context.Context, q *store.Queries, userID, itemID uuid.UUID,
 	if err != nil {
 		return store.PlanItem{}, err
 	}
-	if item.Kind != KindIncome && item.Kind != KindFixed {
+	switch item.Kind {
+	case KindIncome, KindFixed:
+	case KindPurchase:
+		if !(Purchase{Item: &item}).canBeBoughtIn(m) {
+			return store.PlanItem{}, fmt.Errorf("%w: %s cannot be bought in %s", ErrItemNotFound, itemID, m)
+		}
+		return item, nil
+	default:
 		return store.PlanItem{}, fmt.Errorf("%w: %s is %s", ErrLinkItemKind, itemID, item.Kind)
 	}
 	stored, err := q.PlanItemVersions(ctx, userID, itemID)
@@ -277,7 +293,7 @@ func linkedItem(ctx context.Context, q *store.Queries, userID, itemID uuid.UUID,
 // linkedMovement is the movement a link names, found as movements.Service.Get
 // finds it: a printed line, or a noted purchase that is still open. It must be
 // booked within linkMonths of the month of the item, and, to pay it, be
-// income for a paycheck and spending for a payment.
+// income for a paycheck and spending for a payment or a purchase.
 func linkedMovement(ctx context.Context, q *store.Queries, userID uuid.UUID, in LinkInput, item store.PlanItem) (store.Entry, error) {
 	mv, err := q.EntryByID(ctx, userID, in.MovementID)
 	if errors.Is(err, store.ErrNotFound) {
@@ -299,7 +315,7 @@ func linkedMovement(ctx context.Context, q *store.Queries, userID uuid.UUID, in 
 	switch kind := mv.EffectiveKind(); {
 	case item.Kind == KindIncome && kind != store.KindIncome:
 		return store.Entry{}, fmt.Errorf("%w: %s is %s", ErrNotIncome, mv.ID, kind)
-	case item.Kind == KindFixed && !slices.Contains(store.SpendKinds, kind):
+	case item.Kind != KindIncome && !slices.Contains(store.SpendKinds, kind):
 		return store.Entry{}, fmt.Errorf("%w: %s is %s", ErrNotSpending, mv.ID, kind)
 	}
 	return mv, nil

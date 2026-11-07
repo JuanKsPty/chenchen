@@ -35,6 +35,10 @@ type made struct {
 	movements []store.PlanMovement
 	caps      []plan.Cap
 	parents   map[uuid.UUID]uuid.UUID
+	// purchases, and how each was bought, only when a test asks for them
+	// (makePurchases).
+	purchases []plan.Purchase
+	bought    []plan.Bought
 }
 
 func makeMonth(r *rand.Rand) made {
@@ -93,6 +97,41 @@ func makeMonth(r *rand.Rand) made {
 	return m
 }
 
+// makePurchases plans a few purchases around November, each set aside one of
+// the three ways, and buys some with one or two of the made-up movements,
+// in any month they can be bought in, a refund among them sometimes. A
+// movement buys one purchase at most.
+func makePurchases(r *rand.Rand, m *made) {
+	taken := map[uuid.UUID]bool{}
+	for i := range r.IntN(3) {
+		start := oct26.AddMonths(r.IntN(3))
+		target := start.AddMonths(r.IntN(3))
+		price := money.Cents(100 + r.IntN(100000))
+		funding := fundings[r.IntN(3)]
+		shares, _ := plan.Shares(nil, start, price, target, funding)
+		item := store.PlanItem{ID: uuid.New(), Kind: plan.KindPurchase, Name: fmt.Sprintf("compra %d", i),
+			Target: &price, StartMonth: start.First(), TargetMonth: target.First(), Funding: funding,
+			CreatedAt: time.Unix(int64(100+i), 0)}
+		m.purchases = append(m.purchases, plan.Purchase{Item: &item, Shares: shares})
+		var b plan.Bought
+		if r.IntN(2) == 0 {
+			when := start.AddMonths(r.IntN(target.Sub(start) + 2))
+			var mine []store.PlanMovement
+			for _, mv := range m.movements {
+				if len(mine) < 1+r.IntN(2) && !taken[mv.ID] && slices.Contains(store.SpendKinds, mv.Kind) && r.IntN(3) == 0 {
+					taken[mv.ID] = true
+					mine = append(mine, mv)
+				}
+			}
+			b = bought(when, mine...)
+			if b.On.IsZero() {
+				b.Month = plan.Month{}
+			}
+		}
+		m.bought = append(m.bought, b)
+	}
+}
+
 func firstOrZero(m plan.Month) civil.Date {
 	if m.IsZero() {
 		return civil.Date{}
@@ -103,39 +142,58 @@ func firstOrZero(m plan.Month) civil.Date {
 func (m made) input(rec plan.Recognition) plan.Input {
 	instances := plan.Instances(m.items, m.versions, oct26, dec26)
 	return plan.Input{Month: nov26, Today: m.today, Instances: instances, Caps: m.caps, Parents: m.parents,
-		Movements: m.movements, Recognition: rec}
+		Movements: m.movements, Recognition: rec, Purchases: m.purchases, Bought: m.bought}
 }
 
 func TestComputeSplitsTheMonthsSpendingWithoutLosingOrAddingACent(t *testing.T) {
 	r := rand.New(rand.NewPCG(5, 2026))
 	for n := range 2000 {
 		m := makeMonth(r)
+		makePurchases(r, &m)
 		instances := plan.Instances(m.items, m.versions, oct26, dec26)
 		// Any recognition at all, even one Match would never make: a
-		// movement paying a month next door, a refund paying alone.
+		// movement paying a month next door, a refund paying alone, a
+		// movement that also bought a purchase.
 		rec := plan.Recognition{Paid: make([]int, len(m.movements))}
 		for i := range rec.Paid {
 			rec.Paid[i] = r.IntN(len(instances)+1) - 1
 		}
 		if r.IntN(3) == 0 {
-			rec = plan.Match(instances, m.movements, nil, nil)
+			rec = plan.MatchBeside(instances, m.movements, nil, nil, m.bought)
+		}
+		bought := map[uuid.UUID]bool{}
+		for _, b := range m.bought {
+			for _, mv := range b.Movements {
+				bought[mv.ID] = true
+			}
 		}
 		p := plan.Compute(m.input(rec))
 		s := p.Summary
 
-		var spending, income money.Cents
-		for _, mv := range m.movements {
+		var spending, income, charged money.Cents
+		for i, mv := range m.movements {
 			if plan.MonthOf(mv.BookedOn) != nov26 {
 				continue
 			}
 			switch {
 			case slices.Contains(store.SpendKinds, mv.Kind):
 				spending -= mv.Amount
+				// A purchase's first, then a payment's, whichever month either
+				// is of.
+				if k := rec.Paid[i]; bought[mv.ID] || k != plan.Unpaid && instances[k].Item.Kind == plan.KindFixed {
+					charged -= mv.Amount
+				}
 			case mv.Kind == store.KindIncome:
 				income += mv.Amount
 			}
 		}
-		var fixed, paidFixed, expected, fixedDue, incomeDue money.Cents
+		var fixed, paidFixed, expected, fixedDue, incomeDue, purchases money.Cents
+		for _, l := range p.Purchases {
+			if l.Committed < 0 || l.Status == plan.StatusBought && l.Paid == nil {
+				t.Fatalf("#%d: a purchase %s takes %s, paid %v", n, l.Status, l.Committed, l.Paid)
+			}
+			purchases += l.Committed
+		}
 		for _, l := range p.Fixed {
 			fixed += l.Committed
 			if l.Paid != nil {
@@ -160,6 +218,8 @@ func TestComputeSplitsTheMonthsSpendingWithoutLosingOrAddingACent(t *testing.T) 
 		}{
 			{"the spending, against Gastos", p.Spending, spending},
 			{"what was free plus what items took, against the spending", s.Spent + p.Charged, p.Spending},
+			{"what items took, against the movements that paid them", p.Charged, charged},
+			{"the purchases, against their lines", s.Purchases, purchases},
 			{"the quincenas' spending, against what was spent", p.Quincenas[0].Spent + p.Quincenas[1].Spent, s.Spent},
 			{"the income, against the month's flow", p.Income.Actual, income},
 			{"the payments, against their lines", s.Fixed, fixed},
@@ -173,9 +233,6 @@ func TestComputeSplitsTheMonthsSpendingWithoutLosingOrAddingACent(t *testing.T) 
 			if check.got != check.want {
 				t.Fatalf("#%d: %s: %s, want %s", n, check.what, check.got, check.want)
 			}
-		}
-		if s.Purchases != 0 {
-			t.Fatalf("#%d: planned purchases set aside %s before they are kept", n, s.Purchases)
 		}
 		if s.PerDay != nil && (s.Left <= 0 || *s.PerDay*money.Cents(s.DaysLeft) > s.Left ||
 			(*s.PerDay+1)*money.Cents(s.DaysLeft) <= s.Left) {

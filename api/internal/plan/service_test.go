@@ -48,11 +48,11 @@ func TestASaveSaysEveryFieldThatIsWrongAtOnce(t *testing.T) {
 				MatchText: "ACH EMPRESA X ACH EMPRESA X ACH EMPRESA X ACH EMPRESA X ACH EMPRESA X",
 				AccountID: &account, TargetMonth: nov},
 			want: map[string]string{
-				"name":       "Ponle un nombre de hasta 60 caracteres.",
-				"day":        "Elige un día del 1 al 31.",
-				"match_text": "El texto para reconocerlo admite hasta 60 caracteres.",
-				"account_id": "Solo un ahorro va ligado a una cuenta.",
-				"target":     "Solo un ahorro tiene una meta.",
+				"name":         "Ponle un nombre de hasta 60 caracteres.",
+				"day":          "Elige un día del 1 al 31.",
+				"match_text":   "El texto para reconocerlo admite hasta 60 caracteres.",
+				"account_id":   "Solo un ahorro va ligado a una cuenta.",
+				"target_month": "Solo un ahorro o una compra tienen fecha.",
 			},
 		},
 		{
@@ -67,15 +67,45 @@ func TestASaveSaysEveryFieldThatIsWrongAtOnce(t *testing.T) {
 			},
 		},
 		{
-			name: "a planned purchase, which is not kept yet",
+			name: "a planned purchase with no month to buy it in nor a way to set it aside",
 			in: plan.ItemInput{Kind: plan.KindPurchase, Month: nov, Scope: plan.ScopeFrom, Name: "Cámara",
 				Amount: 110000},
-			want: map[string]string{"kind": "Las compras planeadas todavía no se pueden guardar."},
+			want: map[string]string{
+				"target_month": "Elige para cuándo, de aquí a 24 meses como mucho.",
+				"funding":      "Elige cómo la apartas: un poco cada mes, todo ese mes o con tus ahorros.",
+			},
+		},
+		{
+			name: "a planned purchase with what only other items have",
+			in: plan.ItemInput{Kind: plan.KindPurchase, Month: nov, Scope: plan.ScopeOnly, Name: "Cámara",
+				Amount: 110000, Day: 5, AccountID: &account, Target: &target, StartMonth: nov,
+				TargetMonth: plan.Month{Year: 2026, Month: time.October}, Funding: "a plazos"},
+			want: map[string]string{
+				"scope":        "Una compra se aparta desde este mes hasta el de la compra.",
+				"day":          "Una compra planeada no lleva día.",
+				"account_id":   "Solo un ahorro va ligado a una cuenta.",
+				"target":       "Solo un ahorro tiene una meta.",
+				"start_month":  "Una compra se empieza a apartar el mes en que la planeas.",
+				"target_month": "Elige el mes que estás planeando o uno después.",
+				"funding":      "Elige cómo la apartas: un poco cada mes, todo ese mes o con tus ahorros.",
+			},
+		},
+		{
+			name: "a planned purchase further ahead than the plan reaches",
+			in: plan.ItemInput{Kind: plan.KindPurchase, Month: nov, Name: "Cámara", Amount: 110000,
+				TargetMonth: plan.Month{Year: 2028, Month: time.December}, Funding: plan.FundingMonthly},
+			want: map[string]string{"target_month": "Elige para cuándo, de aquí a 24 meses como mucho."},
+		},
+		{
+			name: "a payment that says how it is set aside",
+			in: plan.ItemInput{Kind: plan.KindFixed, Month: nov, Scope: plan.ScopeFrom, Name: "Seguro",
+				Amount: 368, Day: 18, Funding: plan.FundingMonthly},
+			want: map[string]string{"funding": "Solo una compra planeada dice cómo se aparta."},
 		},
 		{
 			name: "something that is no kind of item",
 			in:   plan.ItemInput{Kind: "gasto", Month: nov, Scope: plan.ScopeFrom, Name: "Algo", Amount: 100},
-			want: map[string]string{"kind": "Elige si es un ingreso, un pago fijo o un ahorro."},
+			want: map[string]string{"kind": "Elige si es un ingreso, un pago fijo, un ahorro o una compra."},
 		},
 	}
 	for _, c := range cases {

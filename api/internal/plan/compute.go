@@ -36,9 +36,9 @@ func (i Instance) Due() civil.Date {
 // versions: one per item and month a version holds for. They come by month,
 // then by the day they are due, then in the order the items were made.
 //
-// A planned purchase has none yet. How much of its price a month sets aside,
-// and whether it was bought, is worked out once purchases are kept; until
-// then SaveItem refuses one, so none is ever stored.
+// A planned purchase has none: its versions are the shares of its price, and
+// whether it was bought is worked out across all the months it can be
+// bought in (Purchases, RecognisePurchases), not one month at a time.
 func Instances(items []store.PlanItem, versions []store.PlanVersion, from, to Month) []Instance {
 	byID := make(map[uuid.UUID]*store.PlanItem, len(items))
 	for i := range items {
@@ -92,6 +92,16 @@ type Input struct {
 	// Cards are the owner's credit cards with a statement due, shown beside
 	// the month and never subtracted.
 	Cards []store.PlanCard
+	// Purchases are every planned purchase of the owner, the ones Month shows
+	// and the ones it does not, and Bought how each was recognised, in the
+	// same order.
+	Purchases []Purchase
+	Bought    []Bought
+	// Balances are what Cuentas shows for each account a saving of Month is
+	// tied to, and Saved what reached each of them as transfers in Month, net
+	// of what left it the same way.
+	Balances map[uuid.UUID]money.Cents
+	Saved    map[uuid.UUID]money.Cents
 }
 
 // State says where a month stands against today.
@@ -138,8 +148,24 @@ const (
 	// StatusLate: its day passed and it can still come: a payment within its
 	// month, a paycheck within incomeWindow days.
 	StatusLate Status = "late"
-	// StatusMissed: it can no longer come, as far as the plan can tell.
+	// StatusMissed: it can no longer come, as far as the plan can tell: for
+	// a purchase, its month passed without it; for a saving, its month
+	// passed with nothing set aside.
 	StatusMissed Status = "missed"
+
+	// A planned purchase is being set aside before the month it is due
+	// (StatusSettingAside), is due this month (StatusThisMonth), or was
+	// bought (StatusBought).
+	StatusSettingAside Status = "setting_aside"
+	StatusThisMonth    Status = "this_month"
+	StatusBought       Status = "bought"
+
+	// A saving reached its account in full (StatusDone), in part
+	// (StatusPartial), or not yet while its month lasts (StatusPending); one
+	// tied to no account cannot tell (StatusUnlinked).
+	StatusPartial  Status = "partial"
+	StatusPending  Status = "pending"
+	StatusUnlinked Status = "unlinked"
 )
 
 // AlertKind is what an alert is about.
@@ -163,9 +189,11 @@ type Plan struct {
 	Editable bool
 	Summary  Summary
 	Income   Income
-	// Fixed are the month's payments, Savings what it sets aside.
-	Fixed   []Line
-	Savings []Line
+	// Fixed are the month's payments, Savings what it sets aside, Purchases
+	// the purchases it plans.
+	Fixed     []Line
+	Savings   []Line
+	Purchases []PurchaseLine
 	// Caps are the month's caps, in the order they were given.
 	Caps          []CapLine
 	Uncategorized Uncategorized
@@ -196,8 +224,8 @@ type Summary struct {
 	// Savings is what the month sets aside, always: it reaches its account as
 	// a transfer, which is never spending.
 	Savings money.Cents
-	// Purchases is what planned purchases set aside, nothing until they are
-	// kept.
+	// Purchases is what planned purchases take of the month: their shares,
+	// and in the month one is bought what it cost beyond what was set aside.
 	Purchases money.Cents
 	Free      money.Cents
 	// Spent is what went out of what was free: the month's spending that no
@@ -242,6 +270,14 @@ type Line struct {
 	// paid, closest first; Hint a transfer it could be, or nil.
 	Candidates []store.PlanMovement
 	Hint       *Hint
+	// A saving's, nil when it is tied to no account: Progress is what its
+	// account holds, as Cuentas shows it, and SavedMonth what reached it as
+	// transfers in the month, net. NeededPerMonth is what each month from
+	// the current one to its goal's month would have to set aside to reach
+	// it, nil when it has no goal or date or is there already.
+	Progress       *money.Cents
+	SavedMonth     *money.Cents
+	NeededPerMonth *money.Cents
 }
 
 // LineMovement is a movement that paid a line.
@@ -307,12 +343,20 @@ type Alert struct {
 //
 // It never counts spending its own way. The month's spending is the same
 // movements Gastos adds up, and every one of them lands in exactly one
-// bucket: the payment it paid, whichever month that payment is of, or what
-// was free. A payment that went out takes what was paid, not what was
-// planned, and one still to go out keeps what was planned aside. A refund on
-// its own never settles a payment. A month the owner said was paid outside
-// keeps what was planned, which is how it counts, once, until a movement
-// recognised as it says what it cost.
+// bucket: the purchase it bought, or the payment it paid, whichever month
+// that payment is of, or what was free. A payment that went out takes what
+// was paid, not what was planned, and one still to go out keeps what was
+// planned aside. A refund on its own never settles a payment. A month the
+// owner said was paid outside keeps what was planned, which is how it
+// counts, once, until a movement recognised as it says what it cost.
+//
+// A planned purchase takes its share of each month until it is bought, and
+// nothing after. The month it is bought takes what was paid beyond what the
+// months before set aside, so the purchase costs the month no more than what
+// is left of its price: bought early, or dearer, the month pays the rest;
+// bought cheaper, it frees what was set aside beyond the price. One paid with
+// savings never takes anything. Its outflow is the purchase's, never what was
+// free.
 func Compute(in Input) Plan {
 	m := in.Month
 	current := MonthOf(in.Today)
@@ -331,7 +375,18 @@ func Compute(in Input) Plan {
 		}
 		return Unpaid
 	}
+	// boughtBy maps a movement that bought a purchase to it; a movement
+	// counts once, so one that did pays nothing else.
+	boughtBy := map[uuid.UUID]int{}
+	for k, b := range in.Bought {
+		for _, mv := range b.Movements {
+			boughtBy[mv.ID] = k
+		}
+	}
 	paidKind := func(i int) string {
+		if _, ok := boughtBy[in.Movements[i].ID]; ok {
+			return KindPurchase
+		}
 		if k := paidTo(i); k != Unpaid {
 			return in.Instances[k].Item.Kind
 		}
@@ -339,7 +394,7 @@ func Compute(in Input) Plan {
 	}
 	paidBy := make([][]int, len(in.Instances))
 	for i := range in.Movements {
-		if k := paidTo(i); k != Unpaid {
+		if k := paidTo(i); k != Unpaid && paidKind(i) != KindPurchase {
 			paidBy[k] = append(paidBy[k], i)
 		}
 	}
@@ -375,13 +430,19 @@ func Compute(in Input) Plan {
 			p.Quincenas[half(due)].FixedDue += line.Committed
 			p.Fixed = append(p.Fixed, line)
 		case KindSaving:
+			goal(&line, p.State, current, in.Balances, in.Saved)
 			p.Summary.Savings += inst.Planned()
 			p.Savings = append(p.Savings, line)
 		}
 	}
+	for k, pu := range in.Purchases {
+		if line, ok := purchaseLine(pu, at(in.Bought, k), m, p.State); ok {
+			p.Planned = true
+			p.Summary.Purchases += line.Committed
+			p.Purchases = append(p.Purchases, line)
+		}
+	}
 	p.Summary.Income = p.Income.Expected
-	// Planned purchases set nothing aside until they are kept (Instances).
-	p.Summary.Purchases = 0
 	p.Summary.Free = p.Summary.Income - p.Summary.Fixed - p.Summary.Savings - p.Summary.Purchases
 
 	p.Caps = make([]CapLine, 0, len(in.Caps))
@@ -400,7 +461,7 @@ func Compute(in Input) Plan {
 			}
 		case slices.Contains(store.SpendKinds, mv.Kind):
 			p.Spending -= mv.Amount
-			if paidKind(i) == KindFixed {
+			if kind := paidKind(i); kind == KindFixed || kind == KindPurchase {
 				p.Charged -= mv.Amount
 				continue
 			}
@@ -451,6 +512,44 @@ func Compute(in Input) Plan {
 		p.Alerts = alerts(p)
 	}
 	return p
+}
+
+// goal fills in what a saving's account says of it: what the account holds
+// (balances), what reached it this month (saved) and so where the month
+// stands, and what each month to its goal's date would have to set aside,
+// counted from the current month, since what the account holds is today's.
+// A saving tied to no account can tell none of it.
+func goal(l *Line, state State, current Month, balances, saved map[uuid.UUID]money.Cents) {
+	account := l.Item.AccountID
+	if account == nil {
+		l.Status = StatusUnlinked
+		return
+	}
+	month := saved[*account]
+	l.SavedMonth = &month
+	switch {
+	case month >= l.Planned():
+		l.Status = StatusDone
+	case month > 0:
+		l.Status = StatusPartial
+	case state == StatePast:
+		l.Status = StatusMissed
+	default:
+		l.Status = StatusPending
+	}
+	progress, ok := balances[*account]
+	if !ok {
+		return
+	}
+	l.Progress = &progress
+	target, by := l.Item.Target, monthOf(l.Item.TargetMonth)
+	if target == nil || by.IsZero() || progress >= *target {
+		return
+	}
+	if months := money.Cents(by.Sub(current) + 1); months > 0 {
+		needed := (*target - progress + months - 1) / months
+		l.NeededPerMonth = &needed
+	}
 }
 
 // cardPaid says a card's statement is paid: what reached it since it closed

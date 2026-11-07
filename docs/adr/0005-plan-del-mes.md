@@ -37,6 +37,8 @@ Hay cuatro cosas que cuidar:
 - **Ahorro.** Lo que la persona aparta cada mes. Puede ir ligado a la cuenta de ahorro o de
   inversión real que lo guarda, y a una meta. Una cuenta respalda una sola meta a la vez:
   dos metas pueden usar la misma cuenta una después de la otra, nunca en el mismo mes.
+- **Compras planeadas.** Algo que la persona quiere comprar para un mes, con su precio, y
+  la forma de apartarlo antes.
 - **Topes por categoría,** opcionales: cuánto de lo libre puede llevarse una categoría de
   gastos, con sus hijas.
 - **Te quedan:** lo libre menos lo que ya salió de lo libre este mes. También por día.
@@ -128,7 +130,7 @@ Al leer, primero se aplican los vínculos y después el plan reconoce el resto s
 - **«Fue este»** (`assign`): ese movimiento paga ese mes del ítem, aunque no tenga su texto
   ni su monto.
   - Tiene que estar en ese mes o en uno de al lado, y ser un ingreso para un sueldo o un
-    gasto para un pago fijo.
+    gasto para un pago fijo o una compra.
   - Paga una sola cosa a la vez. Para moverlo, primero se deshace el vínculo.
 - **«Este no»** (`reject`): ese movimiento nunca se reconoce ni se ofrece para ese mes del
   ítem.
@@ -164,6 +166,76 @@ Al leer, primero se aplican los vínculos y después el plan reconoce el resto s
     sale ese mes con el texto del pago. Se arregla como siempre, desmarcando «Es una
     transferencia entre tus cuentas» en el movimiento. El plan solo la lee: una
     transferencia nunca cuenta como gasto.
+
+### Compras planeadas: se aparta en el plan, nunca en un saldo
+
+Una compra planeada tiene un precio (el monto del ítem), el mes en que se piensa comprar
+(`target_month`), hasta 24 meses adelante, y una forma de apartarla (`funding`). Apartar
+es solo una cifra del plan: cada mes saca de lo libre una parte del precio. Ninguna
+cuenta dice tener esa plata y ningún saldo se mueve.
+
+- **Tres formas de apartarla:**
+  - «Un poco cada mes» (`monthly`): el precio se reparte entre el mes en que se planea y el
+    de la compra. De n meses, el k-ésimo aparta ⌊R·(k+1)/n⌋ − ⌊R·k/n⌋: las partes difieren
+    a lo sumo en un centavo y suman exactamente el precio.
+  - «Todo ese mes» (`that_month`): todo el precio sale de lo libre del mes de la compra.
+  - «Con mis ahorros» (`savings`): no saca nada de lo libre. La plata ya está apartada en
+    otro lado.
+- **Las partes las escribe el servidor,** nunca la web, como las versiones del ítem. Se
+  aparta desde el mes en que se planea por primera vez (`start_month`), que el servidor
+  guarda. Una compra se edita siempre «desde este mes»: cambiar el precio, el mes o la
+  forma reparte lo que falta (el precio menos lo que apartaron los meses anteriores, que
+  quedan como estaban) desde el mes editado. Si lo apartado ya cubre el precio, no se
+  aparta más.
+- **Se compra en un solo mes, y se reconoce al leer,** igual en cualquier mes que se lea:
+  - entre el mes en que se planeó y el siguiente al de la compra, porque una compra de fin
+    de mes puede imprimirse en el siguiente;
+  - un gasto a 10 % del precio que tiene su texto, o su categoría o una hija de ella, o
+    cualquiera si no tiene ni texto ni categoría;
+  - solo si es el único que podría serla. Si hay más, se ofrecen hasta tres;
+  - nunca un movimiento que la persona dijo que paga otra cosa, ni uno que un pago fijo de
+    su mes reconocería por su texto y su monto. Así ningún mes lo cuenta dos veces;
+  - la persona lo corrige con «fue este» o «este no», con el mes en que la compró. «Lo
+    pagué desde otra cuenta» no aplica a una compra: lo que costó lo dice el movimiento;
+  - un movimiento compra una sola compra. Si podría ser dos, es de la que se planeó
+    primero. Por eso se reconocen todas las compras juntas, nunca solo las cercanas al
+    mes que se lee: si no, un mes que no ve la primera le daría el movimiento a la otra.
+- **Lo que cuenta cada mes:** su parte, hasta el mes en que se compra. Ese mes cuenta lo
+  pagado menos lo que apartaron los meses anteriores, nunca menos de cero, o nada si se
+  paga con ahorros. Después, nada. Así una compra le cuesta al plan lo que costó: comprada
+  antes, o más cara, ese mes paga el resto; más barata, libera lo apartado de más. Su
+  movimiento es de la compra y nunca suma en «Llevas».
+- **Estados:** `setting_aside` antes de su mes, `this_month` en su mes, `bought` el mes en
+  que se compró y `missed` si su mes pasó sin comprarla. Después de su mes, o del mes en
+  que se compró, ya no aparece ni aparta nada.
+- **Quitarla desde un mes** la saca de ese mes en adelante: ningún mes desde ahí la
+  muestra, le aparta nada ni toma un gasto por ella, tampoco el mes siguiente al de la
+  compra. Un gasto de esos meses sale de lo libre. Los meses de antes quedan como
+  estaban: lo que apartaron, si se compró en uno de ellos y su estado, que se dice contra
+  el mes de la compra, que no cambia. Por eso se guarda aparte el último mes que la tiene
+  (`end_month`) y no se mueve `target_month`. Si se planeó desde ese mes
+  o después, no le queda ningún mes y se borra entera. Guardarla otra vez, como al
+  deshacer, la vuelve a planear hasta su mes.
+- **Nunca se sugiere,** y su movimiento no cuenta en el historial de las sugerencias: es
+  algo de una vez, aunque la tienda cobre otras cosas cada mes.
+
+### Metas: el avance es lo que dice la cuenta
+
+- **El avance** de un ahorro ligado a una cuenta es el saldo de esa cuenta como lo muestra
+  Cuentas: el saldo inicial que da su ancla más los movimientos, o solo su suma si nada la
+  ancla, y en una cuenta de inversión, sus posiciones encima. Se calcula con la misma
+  regla que Cuentas, para todas las cuentas a la vez. Es el saldo de hoy, en cualquier mes
+  que se lea.
+- **«Este mes apartaste»** son las transferencias que llegaron a esa cuenta en el mes,
+  menos las que salieron. Los intereses y los dividendos son ingresos y no cuentan; una
+  compraventa mueve plata dentro de la cuenta y tampoco.
+- **Estados:** `done` si llegó lo planeado, `partial` si llegó una parte, `pending` si aún
+  no llega nada y el mes sigue, `missed` si el mes terminó sin nada y `unlinked` si no
+  tiene cuenta. Sin cuenta no hay avance ni «este mes»: el plan no los inventa.
+- **Cuánto hace falta por mes:** con meta y fecha, lo que falta repartido entre los meses
+  que van del actual al de la meta, redondeado hacia arriba.
+- **Lo planeado se aparta siempre de lo libre,** llegue o no a la cuenta. Lo que dice la
+  cuenta es aparte, para ver si se cumplió.
 
 ### Sugerencias: lo que se repite en el historial
 
@@ -249,13 +321,14 @@ herramienta de Claude se llama solo "plan", porque ya existe `sync_plan`.
     escribirlo (`/api/plan`);
   - los vínculos, con los candidatos, la pista de la transferencia y las tarjetas;
   - las sugerencias sacadas del historial, y descartarlas;
+  - las compras planeadas, con sus partes, su reconocimiento y el último mes de una que
+    se quita (`end_month`), y el avance de las metas según la
+    cuenta ligada;
   - este ADR.
 
   Todavía no hay pantalla: el plan se lee y se escribe solo por la API.
 - **Lo que falta llega después** y enmienda este ADR donde haga falta:
   - la pantalla bajo Gastos y la tarjeta de Inicio, con sus avisos;
-  - las compras planeadas, que hoy se rechazan, y el avance de las metas según la cuenta
-    ligada;
   - que Claude lea y edite el plan.
 - **Un pago fijo que no se reconoce cuenta dos veces** hasta que la persona lo vincula.
   Siempre se ve, con sus candidatos o su pista.
@@ -270,6 +343,9 @@ herramienta de Claude se llama solo "plan", porque ya existe `sync_plan`.
   - borrar un movimiento vinculado, que se lleva su vínculo;
   - borrar una categoría, que se lleva sus topes, también los de meses pasados, y deja sus
     ítems sin categoría;
-  - borrar una cuenta, que deja su meta sin cuenta.
-- **La migración 00021 tiene que quedar por encima de toda migración de `main`** al
-  fusionarse. goose no arranca si llega una versión menor que una ya aplicada.
+  - borrar una cuenta, que deja su meta sin cuenta;
+  - reconocer una compra, que se busca en todos los meses en que se pudo comprar. Una
+    compra reconocida sola deja de estarlo si aparece otro movimiento que podría serla, y
+    el mes en que se había comprado vuelve a apartar su parte. «Fue este» la fija.
+- **La migración 00021 tiene que quedar por encima de toda migración de
+  `main`** al fusionarse. goose no arranca si llega una versión menor que una ya aplicada.

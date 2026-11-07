@@ -121,16 +121,17 @@ mano**.
 
 ### El plan del mes
 
-> Ingreso esperado − pagos fijos − ahorro = **libre para gastar**
+> Ingreso esperado − pagos fijos − ahorro − compras planeadas = **libre para gastar**
 
 `GET /api/plan?month=AAAA-MM` dice cuánto te queda para gastar en el mes y cuánto por
 día. Guardas lo que esperas (`PUT /api/plan/items/{id}` y `PUT /api/plan/caps/{categoría}`):
-cada sueldo con su día, los pagos que salen cada mes, lo que apartas y, si quieres, un
-tope por categoría. Lo real se calcula cada vez que se lee, con los mismos movimientos
-que suma Gastos, y nada de eso se guarda:
+cada sueldo con su día, los pagos que salen cada mes, lo que apartas, lo que piensas
+comprar y, si quieres, un tope por categoría. Lo real se calcula cada vez que se lee, con
+los mismos movimientos que suma Gastos, y nada de eso se guarda:
 
-- **Cada salida del mes cae en un solo lugar:** el pago fijo que pagó, o lo libre. Un
-  pago que ya salió cuesta lo que se pagó; uno que no ha salido guarda su monto.
+- **Cada salida del mes cae en un solo lugar:** el pago fijo que pagó, la compra planeada
+  que compró, o lo libre. Un pago que ya salió cuesta lo que se pagó; uno que no ha salido
+  guarda su monto.
 - **Un pago se reconoce** por su texto, comparado como una regla, por su monto (±25 %) y
   por su mes. Un sueldo, por su texto, su monto y una semana alrededor de su día, aunque
   llegue en el mes de al lado. El cargo chico que va al lado de un pago, en la misma
@@ -143,6 +144,17 @@ que suma Gastos, y nada de eso se guarda:
   sus compras ya cuentan.
 - **El ingreso extra nunca cambia lo libre** por sí solo, y el ahorro nunca cuenta como
   gasto: llega a su cuenta como transferencia.
+- **Una compra planeada se aparta en el plan, nunca en un saldo,** de una de tres formas:
+  un poco cada mes hasta el mes de la compra (las partes suman exacto su precio), todo
+  ese mes, o con tus ahorros, que no toca lo libre. El servidor escribe las partes, y
+  cambiar el precio o el mes reparte lo que falta desde el mes que editas. Se reconoce
+  cuando un solo gasto a 10 % del precio, con su texto o su categoría, puede ser ella,
+  entre el mes en que la planeaste y el siguiente al de la compra. El mes en que la
+  compras cuenta lo pagado menos lo que ya habías apartado: antes o más cara, ese mes
+  paga el resto; más barata, libera lo de más.
+- **El avance de una meta es el saldo de su cuenta,** el mismo que muestra Cuentas, y «este
+  mes apartaste» son las transferencias que llegaron a ella en el mes, menos las que
+  salieron. Los intereses y los dividendos no cuentan.
 - **Al 80 %** de lo libre, o de un tope, el plan dice que está cerca; un centavo más allá
   del total, que va por encima. El día de hoy, el mes y los días que quedan los decide el
   servidor, en hora de Panamá.
@@ -153,7 +165,8 @@ que suma Gastos, y nada de eso se guarda:
   cerrados y sin haber dejado de llegar, y lo que apartas cada mes en una cuenta de ahorro
   o de inversión. Un sueldo de quincena son dos sugerencias, y el impuesto de un cargo se
   suma a él. Nunca sugiere transferencias, el pago de la tarjeta ni lo que el plan ya
-  tiene, y un pago por Yappy a una persona se llama «Yappy de cada mes», sin su nombre.
+  tiene, ni las compras planeadas, y un pago por Yappy a una persona se llama «Yappy de
+  cada mes», sin su nombre.
   Lo que descartas (`PUT /api/plan/dismissals`) no vuelve hasta que lo deshaces con
   `DELETE`.
 

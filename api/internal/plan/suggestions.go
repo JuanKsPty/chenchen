@@ -3,6 +3,7 @@ package plan
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"unicode/utf8"
 
@@ -19,39 +20,55 @@ const maxKeyRunes = 120
 
 // Suggestions works out what the owner's history suggests planning, as
 // Detect does, from today in Panama. It reads only, in a handful of queries:
-// the plan's versions from last month on, with their items and links when
+// the plan's items, with their versions from last month on and links when
 // there are any; the movements of historyMonths complete months, this month
 // and the next (the months either side of this one are what recognising this
-// month's plan reads, as Month does); the transfers not yet decided among
-// them; the dismissals; and what reached savings and brokerage accounts in
-// the recent months.
+// month's plan reads, as Month does); what tells which movements bought a
+// planned purchase, read as Month reads it (purchasesOf); the transfers not
+// yet decided among them; the dismissals; and what reached savings and brokerage
+// accounts in the recent months.
+//
+// A movement that bought a planned purchase is left out of the history: the
+// purchase is a one-off the plan already has, never a payment of every month,
+// whatever else its shop is paid.
 func (s *Service) Suggestions(ctx context.Context, userID uuid.UUID) ([]Suggestion, error) {
 	today := civil.Of(s.now().In(civil.Panama))
 	m := MonthOf(today)
 	before, after, from := m.AddMonths(-1), m.AddMonths(1), m.AddMonths(-historyMonths)
 	q := s.db.Q()
-	// Every version from last month on: last month to next for recognising
-	// this month, as Month reads them, and this month on for what the plan
-	// holds now or will.
-	versions, err := q.PlanVersionsBetween(ctx, userID, before.First(), m.AddMonths(MonthsAhead).First())
+	items, err := q.PlanItemsByUser(ctx, userID)
 	if err != nil {
 		return nil, err
 	}
-	var items []store.PlanItem
+	var versions []store.PlanVersion
 	var said []Link
-	if len(versions) > 0 {
-		if items, err = q.PlanItemsByUser(ctx, userID); err != nil {
+	if len(items) > 0 {
+		// Every version from last month on: last month to next for
+		// recognising this month, as Month reads them, and this month on for
+		// what the plan holds now or will.
+		if versions, err = q.PlanVersionsBetween(ctx, userID, before.First(), m.AddMonths(MonthsAhead).First()); err != nil {
 			return nil, err
 		}
 		if said, err = links(ctx, q, userID, before, after); err != nil {
 			return nil, err
 		}
 	}
+	var parents map[uuid.UUID]uuid.UUID
+	if purchaseFiled(items) {
+		if parents, err = categoryParents(ctx, q, userID); err != nil {
+			return nil, err
+		}
+	}
+	_, bought, err := purchasesOf(ctx, q, userID, items, parents)
+	if err != nil {
+		return nil, err
+	}
 	movements, err := q.PlanMovements(ctx, userID, from.First(), after.Last())
 	if err != nil {
 		return nil, err
 	}
-	recognised, err := recognisedIn(ctx, q, userID, m, items, versions, movements, said)
+	movements = withoutBought(movements, bought)
+	recognised, err := recognisedIn(ctx, q, userID, m, items, versions, movements, said, bought)
 	if err != nil {
 		return nil, err
 	}
@@ -77,13 +94,27 @@ func (s *Service) Suggestions(ctx context.Context, userID uuid.UUID) ([]Suggesti
 	}), nil
 }
 
+// withoutBought is movements without the ones that bought a planned purchase.
+func withoutBought(movements []store.PlanMovement, bought []Bought) []store.PlanMovement {
+	purchased := map[uuid.UUID]bool{}
+	for _, b := range bought {
+		for _, mv := range b.Movements {
+			purchased[mv.ID] = true
+		}
+	}
+	if len(purchased) == 0 {
+		return movements
+	}
+	return slices.DeleteFunc(movements, func(mv store.PlanMovement) bool { return purchased[mv.ID] })
+}
+
 // recognisedIn maps each movement the plan recognised in month m to the item
 // it paid: one that paid an instance of m, wherever it was booked, or one
 // booked in m that paid any. It recognises them the way Month does, from the
-// same months of movements and links, so a suggestion never contradicts what
-// the plan shows.
+// same months of movements and links, and beside the same purchases (bought),
+// so a suggestion never contradicts what the plan shows.
 func recognisedIn(ctx context.Context, q *store.Queries, userID uuid.UUID, m Month, items []store.PlanItem,
-	versions []store.PlanVersion, movements []store.PlanMovement, said []Link) (map[uuid.UUID]uuid.UUID, error) {
+	versions []store.PlanVersion, movements []store.PlanMovement, said []Link, bought []Bought) (map[uuid.UUID]uuid.UUID, error) {
 	if len(versions) == 0 {
 		return nil, nil
 	}
@@ -99,7 +130,7 @@ func recognisedIn(ctx context.Context, q *store.Queries, userID uuid.UUID, m Mon
 		return nil, err
 	}
 	instances := Instances(items, versions, before, after)
-	rec := Match(instances, near, said, nil)
+	rec := MatchBeside(instances, near, said, nil, bought)
 	out := map[uuid.UUID]uuid.UUID{}
 	for i, k := range rec.Paid {
 		if k != Unpaid && (instances[k].Month == m || MonthOf(near[i].BookedOn) == m) {
@@ -109,10 +140,10 @@ func recognisedIn(ctx context.Context, q *store.Queries, userID uuid.UUID, m Mon
 	return out, nil
 }
 
-// activeItems are the items that hold for month m or a later one, each with
-// its day in m or, if it starts later, in its first month. versions come by
-// item and in month order, so an item's first version that reaches m is the
-// one that holds for it, or the next.
+// activeItems are the paychecks, payments and savings that hold for month m
+// or a later one, each with its day in m or, if it starts later, in its first
+// month. versions come by item and in month order, so an item's first version
+// that reaches m is the one that holds for it, or the next.
 func activeItems(items []store.PlanItem, versions []store.PlanVersion, m Month) []ActiveItem {
 	byID := make(map[uuid.UUID]*store.PlanItem, len(items))
 	for i := range items {
@@ -122,7 +153,9 @@ func activeItems(items []store.PlanItem, versions []store.PlanVersion, m Month) 
 	var out []ActiveItem
 	for _, v := range versions {
 		item, ok := byID[v.ItemID]
-		if !ok || seen[v.ItemID] || !v.To.IsZero() && MonthOf(v.To).Before(m) {
+		// A planned purchase is a one-off: it plans no payment of every
+		// month, whatever its text, and its outflow is already left out.
+		if !ok || item.Kind == KindPurchase || seen[v.ItemID] || !v.To.IsZero() && MonthOf(v.To).Before(m) {
 			continue
 		}
 		seen[v.ItemID] = true

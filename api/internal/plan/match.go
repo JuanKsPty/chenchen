@@ -86,7 +86,15 @@ type Recognition struct {
 	// could be, or nil.
 	Candidates [][]int
 	Hints      []*Hint
+
+	// bought[i] says movement i bought a planned purchase, so it pays and is
+	// offered for nothing else.
+	bought []bool
 }
+
+// free reports whether movement i is still free to be recognised: it paid no
+// instance yet and bought no purchase.
+func (r Recognition) free(i int) bool { return r.Paid[i] == Unpaid && !at(r.bought, i) }
 
 // paid is the instance movement i paid, or Unpaid.
 func (r Recognition) paid(i int) int {
@@ -169,13 +177,34 @@ type told struct {
 // movements it could be, and a payment, a transfer out of its month with its
 // text (transfers), which the bank may have printed it as.
 func Match(instances []Instance, movements []store.PlanMovement, links []Link, transfers []store.PlanMovement) Recognition {
+	return MatchBeside(instances, movements, links, transfers, nil)
+}
+
+// MatchBeside is Match in a plan with planned purchases: the movements that
+// bought one (bought, as RecognisePurchases found them) are the purchase's,
+// so no paycheck or payment is recognised as one of them, takes one along as
+// a companion line, or is offered one, even when the owner said it paid it.
+// RecognisePurchases never takes a movement that a payment of its month would
+// recognise, nor one a link says pays another item, so this only keeps a
+// payment from claiming what the owner said bought a purchase.
+func MatchBeside(instances []Instance, movements []store.PlanMovement, links []Link, transfers []store.PlanMovement,
+	bought []Bought) Recognition {
 	rec := Recognition{
 		Paid: make([]int, len(movements)), Assigned: make([]uuid.UUID, len(movements)),
 		MarkedPaid: make([]uuid.UUID, len(instances)), Candidates: make([][]int, len(instances)),
-		Hints: make([]*Hint, len(instances)),
+		Hints: make([]*Hint, len(instances)), bought: make([]bool, len(movements)),
 	}
 	for i := range rec.Paid {
 		rec.Paid[i] = Unpaid
+	}
+	purchased := map[uuid.UUID]bool{}
+	for _, b := range bought {
+		for _, mv := range b.Movements {
+			purchased[mv.ID] = true
+		}
+	}
+	for i, m := range movements {
+		rec.bought[i] = purchased[m.ID]
 	}
 	texts := make([]string, len(movements))
 	for i, m := range movements {
@@ -197,7 +226,7 @@ func Match(instances []Instance, movements []store.PlanMovement, links []Link, t
 			continue
 		}
 		for i, m := range movements {
-			if rec.Paid[i] != Unpaid || rejected[told{k, m.ID}] || !strings.Contains(texts[i], needle) {
+			if !rec.free(i) || rejected[told{k, m.ID}] || !strings.Contains(texts[i], needle) {
 				continue
 			}
 			if days, off, ok := fits(inst, m); ok {
@@ -247,7 +276,7 @@ func Match(instances []Instance, movements []store.PlanMovement, links []Link, t
 	}
 	var lines []int
 	for j, m := range movements {
-		if rec.Paid[j] == Unpaid && (m.Kind == store.KindFee || m.Kind == store.KindInterest) && m.Amount < 0 {
+		if rec.free(j) && (m.Kind == store.KindFee || m.Kind == store.KindInterest) && m.Amount < 0 {
 			lines = append(lines, j)
 		}
 	}
@@ -362,7 +391,7 @@ func (r *Recognition) follow(instances []Instance, movements []store.PlanMovemen
 			// Taken already, it stays with the link said first.
 			usable := func(id uuid.UUID) int {
 				i, ok := index[id]
-				if !ok || r.Paid[i] != Unpaid || !canPay(instances[k], movements[i]) ||
+				if !ok || !r.free(i) || !canPay(instances[k], movements[i]) ||
 					abs(MonthOf(movements[i].BookedOn).Sub(l.Month)) > linkMonths {
 					return Unpaid
 				}
@@ -456,7 +485,7 @@ func (r *Recognition) offer(instances []Instance, movements []store.PlanMovement
 		needle, planned, due := needleOf(inst), inst.Planned(), inst.Due()
 		var found []offered
 		for i, m := range movements {
-			if r.Paid[i] != Unpaid || rejected[told{k, m.ID}] {
+			if !r.free(i) || rejected[told{k, m.ID}] {
 				continue
 			}
 			days := abs(daysBetween(due, m.BookedOn))

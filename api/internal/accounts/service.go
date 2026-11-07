@@ -402,6 +402,75 @@ func BalanceThrough(ctx context.Context, q *store.Queries, accountID uuid.UUID, 
 	return anchor.Balance - before + through, true, nil
 }
 
+// Balances is what Cuentas shows for each of the user's accounts in ids, by
+// account: the balance List gives it, the opening derived from its anchor
+// plus every movement, or only their sum when nothing anchors it, and, for a
+// brokerage account, its positions on top, the total its card shows. It reads
+// what List reads for a balance in a handful of queries whatever the number
+// of accounts, for a reader of several balances at once, such as the plan's
+// goals. Someone else's account, or one that does not exist, is left out.
+func Balances(ctx context.Context, q *store.Queries, userID uuid.UUID, ids []uuid.UUID) (map[uuid.UUID]money.Cents, error) {
+	out := make(map[uuid.UUID]money.Cents, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	rows, err := q.AccountsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	sums, err := q.SumsByAccount(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	holdings, err := q.HoldingsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	checkpoints, err := q.CheckpointsByUser(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	byAccount := map[uuid.UUID][]store.Checkpoint{}
+	for _, c := range checkpoints {
+		byAccount[c.AccountID] = append(byAccount[c.AccountID], c)
+	}
+	wanted := make(map[uuid.UUID]bool, len(ids))
+	for _, id := range ids {
+		wanted[id] = true
+	}
+	anchors := map[uuid.UUID]store.Checkpoint{}
+	var anchorIDs []uuid.UUID
+	for _, row := range rows {
+		if !wanted[row.ID] {
+			continue
+		}
+		if anchor, ok := Anchor(byAccount[row.ID]); ok {
+			anchors[row.ID] = anchor
+			anchorIDs = append(anchorIDs, anchor.ID)
+		}
+	}
+	before, err := q.SumsAtCheckpoints(ctx, userID, anchorIDs)
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		if !wanted[row.ID] {
+			continue
+		}
+		// As position does: the sum of the movements, from the opening the
+		// anchor gives when there is one.
+		balance := sums[row.ID].Total
+		if anchor, ok := anchors[row.ID]; ok {
+			balance += anchor.Balance - before[anchor.ID]
+		}
+		if row.Type == "brokerage" {
+			balance += holdings[row.ID]
+		}
+		out[row.ID] = balance
+	}
+	return out, nil
+}
+
 // Rename sets or clears an account's alias. A card someone else pays keeps
 // one: it has no bank's name to be known by instead.
 func (s *Service) Rename(ctx context.Context, userID, id uuid.UUID, rawAlias string) (Account, error) {

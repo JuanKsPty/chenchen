@@ -43,8 +43,10 @@ var (
 // with its message in fieldErrors, all of them at once when an edit has
 // several wrong.
 var (
+	// ErrKind is a dismissal's: only a paycheck, a payment or a saving is
+	// ever suggested. ErrItemKind is an item's, which may also be a purchase.
 	ErrKind            = errors.New("plan: the kind is not income, fixed or saving")
-	ErrPurchasesNotYet = errors.New("plan: planned purchases are not kept yet")
+	ErrItemKind        = errors.New("plan: the kind is not income, fixed, saving or purchase")
 	ErrName            = errors.New("plan: a name has 1 to 60 characters")
 	ErrNameInvalid     = errors.New("plan: the name has characters that are not allowed")
 	ErrAmount          = errors.New("plan: the amount must be more than zero")
@@ -58,16 +60,28 @@ var (
 	ErrAccountNotGoal  = errors.New("plan: only a saving is tied to an account")
 	ErrTarget          = errors.New("plan: a goal must be more than zero")
 	ErrTargetNotGoal   = errors.New("plan: only a saving has a goal")
-	// ErrStartMonth and ErrFunding are a planned purchase's fields, which no
-	// item can have while purchases are not kept.
-	ErrStartMonth = errors.New("plan: only a planned purchase starts being set aside in a month")
-	ErrFunding    = errors.New("plan: only a planned purchase says how it is paid")
+
+	// A planned purchase's fields. Its price is the amount; the month it is
+	// first planned for is when it starts being set aside, which the plan
+	// keeps, so no one sends it.
+	// ErrTargetMonth is a purchase with no month to buy it in, or one more
+	// than MonthsAhead after the current month; ErrTargetMonthEarly one
+	// before the month edited, which is not always the current one.
+	ErrTargetMonth        = errors.New("plan: a purchase is bought by a month no more than MonthsAhead after the current one")
+	ErrTargetMonthEarly   = errors.New("plan: a purchase is bought in the month edited or a later one")
+	ErrTargetMonthNotGoal = errors.New("plan: only a saving or a purchase has a month to reach")
+	ErrFunding            = errors.New("plan: a purchase is set aside monthly, in its month or not at all")
+	ErrFundingNotPurchase = errors.New("plan: only a planned purchase says how it is set aside")
+	ErrStartMonth         = errors.New("plan: a purchase starts being set aside in the month it is planned for")
+	ErrPurchaseScope      = errors.New("plan: a purchase is set aside from a month on, never for one month alone")
+	ErrPurchaseDay        = errors.New("plan: a purchase has no day")
 
 	// The fields of a link.
 	ErrDecision     = errors.New("plan: a link says assign, reject or paid")
 	ErrLinkMovement = errors.New("plan: a link that assigns or rejects names a movement")
 	ErrPaidMovement = errors.New("plan: a month paid outside names no movement")
-	ErrLinkItemKind = errors.New("plan: only a paycheck or a payment is paid by a movement")
+	ErrLinkItemKind = errors.New("plan: only a paycheck, a payment or a purchase is paid by a movement")
+	ErrPaidPurchase = errors.New("plan: a purchase is bought by a movement, never marked bought")
 	ErrNotIncome    = errors.New("plan: a paycheck is paid by income")
 	ErrNotSpending  = errors.New("plan: a payment is paid by spending")
 
@@ -83,7 +97,7 @@ var fieldErrors = []struct {
 	field, message string
 }{
 	{ErrKind, "kind", "Elige si es un ingreso, un pago fijo o un ahorro."},
-	{ErrPurchasesNotYet, "kind", "Las compras planeadas todavía no se pueden guardar."},
+	{ErrItemKind, "kind", "Elige si es un ingreso, un pago fijo, un ahorro o una compra."},
 	{ErrInvalidScope, "scope", "Elige si vale desde este mes o solo para este mes."},
 	{ErrName, "name", "Ponle un nombre de hasta 60 caracteres."},
 	{ErrNameInvalid, "name", "El nombre tiene caracteres que no se pueden mostrar."},
@@ -98,12 +112,19 @@ var fieldErrors = []struct {
 	{ErrAccountNotGoal, "account_id", "Solo un ahorro va ligado a una cuenta."},
 	{ErrTarget, "target", "Indica una meta mayor que cero."},
 	{ErrTargetNotGoal, "target", "Solo un ahorro tiene una meta."},
-	{ErrStartMonth, "start_month", "Las compras planeadas todavía no se pueden guardar."},
-	{ErrFunding, "funding", "Las compras planeadas todavía no se pueden guardar."},
+	{ErrTargetMonth, "target_month", "Elige para cuándo, de aquí a 24 meses como mucho."},
+	{ErrTargetMonthEarly, "target_month", "Elige el mes que estás planeando o uno después."},
+	{ErrTargetMonthNotGoal, "target_month", "Solo un ahorro o una compra tienen fecha."},
+	{ErrFunding, "funding", "Elige cómo la apartas: un poco cada mes, todo ese mes o con tus ahorros."},
+	{ErrFundingNotPurchase, "funding", "Solo una compra planeada dice cómo se aparta."},
+	{ErrStartMonth, "start_month", "Una compra se empieza a apartar el mes en que la planeas."},
+	{ErrPurchaseScope, "scope", "Una compra se aparta desde este mes hasta el de la compra."},
+	{ErrPurchaseDay, "day", "Una compra planeada no lleva día."},
 	{ErrDecision, "decision", "Elige si fue este movimiento, si no lo fue o si se pagó por otro lado."},
 	{ErrLinkMovement, "movement_id", "Elige el movimiento."},
 	{ErrPaidMovement, "movement_id", "Si se pagó por otro lado, no elijas un movimiento."},
-	{ErrLinkItemKind, "item_id", "Solo un ingreso o un pago fijo se reconoce por un movimiento."},
+	{ErrLinkItemKind, "item_id", "Solo un ingreso, un pago fijo o una compra se reconocen por un movimiento."},
+	{ErrPaidPurchase, "decision", "Elige el movimiento con que la compraste."},
 	{ErrNotIncome, "movement_id", "Elige un ingreso: ese movimiento no es un ingreso."},
 	{ErrNotSpending, "movement_id", "Elige un gasto: una transferencia o un ingreso no es este pago."},
 	{ErrSuggestionKey, "key", "Elige una de las sugerencias."},

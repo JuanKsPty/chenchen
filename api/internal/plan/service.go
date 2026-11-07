@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 	"unicode"
@@ -28,7 +29,8 @@ const (
 	// KindSaving is what the owner sets aside each month, optionally tied to
 	// the real account that holds it and to a goal.
 	KindSaving = store.PlanSaving
-	// KindPurchase is a planned purchase. It is not kept yet.
+	// KindPurchase is something the owner means to buy by a month, set aside
+	// in the plan beforehand.
 	KindPurchase = store.PlanPurchase
 )
 
@@ -75,6 +77,10 @@ func (s *Service) writable(m Month) error {
 // ItemInput is an item as the owner saves it: from Month on (ScopeFrom) or
 // for Month alone (ScopeOnly), Amount on Day of each month. The rest holds for
 // every month of the item.
+//
+// A planned purchase is saved from Month on, always: Amount is its price,
+// TargetMonth the month it is to be bought in and Funding how it is set
+// aside. The plan works out its shares (Shares).
 type ItemInput struct {
 	Kind   string
 	Month  Month
@@ -89,31 +95,41 @@ type ItemInput struct {
 	// CategoryID is an expense category for a payment, an income one for a
 	// paycheck, and none for a saving.
 	CategoryID *uuid.UUID
-	// AccountID, Target and TargetMonth are a saving's: the savings or
-	// brokerage account that holds it, and its goal and by when.
+	// AccountID and Target are a saving's: the savings or brokerage account
+	// that holds it, and its goal. TargetMonth is when a saving's goal is to
+	// be reached, or the month a purchase is to be bought in.
 	AccountID   *uuid.UUID
 	Target      *money.Cents
 	TargetMonth Month
-	// StartMonth and Funding are a planned purchase's: from when it is set
-	// aside, and how it is paid. No item has them while purchases are not
-	// kept.
+	// StartMonth is from when a purchase is set aside: the month it is first
+	// saved for, which the plan keeps, so a save never sends one. Funding is
+	// how a purchase is set aside: FundingMonthly, FundingThatMonth or
+	// FundingSavings.
 	StartMonth Month
 	Funding    string
 }
 
 // normalise cleans up what the owner typed and reports every field that is
-// wrong at once, so a form hears of all its mistakes together.
-func (in *ItemInput) normalise() error {
+// wrong at once, so a form hears of all its mistakes together. now is the
+// current month, which bounds when a purchase can be planned for.
+func (in *ItemInput) normalise(now Month) error {
 	var errs []error
 	switch in.Kind {
-	case KindIncome, KindFixed, KindSaving:
-	case KindPurchase:
-		errs = append(errs, ErrPurchasesNotYet)
+	case KindIncome, KindFixed, KindSaving, KindPurchase:
 	default:
-		errs = append(errs, ErrKind)
+		errs = append(errs, ErrItemKind)
 	}
-	if _, err := ParseScope(string(in.Scope)); err != nil {
+	purchase := in.Kind == KindPurchase
+	if purchase && in.Scope == "" {
+		in.Scope = ScopeFrom
+	}
+	switch _, err := ParseScope(string(in.Scope)); {
+	case err != nil:
 		errs = append(errs, err)
+	case purchase && in.Scope != ScopeFrom:
+		// Its shares are worked out from the month on, so that they still
+		// add up to the price; one month alone cannot change.
+		errs = append(errs, ErrPurchaseScope)
 	}
 	name, err := normaliseName(in.Name)
 	if err != nil {
@@ -124,7 +140,10 @@ func (in *ItemInput) normalise() error {
 		errs = append(errs, ErrAmount)
 	}
 	needsDay := in.Kind == KindIncome || in.Kind == KindFixed
-	if in.Day < 0 || in.Day > maxDay || (needsDay && in.Day == 0) {
+	switch {
+	case purchase && in.Day != 0:
+		errs = append(errs, ErrPurchaseDay)
+	case in.Day < 0 || in.Day > maxDay || (needsDay && in.Day == 0):
 		errs = append(errs, ErrDay)
 	}
 	in.MatchText = strings.TrimSpace(in.MatchText)
@@ -145,15 +164,34 @@ func (in *ItemInput) normalise() error {
 		if in.AccountID != nil {
 			errs = append(errs, ErrAccountNotGoal)
 		}
-		if in.Target != nil || !in.TargetMonth.IsZero() {
+		// A purchase's price is its amount, never a goal.
+		if in.Target != nil {
 			errs = append(errs, ErrTargetNotGoal)
 		}
+	}
+	switch {
+	case purchase:
+		// It is bought in the month saved for or a later one, and no later
+		// than the plan can be written. The month saved for can be ahead of
+		// the current one, so each bound has its own message: "from this
+		// month" would not say which.
+		switch t := in.TargetMonth; {
+		case t.IsZero() || t.Sub(now) > MonthsAhead:
+			errs = append(errs, ErrTargetMonth)
+		case t.Before(in.Month):
+			errs = append(errs, ErrTargetMonthEarly)
+		}
+	case in.Kind != KindSaving && !in.TargetMonth.IsZero():
+		errs = append(errs, ErrTargetMonthNotGoal)
 	}
 	if !in.StartMonth.IsZero() {
 		errs = append(errs, ErrStartMonth)
 	}
-	if in.Funding != "" {
+	switch {
+	case purchase && in.Funding != FundingMonthly && in.Funding != FundingThatMonth && in.Funding != FundingSavings:
 		errs = append(errs, ErrFunding)
+	case !purchase && in.Funding != "":
+		errs = append(errs, ErrFundingNotPurchase)
 	}
 	return errors.Join(errs...)
 }
@@ -186,16 +224,29 @@ func normaliseName(raw string) (string, error) {
 // created reports which happened. Saving the same thing again writes
 // nothing, so a form that lost the answer to its first send can send it
 // again, and an undo is the previous save sent again.
+//
+// A planned purchase's versions are its shares, which the plan writes: what
+// is left of its price after what the months before in.Month set aside is
+// spread from in.Month on (Shares). So a new price, month or way of setting it
+// aside changes the months from in.Month on, never the ones before. It is set
+// aside from the month it is first saved for, or an earlier one it is saved
+// for later. Saving one the owner took out of the plan plans it again to its
+// month, as undoing that does.
 func (s *Service) SaveItem(ctx context.Context, userID, id uuid.UUID, in ItemInput) (item store.PlanItem, created bool, err error) {
 	if err := s.writable(in.Month); err != nil {
 		return store.PlanItem{}, false, err
 	}
-	if err := in.normalise(); err != nil {
+	if err := in.normalise(s.thisMonth()); err != nil {
 		return store.PlanItem{}, false, err
 	}
 	want := store.PlanItem{
 		ID: id, UserID: userID, Kind: in.Kind, Name: in.Name, CategoryID: in.CategoryID,
 		MatchText: in.MatchText, AccountID: in.AccountID, Target: in.Target, TargetMonth: dateOf(in.TargetMonth),
+	}
+	purchase := in.Kind == KindPurchase
+	if purchase {
+		price := in.Amount
+		want.Target, want.StartMonth, want.Funding = &price, in.Month.First(), in.Funding
 	}
 	err = s.db.InTx(ctx, func(q *store.Queries) error {
 		// The user's lock makes the checks below and the writes one step, so
@@ -217,7 +268,16 @@ func (s *Service) SaveItem(ctx context.Context, userID, id uuid.UUID, in ItemInp
 		if err != nil {
 			return err
 		}
-		after, ops := Split(itemVersions(stored), in.Month, in.Scope, Values{Amount: in.Amount, Day: in.Day})
+		var after []Version
+		var ops []Op
+		if purchase {
+			if found && existing.StartMonth.Before(want.StartMonth) {
+				want.StartMonth = existing.StartMonth
+			}
+			after, ops = Shares(itemVersions(stored), in.Month, in.Amount, in.TargetMonth, in.Funding)
+		} else {
+			after, ops = Split(itemVersions(stored), in.Month, in.Scope, Values{Amount: in.Amount, Day: in.Day})
+		}
 		if err := checkItemLabels(ctx, q, userID, id, in, after); err != nil {
 			return err
 		}
@@ -334,7 +394,7 @@ func checkCategory(ctx context.Context, q *store.Queries, userID, id uuid.UUID, 
 func sameLabels(a, b store.PlanItem) bool {
 	return a.Name == b.Name && sameID(a.CategoryID, b.CategoryID) && a.MatchText == b.MatchText &&
 		sameID(a.AccountID, b.AccountID) && sameCents(a.Target, b.Target) && a.TargetMonth == b.TargetMonth &&
-		a.StartMonth == b.StartMonth && a.Funding == b.Funding
+		a.StartMonth == b.StartMonth && a.EndMonth == b.EndMonth && a.Funding == b.Funding
 }
 
 func sameID(a, b *uuid.UUID) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
@@ -345,6 +405,8 @@ func sameCents(a, b *money.Cents) bool { return (a == nil) == (b == nil) && (a =
 // the item. The months before keep their plan. An item left with no month is
 // deleted. What the owner said about which movement paid the months taken out
 // goes with them.
+//
+// A planned purchase is taken out from m on only (deletePurchase).
 func (s *Service) DeleteItem(ctx context.Context, userID, id uuid.UUID, m Month, scope Scope) error {
 	if err := s.writable(m); err != nil {
 		return err
@@ -367,6 +429,9 @@ func (s *Service) DeleteItem(ctx context.Context, userID, id uuid.UUID, m Month,
 		if err != nil {
 			return err
 		}
+		if item.Kind == KindPurchase {
+			return deletePurchase(ctx, q, item, stored, m, scope)
+		}
 		after, ops := Remove(itemVersions(stored), m, scope)
 		if len(after) == 0 {
 			// Its versions and links go with it.
@@ -382,6 +447,36 @@ func (s *Service) DeleteItem(ctx context.Context, userID, id uuid.UUID, m Month,
 		_, err = q.DeletePlanLinks(ctx, userID, id, m.First(), through)
 		return err
 	})
+}
+
+// deletePurchase takes month m on out of a planned purchase. A purchase
+// planned from m on has no month left and is deleted. One planned before m
+// keeps those months as they were: what they set aside for it, whether it was
+// bought in one of them, and where it stood in each, which is said against
+// the month it was due, so that stays too. It ends the month before m
+// (EndMonth): no month from m on shows it, sets anything aside for it or
+// takes an outflow for it, not even the month after it was due, so an
+// outflow of those months goes to what was free.
+func deletePurchase(ctx context.Context, q *store.Queries, item store.PlanItem, stored []store.PlanVersion, m Month,
+	scope Scope) error {
+	if scope != ScopeFrom {
+		return ErrPurchaseScope
+	}
+	if !MonthOf(item.StartMonth).Before(m) {
+		return q.DeletePlanItem(ctx, item.UserID, item.ID)
+	}
+	_, ops := Remove(itemVersions(stored), m, ScopeFrom)
+	if err := applyItemOps(ctx, q, item, ops); err != nil {
+		return err
+	}
+	if end := monthOf(item.EndMonth); end.IsZero() || !end.Before(m) {
+		item.EndMonth = m.AddMonths(-1).First()
+		if err := q.UpdatePlanItem(ctx, item); err != nil {
+			return err
+		}
+	}
+	_, err := q.DeletePlanLinks(ctx, item.UserID, item.ID, m.First(), civil.Date{})
+	return err
 }
 
 // CapInput is a cap on a category from Month on (ScopeFrom) or for Month
@@ -536,8 +631,12 @@ func monthOf(d civil.Date) Month {
 // today in Panama; the zero Month is the current one. It reads only: the
 // items and caps that hold around m, the movements of m and the months either
 // side, what the owner said about which paid what, the transfers out of m
-// for hints, the cards with a statement due and, when there are caps, the
-// categories they count. Nothing of it is written.
+// for hints, the cards with a statement due and, when there are caps or
+// purchases filed under a category, the categories they count. With planned
+// purchases, it also reads, for every one of them, the outflows near its price
+// over the months it can be bought in (purchasesOf), and with savings tied to
+// an account, what those accounts hold and what reached them in m. Nothing of
+// it is written.
 func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, error) {
 	today := civil.Of(s.now().In(civil.Panama))
 	if m.IsZero() {
@@ -545,13 +644,15 @@ func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, e
 	}
 	before, after := m.AddMonths(-1), m.AddMonths(1)
 	q := s.db.Q()
-	versions, err := q.PlanVersionsBetween(ctx, userID, before.First(), after.First())
+	// Every item, even with no version around m: a purchase paid with
+	// savings has none, and may still be planned or bought in m.
+	items, err := q.PlanItemsByUser(ctx, userID)
 	if err != nil {
 		return Plan{}, err
 	}
-	var items []store.PlanItem
-	if len(versions) > 0 {
-		if items, err = q.PlanItemsByUser(ctx, userID); err != nil {
+	var versions []store.PlanVersion
+	if len(items) > 0 {
+		if versions, err = q.PlanVersionsBetween(ctx, userID, before.First(), after.First()); err != nil {
 			return Plan{}, err
 		}
 	}
@@ -564,10 +665,14 @@ func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, e
 		caps = append(caps, Cap{CategoryID: stored[i].CategoryID, Version: v})
 	}
 	var parents map[uuid.UUID]uuid.UUID
-	if len(caps) > 0 {
+	if len(caps) > 0 || purchaseFiled(items) {
 		if parents, err = categoryParents(ctx, q, userID); err != nil {
 			return Plan{}, err
 		}
+	}
+	purchases, bought, err := purchasesOf(ctx, q, userID, items, parents)
+	if err != nil {
+		return Plan{}, err
 	}
 	movements, err := q.PlanMovements(ctx, userID, before.First(), after.Last())
 	if err != nil {
@@ -591,10 +696,128 @@ func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, e
 		return Plan{}, err
 	}
 	instances := Instances(items, versions, before, after)
+	balances, saved, err := goals(ctx, q, userID, instances, m)
+	if err != nil {
+		return Plan{}, err
+	}
 	return Compute(Input{
-		Month: m, Today: today, Instances: instances, Caps: caps, Parents: parents,
-		Movements: movements, Recognition: Match(instances, movements, said, transfers), Cards: cards,
+		Month: m, Today: today, Instances: instances, Caps: caps, Parents: parents, Movements: movements,
+		Recognition: MatchBeside(instances, movements, said, transfers, bought), Cards: cards,
+		Purchases: purchases, Bought: bought, Balances: balances, Saved: saved,
 	}), nil
+}
+
+// purchaseFiled reports whether a planned purchase among items is filed
+// under a category, so recognising it needs the categories' children.
+func purchaseFiled(items []store.PlanItem) bool {
+	return slices.ContainsFunc(items, func(it store.PlanItem) bool {
+		return it.Kind == KindPurchase && it.CategoryID != nil
+	})
+}
+
+// purchasesOf reads every planned purchase among items and recognises each
+// over all the months it can be bought in (RecognisePurchases). Every one,
+// whichever month is read: two purchases can be the same movement, the
+// earliest made taking it, so recognising only those around the month read
+// would let one month give the movement to one and another month to the
+// other, and a purchase would be bought in some months' eyes and not in
+// others'. It reads, over the months from the first purchase's to the last
+// one's and only when there is one: the versions of every item, for the
+// shares and for the payments a movement may be instead; what the owner said;
+// the outflows near each price; and the movements a link to one names beyond
+// them. That is the same few queries however many purchases there are.
+// parents are the categories' parents, for a purchase filed under one.
+func purchasesOf(ctx context.Context, q *store.Queries, userID uuid.UUID, items []store.PlanItem,
+	parents map[uuid.UUID]uuid.UUID) ([]Purchase, []Bought, error) {
+	var first, last Month
+	for i := range items {
+		if items[i].Kind != KindPurchase {
+			continue
+		}
+		p := Purchase{Item: &items[i]}
+		if first.IsZero() || p.Start().Before(first) {
+			first = p.Start()
+		}
+		if last.IsZero() || p.lastBuyable().After(last) {
+			last = p.lastBuyable()
+		}
+	}
+	if first.IsZero() {
+		return nil, nil, nil
+	}
+	versions, err := q.PlanVersionsBetween(ctx, userID, first.First(), last.First())
+	if err != nil {
+		return nil, nil, err
+	}
+	// A link names a movement of its month or one beside it.
+	said, err := links(ctx, q, userID, first.AddMonths(-1), last.AddMonths(1))
+	if err != nil {
+		return nil, nil, err
+	}
+	purchases := Purchases(items, versions)
+	ranges := make([]store.PlanPriceRange, 0, len(purchases))
+	ours := make(map[uuid.UUID]bool, len(purchases))
+	for _, p := range purchases {
+		margin := p.Price() * purchasePercent / 100
+		ranges = append(ranges, store.PlanPriceRange{From: p.Start().First(), To: p.lastBuyable().Last(),
+			Min: p.Price() - margin, Max: p.Price() + margin})
+		ours[p.Item.ID] = true
+	}
+	movements, err := q.PlanOutflowsNear(ctx, userID, ranges)
+	if err != nil {
+		return nil, nil, err
+	}
+	read := make(map[uuid.UUID]bool, len(movements))
+	for _, mv := range movements {
+		read[mv.ID] = true
+	}
+	var named []uuid.UUID
+	for _, l := range said {
+		if !ours[l.ItemID] || l.Decision != DecisionAssign {
+			continue
+		}
+		for _, id := range l.names() {
+			if !read[id] {
+				read[id] = true
+				named = append(named, id)
+			}
+		}
+	}
+	more, err := q.PlanMovementsByID(ctx, userID, named)
+	if err != nil {
+		return nil, nil, err
+	}
+	instances := Instances(items, versions, first, last)
+	return purchases, RecognisePurchases(purchases, instances, append(movements, more...), said, parents), nil
+}
+
+// goals reads, for the savings of month m tied to an account, what each
+// account holds, as Cuentas shows it, and what reached it as transfers in m,
+// net of what left it the same way: interest and dividends are income, and a
+// trade moves money within the account, so neither is something the owner
+// set aside. Every account is read at once, whatever the number of goals.
+func goals(ctx context.Context, q *store.Queries, userID uuid.UUID, instances []Instance, m Month) (balances, saved map[uuid.UUID]money.Cents, err error) {
+	var ids []uuid.UUID
+	for _, inst := range instances {
+		if inst.Month == m && inst.Item.Kind == KindSaving && inst.Item.AccountID != nil {
+			ids = append(ids, *inst.Item.AccountID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil, nil, nil
+	}
+	if balances, err = accounts.Balances(ctx, q, userID, ids); err != nil {
+		return nil, nil, err
+	}
+	inflows, err := q.PlanInflows(ctx, userID, m.First(), m.Last())
+	if err != nil {
+		return nil, nil, err
+	}
+	saved = make(map[uuid.UUID]money.Cents, len(inflows))
+	for _, in := range inflows {
+		saved[in.AccountID] += in.Net
+	}
+	return balances, saved, nil
 }
 
 // withLinked adds to movements those the owner's links name that were booked
@@ -649,6 +872,11 @@ func (s *Service) Item(ctx context.Context, userID, id uuid.UUID, m Month) (Inst
 	}
 	if err != nil {
 		return Instance{}, err
+	}
+	if item.Kind == KindPurchase {
+		// Its price, and the months from when it is set aside to when it is
+		// due, hold for the whole of it.
+		return Purchase{Item: &item}.instance(m), nil
 	}
 	stored, err := q.PlanItemVersions(ctx, userID, id)
 	if err != nil {

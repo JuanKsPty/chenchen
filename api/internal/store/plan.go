@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -58,6 +59,10 @@ type PlanItem struct {
 	// TargetMonth, StartMonth: the first day of a month, or the zero Date.
 	TargetMonth civil.Date
 	StartMonth  civil.Date
+	// EndMonth is the last month of a purchase taken out of the plan from
+	// the month after it on, or the zero Date while it is planned to its
+	// month (00021_plan.sql).
+	EndMonth civil.Date
 	// Funding is how a purchase is paid; empty for anything else.
 	Funding   string
 	CreatedAt time.Time
@@ -65,13 +70,13 @@ type PlanItem struct {
 }
 
 const planItemColumns = `id, user_id, kind, name, category_id, match_text, account_id, target_cents,
-	target_month, start_month, COALESCE(funding, ''), created_at, updated_at`
+	target_month, start_month, end_month, COALESCE(funding, ''), created_at, updated_at`
 
 func scanPlanItem(s scanner) (PlanItem, error) {
 	var it PlanItem
 	var target *int64
 	err := s.Scan(&it.ID, &it.UserID, &it.Kind, &it.Name, &it.CategoryID, &it.MatchText, &it.AccountID,
-		&target, &it.TargetMonth, &it.StartMonth, &it.Funding, &it.CreatedAt, &it.UpdatedAt)
+		&target, &it.TargetMonth, &it.StartMonth, &it.EndMonth, &it.Funding, &it.CreatedAt, &it.UpdatedAt)
 	it.Target = centsPtr(target)
 	return it, err
 }
@@ -81,11 +86,11 @@ func scanPlanItem(s scanner) (PlanItem, error) {
 func (q *Queries) InsertPlanItem(ctx context.Context, it PlanItem) (PlanItem, error) {
 	created, err := scanPlanItem(q.q.QueryRow(ctx, `
 		INSERT INTO plan_items (id, user_id, kind, name, category_id, match_text, account_id, target_cents,
-			target_month, start_month, funding)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			target_month, start_month, end_month, funding)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 		RETURNING `+planItemColumns,
 		it.ID, it.UserID, it.Kind, it.Name, it.CategoryID, it.MatchText, it.AccountID, centsArg(it.Target),
-		it.TargetMonth, it.StartMonth, nullIfEmpty(it.Funding)))
+		it.TargetMonth, it.StartMonth, it.EndMonth, nullIfEmpty(it.Funding)))
 	return created, wrap("store.InsertPlanItem", err)
 }
 
@@ -122,10 +127,10 @@ func (q *Queries) UpdatePlanItem(ctx context.Context, it PlanItem) error {
 	return q.execOne(ctx, "store.UpdatePlanItem", `
 		UPDATE plan_items
 		SET name = $3, category_id = $4, match_text = $5, account_id = $6, target_cents = $7,
-		    target_month = $8, start_month = $9, funding = $10, updated_at = now()
+		    target_month = $8, start_month = $9, end_month = $10, funding = $11, updated_at = now()
 		WHERE id = $1 AND user_id = $2`,
 		it.ID, it.UserID, it.Name, it.CategoryID, it.MatchText, it.AccountID, centsArg(it.Target),
-		it.TargetMonth, it.StartMonth, nullIfEmpty(it.Funding))
+		it.TargetMonth, it.StartMonth, it.EndMonth, nullIfEmpty(it.Funding))
 }
 
 // DeletePlanItem removes one of the user's items with its versions and links.
@@ -374,6 +379,47 @@ func (q *Queries) PlanMovementsByID(ctx context.Context, userID uuid.UUID, ids [
 	}
 	args = append(args, ids)
 	return q.planMovements(ctx, "store.PlanMovementsByID", fmt.Sprintf("%s AND e.id = ANY($%d)", where, len(args)), args)
+}
+
+// PlanPriceRange is what a planned purchase could be: an outflow booked from
+// From to To, both inclusive, of Min to Max, both positive.
+type PlanPriceRange struct {
+	From, To civil.Date
+	Min, Max money.Cents
+}
+
+// PlanOutflowsNear lists the user's expenses, printed lines and pending
+// captures alike, that fall within any of ranges, oldest first: what the plan
+// reads to tell whether a planned purchase was bought. A purchase may be bought
+// any month from when it was planned to the one after it was due, which can
+// be two years; only the outflows about its price are read, rather than every
+// movement of those months.
+func (q *Queries) PlanOutflowsNear(ctx context.Context, userID uuid.UUID, ranges []PlanPriceRange) ([]PlanMovement, error) {
+	if len(ranges) == 0 {
+		return nil, nil
+	}
+	from, to := ranges[0].From, ranges[0].To
+	for _, r := range ranges[1:] {
+		if r.From.Before(from) {
+			from = r.From
+		}
+		if r.To.After(to) {
+			to = r.To
+		}
+	}
+	where, args, err := EntryFilter{UserID: userID, From: from, To: to, Kinds: []string{KindExpense}}.where()
+	if err != nil {
+		return nil, err
+	}
+	near := make([]string, 0, len(ranges))
+	for _, r := range ranges {
+		args = append(args, r.From, r.To, -int64(r.Max), -int64(r.Min))
+		n := len(args)
+		near = append(near, fmt.Sprintf("(e.booked_on BETWEEN $%d AND $%d AND e.amount_cents BETWEEN $%d AND $%d)",
+			n-3, n-2, n-1, n))
+	}
+	return q.planMovements(ctx, "store.PlanOutflowsNear",
+		where+" AND e.amount_cents < 0 AND ("+strings.Join(near, " OR ")+")", args)
 }
 
 // PlanTransfersOut lists the transfers out of the user's accounts booked from

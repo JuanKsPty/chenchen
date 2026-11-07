@@ -12,19 +12,18 @@ import (
 // and a day YYYY-MM-DD; every list is present, empty when there is nothing
 // in it.
 type View struct {
-	Month    Month       `json:"month"`
-	Today    civil.Date  `json:"today"`
-	State    State       `json:"state"`
-	Planned  bool        `json:"planned"`
-	Editable bool        `json:"editable"`
-	Summary  SummaryView `json:"summary"`
-	Income   IncomeView  `json:"income"`
-	Fixed    []FixedView `json:"fixed"`
-	// Savings say nothing yet about what reached their account: Progress,
-	// SavedMonth and NeededPerMonth are null.
-	Savings []SavingView `json:"savings"`
-	// Purchases is empty until planned purchases are kept.
-	Purchases     []struct{}        `json:"purchases"`
+	Month    Month        `json:"month"`
+	Today    civil.Date   `json:"today"`
+	State    State        `json:"state"`
+	Planned  bool         `json:"planned"`
+	Editable bool         `json:"editable"`
+	Summary  SummaryView  `json:"summary"`
+	Income   IncomeView   `json:"income"`
+	Fixed    []FixedView  `json:"fixed"`
+	Savings  []SavingView `json:"savings"`
+	// Purchases are planned figures, never a balance: what the plan sets
+	// aside for each, which no account is said to hold.
+	Purchases     []PurchaseView    `json:"purchases"`
 	Caps          []CapLineView     `json:"caps"`
 	Uncategorized UncategorizedView `json:"uncategorized"`
 	Quincenas     [2]QuincenaView   `json:"quincenas"`
@@ -59,6 +58,10 @@ type IncomeView struct {
 // ItemView is an item on the wire, with the values that hold for the month
 // read: its amount, its day and the run of months they hold for (To is null
 // when it has no end).
+//
+// A planned purchase's are those of all of it, the way it is saved: Amount
+// is its price, From the month it is set aside from (StartMonth) and To the
+// month it is due (TargetMonth).
 type ItemView struct {
 	ID          uuid.UUID     `json:"id"`
 	Kind        string        `json:"kind"`
@@ -71,6 +74,8 @@ type ItemView struct {
 	To          Month         `json:"to"`
 	Target      *money.Amount `json:"target,omitempty"`
 	TargetMonth Month         `json:"target_month,omitzero"`
+	StartMonth  Month         `json:"start_month,omitzero"`
+	Funding     string        `json:"funding,omitempty"`
 	AccountID   *uuid.UUID    `json:"account_id,omitempty"`
 }
 
@@ -79,9 +84,11 @@ func NewItemView(i Instance) ItemView {
 	v := ItemView{
 		ID: i.Item.ID, Kind: i.Item.Kind, Name: i.Item.Name, Amount: i.Planned().Amount(), Day: i.Version.Day,
 		CategoryID: i.Item.CategoryID, MatchText: i.Item.MatchText, From: i.Version.From, To: i.Version.To,
-		TargetMonth: monthOf(i.Item.TargetMonth), AccountID: i.Item.AccountID,
+		TargetMonth: monthOf(i.Item.TargetMonth), StartMonth: monthOf(i.Item.StartMonth), Funding: i.Item.Funding,
+		AccountID: i.Item.AccountID,
 	}
-	if i.Item.Target != nil {
+	// A purchase's target is its price, which is its amount already.
+	if i.Item.Target != nil && i.Item.Kind != KindPurchase {
 		t := i.Item.Target.Amount()
 		v.Target = &t
 	}
@@ -174,13 +181,45 @@ type FixedView struct {
 	Hint       *HintView      `json:"hint"`
 }
 
-// SavingView is what the month sets aside.
+// SavingView is what the month sets aside. Of a saving tied to an account,
+// Progress is what the account holds, as Cuentas shows it, and SavedMonth
+// what reached it as transfers this month, net; both are null for one tied
+// to none. NeededPerMonth is what each month to the goal's date would have to
+// set aside to reach it, null without a goal and a date, or once reached.
+// Status is done or partial by what reached the account, pending while the
+// month lasts with nothing yet, missed once it ended with nothing, as a
+// payment's is, and unlinked with no account.
 type SavingView struct {
 	ItemView
-	Status         *string       `json:"status"`
+	Status         Status        `json:"status"`
 	SavedMonth     *money.Amount `json:"saved_month"`
 	Progress       *money.Amount `json:"progress"`
 	NeededPerMonth *money.Amount `json:"needed_per_month"`
+}
+
+// PurchaseView is a planned purchase in the month. Share is what the month
+// sets aside for it and SetAsideBefore what the months before did: plan
+// figures, never a balance. Paid and BoughtOn are what it cost and when, in
+// the month it was bought, and null otherwise. Movements are what bought it;
+// Candidates what could be it, while it was not bought.
+type PurchaseView struct {
+	ItemView
+	Status         Status         `json:"status"`
+	Share          money.Amount   `json:"share"`
+	SetAsideBefore money.Amount   `json:"set_aside_before"`
+	Paid           *money.Amount  `json:"paid"`
+	BoughtOn       civil.Date     `json:"bought_on"`
+	Movements      []MovementView `json:"movements"`
+	Candidates     []MovementView `json:"candidates"`
+}
+
+// amountOf is an amount on the wire, or null for none.
+func amountOf(c *money.Cents) *money.Amount {
+	if c == nil {
+		return nil
+	}
+	a := c.Amount()
+	return &a
 }
 
 // CapView is a cap on the wire: its amount and the run of months it holds
@@ -257,7 +296,7 @@ func NewView(p Plan) View {
 			Unplanned: p.Income.Unplanned.Amount(), Items: make([]IncomeLineView, 0, len(p.Income.Items))},
 		Fixed:         make([]FixedView, 0, len(p.Fixed)),
 		Savings:       make([]SavingView, 0, len(p.Savings)),
-		Purchases:     []struct{}{},
+		Purchases:     make([]PurchaseView, 0, len(p.Purchases)),
 		Caps:          make([]CapLineView, 0, len(p.Caps)),
 		Uncategorized: UncategorizedView{Spent: p.Uncategorized.Spent.Amount(), Count: p.Uncategorized.Count},
 		Cards:         make([]CardView, 0, len(p.Cards)),
@@ -286,7 +325,13 @@ func NewView(p Plan) View {
 		v.Fixed = append(v.Fixed, f)
 	}
 	for _, l := range p.Savings {
-		v.Savings = append(v.Savings, SavingView{ItemView: NewItemView(l.Instance)})
+		v.Savings = append(v.Savings, SavingView{ItemView: NewItemView(l.Instance), Status: l.Status,
+			SavedMonth: amountOf(l.SavedMonth), Progress: amountOf(l.Progress), NeededPerMonth: amountOf(l.NeededPerMonth)})
+	}
+	for _, l := range p.Purchases {
+		v.Purchases = append(v.Purchases, PurchaseView{ItemView: NewItemView(l.Instance), Status: l.Status,
+			Share: l.Share.Amount(), SetAsideBefore: l.SetAsideBefore.Amount(), Paid: amountOf(l.Paid),
+			BoughtOn: l.BoughtOn, Movements: paidByViews(l.Movements), Candidates: candidateViews(l.Candidates)})
 	}
 	for _, c := range p.Caps {
 		v.Caps = append(v.Caps, CapLineView{CapView: NewCapView(c.Cap), Spent: c.Spent.Amount(), Level: c.Level})

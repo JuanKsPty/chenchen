@@ -108,9 +108,9 @@ func TestTheHandlerSaysWhatIsWrong(t *testing.T) {
 		{`{"kind": "income", "month": "2026-11", "scope": "from", "name": "Sueldo", "amount": "-5", "day": 15}`,
 			map[string]string{"amount": "Indica un monto mayor que cero."}},
 		{item("purchase", "2026-11", `"start_month": "2026-12", "funding": "monthly"`), map[string]string{
-			"kind":        "Las compras planeadas todavía no se pueden guardar.",
-			"start_month": "Las compras planeadas todavía no se pueden guardar.",
-			"funding":     "Las compras planeadas todavía no se pueden guardar.",
+			"day":          "Una compra planeada no lleva día.",
+			"start_month":  "Una compra se empieza a apartar el mes en que la planeas.",
+			"target_month": "Elige para cuándo, de aquí a 24 meses como mucho.",
 		}},
 		{item("income", "2026-11", fmt.Sprintf(`"category_id": %q`, food)),
 			map[string]string{"category_id": "Elige una categoría de ingresos."}},

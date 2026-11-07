@@ -423,8 +423,9 @@ func TestSavingsAreSetAsideAndNeverCountAsSpending(t *testing.T) {
 	wantCents(t, "the spending", p.Spending, 0)
 	wantCents(t, "what is left", s.Left, 85000)
 	v := plan.NewView(p)
-	if len(v.Savings) != 1 || v.Savings[0].Amount.Cents != 15000 || v.Savings[0].Progress != nil ||
-		v.Savings[0].SavedMonth != nil || v.Savings[0].AccountID == nil || *v.Savings[0].AccountID != savings {
+	if len(v.Savings) != 1 || v.Savings[0].Amount.Cents != 15000 || v.Savings[0].Status != plan.StatusDone ||
+		v.Savings[0].SavedMonth == nil || v.Savings[0].SavedMonth.Cents != 15000 ||
+		v.Savings[0].AccountID == nil || *v.Savings[0].AccountID != savings {
 		t.Errorf("savings = %+v", v.Savings)
 	}
 }
