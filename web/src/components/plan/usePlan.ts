@@ -6,6 +6,11 @@
  *                          month, so the plan page, Gastos' card and Inicio (its glance
  *                          and its notices) share one entry, and the server (Panama
  *                          time) says which month that is
+ *   usePlanSuggestions(enabled)
+ *                          GET /api/plan/suggestions, keyed ['reports', 'plan',
+ *                          'suggestions']: under the plan's prefix, so a plan edit (an
+ *                          item added makes its suggestion go) and anything that
+ *                          changes money (an import brings new history) refresh it
  *   useSavePlanItem()({id, input}) · useDeletePlanItem()({id, month, scope})
  *   useSavePlanCap()({categoryId, input}) · useDeletePlanCap()({categoryId, month, scope})
  *   usePlanLinks(about, onDone, onFailure)
@@ -34,6 +39,7 @@ import {
   deletePlanItem,
   deletePlanLink,
   fetchPlan,
+  fetchPlanSuggestions,
   savePlanCap,
   savePlanItem,
   type PlanCapInput,
@@ -49,6 +55,18 @@ export const planKey = (month?: string) => [...PLAN_PREFIX, month ?? 'current'] 
 
 export function usePlan(month?: string) {
   return useQuery({ queryKey: planKey(month), queryFn: () => fetchPlan(month) })
+}
+
+/** Never a month (YYYY-MM or 'current'), so it cannot share an entry with one. */
+export const planSuggestionsKey = [...PLAN_PREFIX, 'suggestions'] as const
+
+/** What the history suggests planning; asked for only while something can offer it. */
+export function usePlanSuggestions(enabled: boolean) {
+  return useQuery({
+    queryKey: planSuggestionsKey,
+    queryFn: fetchPlanSuggestions,
+    enabled,
+  })
 }
 
 /** Refreshes every month's plan, and nothing else. */

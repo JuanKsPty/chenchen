@@ -32,8 +32,12 @@
  * narrower, one column in the same order, which is also the phone's reading order.
  *
  * With nothing planned yet: "Arma tu plan del mes", whose "Armar mi plan" opens the
- * income (so does ?armar=1, Gastos' invite). The sections appear once their data
- * does, so the page, not the shell, scrolls to #topes, #pagos or #ahorro.
+ * setup (PlanSetupDialog): what chenchén found in the history, in three steps. So
+ * does ?armar=1, Gastos' invite, once the plan says there is nothing planned; the
+ * address then drops it, so a reload or "Atrás" never opens it again. Once there is
+ * a plan, this month's cards offer what else the history suggests: "¿También son
+ * fijos?", "¿También es un sueldo?", "¿También es ahorro?". The sections appear once
+ * their data does, so the page, not the shell, scrolls to #topes, #pagos or #ahorro.
  *
  * Opening this month's plan marks what it has to say (near or past what is free or a
  * cap, payments due soon) as seen on this device (plan/seen), so Inicio's notices
@@ -61,9 +65,10 @@ import { IncomeDialog } from '@/components/plan/IncomeDialog'
 import { IncomeSheet } from '@/components/plan/IncomeSheet'
 import { planMonth } from '@/components/plan/month'
 import { PlanHero } from '@/components/plan/PlanHero'
+import { PlanSetupDialog } from '@/components/plan/PlanSetupDialog'
 import { SavingsCard } from '@/components/plan/SavingsCard'
 import { markPlanSeen } from '@/components/plan/seen'
-import { usePlan } from '@/components/plan/usePlan'
+import { usePlan, usePlanSuggestions } from '@/components/plan/usePlan'
 import { monthWord } from '@/components/plan/words'
 import { problemMessage } from '@/components/settings/problem'
 import { useTopBar } from '@/components/shell/TopBar'
@@ -85,7 +90,7 @@ import { useDocumentTitle } from '@/lib/title'
 const TITLE = 'Plan del mes'
 
 /** Which editor is open; the item it edits is kept apart, so it stays while it closes. */
-type Open = 'income' | 'incomeSheet' | 'fixed' | 'sheet' | 'saving' | 'cap'
+type Open = 'setup' | 'income' | 'incomeSheet' | 'fixed' | 'sheet' | 'saving' | 'cap'
 
 export function PlanPage() {
   useDocumentTitle(TITLE)
@@ -122,6 +127,8 @@ export function PlanPage() {
   // row focus goes back to when it closes (null for any other dialog).
   const sheetOpener = useRef<HTMLElement | null>(null)
   const handoff = useRef<HTMLElement | null>(null)
+  // The hero's heading: where focus lands once the setup made the plan it heads.
+  const heroHeading = useRef<HTMLHeadingElement>(null)
 
   /** Opens a dialog from the page itself: focus goes back to what opened it. */
   const openDialog = (next: Open) => {
@@ -140,14 +147,18 @@ export function PlanPage() {
   }
 
   const data = plan.data
-  const setupRequested = isPlanSetupRequested(params)
-  const incomeOpen =
-    open === 'income' ||
-    (setupRequested && data !== undefined && !data.planned && data.editable)
+  // Suggestions are offered by the setup (nothing planned yet, a month that can be
+  // planned) and under this month's cards; any other month asks for none.
+  const suggestions = usePlanSuggestions(
+    data !== undefined && data.editable && (data.state === 'current' || !data.planned),
+  )
 
-  const closeIncome = () => {
-    setOpen(null)
-    if (!setupRequested) return
+  // ?armar=1 opens the setup on arrival, once the plan says there is nothing
+  // planned to set up over, and leaves the address either way.
+  const setupRequested = isPlanSetupRequested(params)
+  useEffect(() => {
+    if (!setupRequested || !data) return
+    if (!data.planned && data.editable) setOpen('setup')
     setParams(
       (previous) => {
         const next = new URLSearchParams(previous)
@@ -156,7 +167,7 @@ export function PlanPage() {
       },
       { replace: true },
     )
-  }
+  }, [setupRequested, data, setParams])
 
   const picker = (
     <MonthPicker month={month} max={last} href={planHref} className="hidden lg:flex" />
@@ -198,6 +209,8 @@ export function PlanPage() {
   }
 
   const editable = data.editable
+  // What else the history suggests, under this month's cards while it can change.
+  const offered = data.state === 'current' && editable ? suggestions.data : undefined
   const pending = transfers.data?.suggestions.length ?? 0
   const noAccounts = accounts.data !== undefined && accounts.data.accounts.length === 0
 
@@ -226,7 +239,7 @@ export function PlanPage() {
         headingLevel={2}
         title="Arma tu plan del mes"
         description="Dinos cuánto te entra y qué pagas cada mes, y te decimos cuánto te queda libre por día."
-        action={{ label: 'Armar mi plan', onClick: () => openDialog('income') }}
+        action={{ label: 'Armar mi plan', onClick: () => openDialog('setup') }}
         secondaryAction={
           noAccounts
             ? {
@@ -250,6 +263,8 @@ export function PlanPage() {
                 setPaycheck(line)
                 openSheet('incomeSheet', opener)
               }}
+              suggestions={offered?.income}
+              headingRef={heroHeading}
             />
             <CapsCard
               plan={data}
@@ -286,6 +301,7 @@ export function PlanPage() {
                   : undefined
               }
               onOpen={openFixed}
+              suggestions={offered?.fixed}
             />
             <SavingsCard
               plan={data}
@@ -306,6 +322,7 @@ export function PlanPage() {
                     }
                   : undefined
               }
+              suggestions={offered?.savings}
             />
           </div>
         </div>
@@ -345,10 +362,18 @@ export function PlanPage() {
 
       {body}
 
+      <PlanSetupDialog
+        plan={data}
+        suggestions={suggestions.data}
+        failed={suggestions.isError}
+        open={open === 'setup'}
+        onOpenChange={close}
+        returnTo={heroHeading}
+      />
       <IncomeDialog
         plan={data}
-        open={incomeOpen}
-        onOpenChange={(next) => (next ? setOpen('income') : closeIncome())}
+        open={open === 'income'}
+        onOpenChange={close}
         returnTo={handoff}
       />
       <IncomeSheet

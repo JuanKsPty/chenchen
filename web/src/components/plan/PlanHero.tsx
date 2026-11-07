@@ -1,10 +1,14 @@
 /**
- * <PlanHero plan onEditIncome? onOpenIncome />
+ * <PlanHero plan onEditIncome? onOpenIncome suggestions? headingRef? />
  *
  *   onEditIncome  "Editar ingreso", a ghost button; left out for a month that can no
  *                 longer be edited
  *   onOpenIncome  a paycheck tapped, with the element that opened it: its sheet,
  *                 which says which deposit it was
+ *   suggestions   paychecks the history suggests planning, offered as "¿También es
+ *                 un sueldo?"; left out where they are not offered
+ *   headingRef    the card's heading, for focus to land on when the plan was just
+ *                 set up and what opened the setup is gone
  *
  * The plan's headline card, OutflowCard's shape. On the left, from the top:
  *   - "Te quedan" and the view's one display figure: what is left of what is free.
@@ -21,19 +25,22 @@
  * there (useAddToFree): when a paycheck still waiting may be that money, "que no
  * reconocimos" and the way to say which it was; otherwise "que no estaban en tu
  * plan", with "Sumar a lo libre" when that would count it exactly once. It never
- * changes what is free on its own. Under both, what "Llevas" counts.
+ * changes what is free on its own. Then the paychecks the history suggests that the
+ * plan lacks, each with "Agregar" and "No" (SuggestionList). Under both columns,
+ * what "Llevas" counts.
  *
  * Not a live region: a refetch would read it all out again. Its figures change after
  * an edit, which the edit's toast already says.
  */
-import { useId, type ReactNode } from 'react'
+import { useId, useRef, type ReactNode, type RefObject } from 'react'
 
-import type { MonthPlan, PlanIncomeLine, PlanQuincena } from '@/api/types'
+import type { MonthPlan, PlanIncomeLine, PlanQuincena, PlanSuggestion } from '@/api/types'
 import { Amount, PlanCaption, PlanTrack } from '@/components/kit'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { formatCivilDayMonth, formatRange } from '@/lib/format'
 import { cn } from '@/lib/utils'
+import { SuggestionList } from './Suggestions'
 import { useAddToFree } from './useAddToFree'
 import {
   daysLine,
@@ -52,11 +59,15 @@ export function PlanHero({
   plan,
   onEditIncome,
   onOpenIncome,
+  suggestions,
+  headingRef,
   className,
 }: {
   plan: MonthPlan
   onEditIncome?: () => void
   onOpenIncome: OpenIncome
+  suggestions?: PlanSuggestion[]
+  headingRef?: RefObject<HTMLHeadingElement | null>
   className?: string
 }) {
   const headingId = useId()
@@ -89,7 +100,12 @@ export function PlanHero({
       <div className="grid gap-6 @lg:grid-cols-[minmax(0,1fr)_minmax(0,16rem)] @lg:gap-8">
         <div className="flex min-w-0 flex-col gap-3">
           <div className="flex flex-col gap-2">
-            <h2 id={headingId} className="text-body font-semibold">
+            <h2
+              ref={headingRef}
+              id={headingId}
+              tabIndex={-1}
+              className="text-body font-semibold outline-none"
+            >
               {head.label}
             </h2>
             <p>
@@ -104,7 +120,12 @@ export function PlanHero({
           {!nothingFree && <Quincenas plan={plan} />}
         </div>
 
-        <Equation plan={plan} onEditIncome={onEditIncome} onOpenIncome={onOpenIncome} />
+        <Equation
+          plan={plan}
+          onEditIncome={onEditIncome}
+          onOpenIncome={onOpenIncome}
+          suggestions={suggestions}
+        />
       </div>
 
       {plan.state !== 'future' && plan.planned && (
@@ -194,11 +215,15 @@ function Equation({
   plan,
   onEditIncome,
   onOpenIncome,
+  suggestions,
 }: {
   plan: MonthPlan
   onEditIncome?: () => void
   onOpenIncome: OpenIncome
+  suggestions?: PlanSuggestion[]
 }) {
+  // Where focus goes when the last suggestion is answered and its list leaves.
+  const editRef = useRef<HTMLButtonElement>(null)
   const { summary, income } = plan
   const extra = useAddToFree(plan)
   const seen = plan.state !== 'future'
@@ -258,8 +283,22 @@ function Equation({
         </div>
       )}
 
+      {suggestions && suggestions.length > 0 && (
+        <SuggestionList
+          plan={plan}
+          title="¿También es un sueldo?"
+          suggestions={suggestions}
+          fallback={editRef}
+        />
+      )}
+
       {onEditIncome && (
-        <Button variant="ghost" className="-ml-3 self-start" onClick={onEditIncome}>
+        <Button
+          ref={editRef}
+          variant="ghost"
+          className="-ml-3 self-start"
+          onClick={onEditIncome}
+        >
           Editar ingreso
         </Button>
       )}

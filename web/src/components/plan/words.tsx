@@ -14,6 +14,12 @@
  *                         era el 15 nov", "Te llegó a otra cuenta"
  *   monthWord(ym)         "noviembre" (or "enero de 2027"), for a sentence
  *   scopeNote(plan)       "Vale desde diciembre. Noviembre no cambia." for next month
+ *   suggestionHint(s, {amount?, months?})
+ *                         "$3.68 · cerca del día 18", "Cerca del día 18 · salió en 3
+ *                         meses", "$300.00 al mes": what a suggestion says under its name
+ *   seenIncome(income)    "Vimos $650.00 dos veces al mes, cerca del 16 y del 30.", from
+ *                         the paychecks the history suggests; null with none
+ *   freeLine(free, income)  "$1,061.02 libres al mes.", or why nothing would be
  *
  * A figure below zero is never written "−$32.40": the label changes instead ("Por
  * encima de lo libre"), and the figure is how far. Nothing here scolds, warns or
@@ -21,7 +27,7 @@
  */
 import type { ReactNode } from 'react'
 
-import type { MonthPlan, PlanFixedLine, PlanIncomeLine } from '@/api/types'
+import type { MonthPlan, PlanFixedLine, PlanIncomeLine, PlanSuggestion } from '@/api/types'
 import { Amount } from '@/components/kit'
 import { monthInSentence, monthName } from '@/components/spending/period'
 import { aboutMoney, formatCivilDayMonth, money, shiftMonth } from '@/lib/format'
@@ -165,4 +171,73 @@ export function incomeStatus(line: PlanIncomeLine, plan: MonthPlan): string {
 export function scopeNote(plan: MonthPlan): string | undefined {
   if (plan.state !== 'future') return undefined
   return `Vale desde ${monthWord(plan.month)}. ${monthName(shiftMonth(plan.month, -1))} no cambia.`
+}
+
+/**
+ * What a suggestion says under its name. A paycheck or a payment: its amount (left
+ * out where the row shows it, or lets it be typed), "cerca del día 18", with
+ * `months` in how many months it came, and, for a payment to or from a person, the
+ * text the statement prints: two of them are both "Yappy de cada mes", and that text
+ * is what tells them apart. It is the owner's own statement, said as data; chenchén
+ * never makes a name of it. A saving: what it would set aside, "$300.00 al mes".
+ */
+export function suggestionHint(
+  s: PlanSuggestion,
+  { amount = true, months = false } = {},
+): string {
+  if (s.kind === 'saving') return `${money(s.amount)} al mes`
+  const parts: string[] = []
+  if (amount) parts.push(money(s.amount))
+  if (s.day) parts.push(`cerca del día ${s.day}`)
+  if (months)
+    parts.push(`${s.kind === 'income' ? 'llegó' : 'salió'} en ${s.months_seen} meses`)
+  if (s.person && s.match_text.trim()) parts.push(s.match_text.trim())
+  const text = parts.join(' · ')
+  return text.charAt(0).toUpperCase() + text.slice(1)
+}
+
+/** A suggested paycheck's key without its place in the month ("#1", "#2"). */
+const paycheckGroup = (key: string) => key.replace(/#[12]$/, '')
+
+/**
+ * What the history says about income, figure first: "Vimos $650.00 dos veces al
+ * mes, cerca del 16 y del 30." A paycheck that comes twice a month is two
+ * suggestions, one per place ("#1", "#2"), said here as one; another paycheck adds
+ * "También $40.00 al mes, cerca del 5." Null when nothing was suggested.
+ */
+export function seenIncome(income: PlanSuggestion[]): string | null {
+  const groups = new Map<string, PlanSuggestion[]>()
+  for (const s of income) {
+    const group = paycheckGroup(s.key)
+    groups.set(group, [...(groups.get(group) ?? []), s])
+  }
+  const near = (s: PlanSuggestion) => (s.day ? `cerca del ${s.day}` : '')
+  const said = [...groups.values()].map((group) => {
+    const [first, second] = [...group].sort((a, b) => (a.day ?? 0) - (b.day ?? 0))
+    if (!first) return ''
+    if (!second)
+      return [`${money(first.amount)} al mes`, near(first)].filter(Boolean).join(', ')
+    if (first.amount.cents === second.amount.cents)
+      return `${money(first.amount)} dos veces al mes, cerca del ${first.day} y del ${second.day}`
+    return `${money(first.amount)} ${near(first)} y ${money(second.amount)} ${near(second)} de cada mes`
+  })
+  const [lead, ...rest] = said.filter(Boolean)
+  if (!lead) return null
+  return [`Vimos ${lead}.`, ...rest.map((clause) => `También ${clause}.`)].join(' ')
+}
+
+/**
+ * What a plan of `income` a month would leave free, `free`, figure first: "$1,061.02
+ * libres al mes." Never a figure below zero: when what goes out and what is set aside
+ * add up to more than the income it says by how much, plainly.
+ */
+export function freeLine(free: number, income: number): ReactNode {
+  if (income <= 0) return 'Dinos cuánto te entra y te decimos cuánto queda libre.'
+  if (free < 0) return `Tus pagos y tu ahorro suman ${money(-free)} más que tu ingreso.`
+  if (free === 0) return 'Tus pagos y tu ahorro suman lo mismo que tu ingreso.'
+  return (
+    <>
+      <Amount amount={free} size="inline" /> libres al mes.
+    </>
+  )
 }

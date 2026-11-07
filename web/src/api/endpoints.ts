@@ -32,6 +32,8 @@ import type {
   PlanItemKind,
   PlanLink,
   PlanScope,
+  PlanSuggestion,
+  PlanSuggestions,
   Portfolio,
   Reconciliation,
   RuleReach,
@@ -445,6 +447,28 @@ export const addPlanLink = (input: PlanLinkInput) =>
  */
 export const deletePlanLink = (id: string) =>
   request<void>(`/api/plan/links/${encodeURIComponent(id)}`, { method: 'DELETE' })
+
+/**
+ * The paychecks, payments and savings the owner's history suggests planning, that
+ * the plan does not have yet and the owner has not turned down.
+ */
+export const fetchPlanSuggestions = () => request<PlanSuggestions>('/api/plan/suggestions')
+
+/** A suggestion as a dismissal names it: its kind and its key, as the server gave them. */
+export type PlanDismissal = Pick<PlanSuggestion, 'kind' | 'key'>
+
+/** Turns a suggestion down: it is not offered again. Saying it twice is saying it once. */
+export const dismissPlanSuggestion = ({ kind, key }: PlanDismissal) =>
+  request<void>('/api/plan/dismissals', { method: 'PUT', body: { kind, key } })
+
+/**
+ * Takes turning it down back: it is offered again while the history suggests it.
+ * The key travels in the query, where a paycheck's "#1" has to be encoded.
+ */
+export const undismissPlanSuggestion = ({ kind, key }: PlanDismissal) =>
+  request<void>(`/api/plan/dismissals?${new URLSearchParams({ kind, key })}`, {
+    method: 'DELETE',
+  })
 
 // --- rules ---------------------------------------------------------------------
 

@@ -892,6 +892,44 @@ export interface PlanLink {
   created_at: string
 }
 
+/** What the owner's history can suggest planning: a paycheck, a payment or a saving. */
+export type PlanSuggestionKind = 'income' | 'fixed' | 'saving'
+
+/**
+ * Something the owner's history suggests planning, worked out each time it is asked
+ * for (GET /api/plan/suggestions); nothing is planned until the owner says so.
+ *
+ * `key` names it, as a dismissal names it back: the text it was found by, with "#1"
+ * or "#2" for each of two paychecks a month, or "account:<id>" for a saving. `name`
+ * is chenchén's ("Yappy de cada mes" for a payment to a person, `person`: never the
+ * person's name); `match_text` is the text as the statement prints it, what the plan
+ * would recognise it by ('' for a saving). `amount` is the latest seen, or for a
+ * saving what reached its account in a month on average, in whole dollars. `day` is
+ * the usual day (absent for a saving), `months_seen` in how many months it came.
+ */
+export interface PlanSuggestion {
+  key: string
+  kind: PlanSuggestionKind
+  name: string
+  amount: Amount
+  day?: number
+  match_text: string
+  /** The category its lines are filed under most often, if any. */
+  category_id?: string
+  months_seen: number
+  last_on: string
+  person: boolean
+  /** A saving's account. */
+  account_id?: string
+}
+
+/** GET /api/plan/suggestions: each list in the server's order, present even when empty. */
+export interface PlanSuggestions {
+  income: PlanSuggestion[]
+  fixed: PlanSuggestion[]
+  savings: PlanSuggestion[]
+}
+
 /**
  * GET /api/plan: a month's plan beside what happened in it.
  *

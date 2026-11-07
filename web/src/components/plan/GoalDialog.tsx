@@ -25,9 +25,6 @@ import { focusWhenReady } from '@/components/settings/focus'
 import { problemMessage } from '@/components/settings/problem'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogClose } from '@/components/ui/dialog'
-import { Field, FieldDescription, FieldError, FieldLabel } from '@/components/ui/field'
-import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
-import { shortAccountLabel } from '@/lib/account'
 import { useReturnFocus } from '@/lib/focus'
 import { useAccounts } from '@/lib/queries'
 import { amountProblem, amountToCents, isClean, type Errors } from '@/lib/validate'
@@ -41,6 +38,8 @@ import {
   nameProblem,
   planAmount,
   RemoveButton,
+  SavingAccountField,
+  savingAccounts,
   ScopeField,
   SubmitButton,
   TextField,
@@ -88,18 +87,10 @@ function GoalForm({
   onDone: () => void
 }) {
   const formId = useId()
-  const accountFieldId = useId()
   const formRef = useRef<HTMLFormElement>(null)
   const submitRef = useRef<HTMLButtonElement>(null)
   const accounts = useAccounts()
-  // Where savings are kept: the owner's savings and brokerage accounts.
-  const choices = useMemo(
-    () =>
-      (accounts.data?.accounts ?? [])
-        .filter((a) => (a.type === 'savings' || a.type === 'brokerage') && !a.paid_by_other)
-        .map((a) => ({ id: a.id, name: a.alias?.trim() || shortAccountLabel(a) })),
-    [accounts.data],
-  )
+  const choices = useMemo(() => savingAccounts(accounts.data?.accounts), [accounts.data])
   const save = useSavePlanItem()
   const remove = useDeletePlanItem()
   const undo = usePlanUndo()
@@ -252,34 +243,12 @@ function GoalForm({
           error={errors.amount}
           description="Sale de lo libre cada mes."
         />
-        <Field data-invalid={errors.account_id ? true : undefined}>
-          <FieldLabel htmlFor={accountFieldId}>¿Dónde lo guardas? (opcional)</FieldLabel>
-          <NativeSelect
-            id={accountFieldId}
-            className="w-full"
-            value={account}
-            aria-invalid={errors.account_id ? true : undefined}
-            aria-describedby={
-              errors.account_id
-                ? `${accountFieldId}-hint ${accountFieldId}-error`
-                : `${accountFieldId}-hint`
-            }
-            onChange={(event) => edit('account_id', setAccount)(event.target.value)}
-          >
-            <NativeSelectOption value="">En ninguna en particular</NativeSelectOption>
-            {choices.map((choice) => (
-              <NativeSelectOption key={choice.id} value={choice.id}>
-                {choice.name}
-              </NativeSelectOption>
-            ))}
-          </NativeSelect>
-          <FieldDescription id={`${accountFieldId}-hint`}>
-            Una cuenta de ahorros o de inversión tuya.
-          </FieldDescription>
-          {errors.account_id && (
-            <FieldError id={`${accountFieldId}-error`}>{errors.account_id}</FieldError>
-          )}
-        </Field>
+        <SavingAccountField
+          value={account}
+          onChange={edit('account_id', setAccount)}
+          choices={choices}
+          error={errors.account_id}
+        />
         {item && <ScopeField month={month} value={scope} onChange={setScope} />}
         {item && (
           <RemoveButton onClick={takeOut} pending={remove.isPending}>

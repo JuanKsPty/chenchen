@@ -15,8 +15,9 @@
  * plan normally wants. Next month on screen: "Vale desde diciembre. Noviembre no
  * cambia."
  *
- * Opened by "Editar ingreso" and, the first time, by "Armar mi plan" (and ?armar=1):
- * then it starts with one empty row. Below lg a bottom sheet, from lg a dialog, with
+ * Opened by "Editar ingreso" (the first time, PlanSetupDialog sets the income up with
+ * the rest); with no paycheck planned yet it starts with one empty row. Below lg a
+ * bottom sheet, from lg a dialog, with
  * "Guardar" as its one primary. Each opening picks the ids of the rows it adds and
  * sends them on every try, so a retry never makes a paycheck twice. Only what
  * changed is sent, one row at a time; when the server refuses one, the rows already
@@ -29,7 +30,6 @@ import { PlusIcon } from 'lucide-react'
 import { useId, useRef, useState, type RefObject } from 'react'
 import { toast } from 'sonner'
 
-import { isNotFound } from '@/api/client'
 import { deletePlanItem, savePlanItem, type PlanItemInput } from '@/api/endpoints'
 import type { MonthPlan, PlanIncomeLine, PlanScope } from '@/api/types'
 import { serverProblems } from '@/components/account/AddPurchaseDialog'
@@ -57,6 +57,7 @@ import {
   planAmount,
   SubmitButton,
   TextField,
+  unlessGone,
   useOpenRound,
   useReturnFocusOr,
   type ItemField,
@@ -349,10 +350,6 @@ function IncomeForm({
  */
 function scopeFor(line: PlanIncomeLine | undefined, month: string, chosen: PlanScope) {
   return line && line.from === month && line.to === month ? 'only' : chosen
-}
-
-function unlessGone(error: unknown) {
-  if (!isNotFound(error)) throw error
 }
 
 /**

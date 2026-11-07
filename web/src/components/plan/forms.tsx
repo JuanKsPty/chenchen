@@ -10,7 +10,11 @@
  *                           first one)
  *   ScopeField              "Desde este mes" / "Solo este mes": which months an edit
  *                           or a removal holds for
- *   CheckRow                a checkbox in a label row at least 44px tall
+ *   CheckRow                a checkbox in a label row at least 44px tall, with an
+ *                           amount at its right if it has one
+ *   savingAccounts(accounts) · SavingAccountField
+ *                           the accounts a saving can be kept in, and the field that
+ *                           picks one (or none)
  *   RemoveButton            the ghost text button that takes an item out, in the body
  *                           and never in the footer: the toast undoes it, so it never
  *                           asks first (nothing here moves money)
@@ -22,6 +26,7 @@
  *                           useReturnFocus, falling back to `fallback` when what had
  *                           focus left with a sheet
  *   nameProblem · dayProblem · planAmount · centsText · itemInput · focusFirstProblem
+ *   unlessGone(error)       a delete's catch: taking out what is gone already is done
  *
  * Every amount the plan keeps is more than zero (an income, a payment, a contribution
  * or a cap of $0 is said by taking it out), so amountProblem's refusal of zero is
@@ -30,8 +35,15 @@
 import { CircleAlertIcon } from 'lucide-react'
 import { useId, useMemo, useState, type ReactNode, type RefObject } from 'react'
 
+import { isNotFound } from '@/api/client'
 import type { PlanItemInput } from '@/api/endpoints'
-import type { PlanFixedLine, PlanIncomeLine, PlanSavingLine, PlanScope } from '@/api/types'
+import type {
+  Account,
+  PlanFixedLine,
+  PlanIncomeLine,
+  PlanSavingLine,
+  PlanScope,
+} from '@/api/types'
 import { purchaseAmount } from '@/components/account/AddPurchaseDialog'
 import { focusWhenReady } from '@/components/settings/focus'
 import { monthName } from '@/components/spending/period'
@@ -50,6 +62,7 @@ import { Input } from '@/components/ui/input'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
 import { Spinner } from '@/components/ui/spinner'
+import { shortAccountLabel } from '@/lib/account'
 import type { CategoryOption } from '@/lib/categories'
 import { useReturnFocus } from '@/lib/focus'
 
@@ -156,6 +169,14 @@ export function useReturnFocusOr(fallback?: RefObject<HTMLElement | null>) {
     }),
     [returnFocus, fallback],
   )
+}
+
+/**
+ * Taking out what is gone already is done: an undo, or a retry, whose earlier answer
+ * was lost on the way back.
+ */
+export function unlessGone(error: unknown) {
+  if (!isNotFound(error)) throw error
 }
 
 /** Focus on the first field with a problem, once it is marked. */
@@ -407,17 +428,22 @@ function ScopeChoice({
   )
 }
 
-/** A checkbox in a label row at least 44px tall; the hint wraps under the label. */
+/**
+ * A checkbox in a label row at least 44px tall; the hint wraps under the label, and
+ * `aside` (an amount) sits at the right, part of what the box is named by.
+ */
 export function CheckRow({
   checked,
   onChange,
   label,
   hint,
+  aside,
 }: {
   checked: boolean
   onChange: (checked: boolean) => void
   label: string
   hint?: string
+  aside?: ReactNode
 }) {
   return (
     <label className="flex min-h-11 cursor-pointer items-start gap-3 py-2.5">
@@ -426,13 +452,73 @@ export function CheckRow({
         onCheckedChange={(next) => onChange(next === true)}
         className="mt-px"
       />
-      <span className="flex min-w-0 flex-col">
+      <span className="flex min-w-0 flex-1 flex-col">
         <span className="text-body font-medium text-foreground">{label}</span>
         {hint && (
-          <span className="text-small font-medium text-muted-foreground">{hint}</span>
+          <span className="text-small font-medium text-pretty text-muted-foreground">
+            {hint}
+          </span>
         )}
       </span>
+      {aside && <span className="shrink-0">{aside}</span>}
     </label>
+  )
+}
+
+/** One of the owner's accounts a saving can be kept in, by the name they know it by. */
+export interface SavingAccount {
+  id: string
+  name: string
+}
+
+/**
+ * Where savings are kept: the owner's savings and brokerage accounts, never one
+ * someone else pays. The server refuses any other for a saving.
+ */
+export function savingAccounts(accounts: Account[] | undefined): SavingAccount[] {
+  return (accounts ?? [])
+    .filter((a) => (a.type === 'savings' || a.type === 'brokerage') && !a.paid_by_other)
+    .map((a) => ({ id: a.id, name: a.alias?.trim() || shortAccountLabel(a) }))
+}
+
+/** "¿Dónde lo guardas? (opcional)": one of `choices`, or none in particular. */
+export function SavingAccountField({
+  value,
+  onChange,
+  choices,
+  error,
+  label = '¿Dónde lo guardas? (opcional)',
+}: {
+  value: string
+  onChange: (value: string) => void
+  choices: SavingAccount[]
+  error?: string
+  label?: string
+}) {
+  const id = useId()
+  return (
+    <Field data-invalid={error ? true : undefined}>
+      <FieldLabel htmlFor={id}>{label}</FieldLabel>
+      <NativeSelect
+        id={id}
+        className="w-full"
+        value={value}
+        aria-invalid={error ? true : undefined}
+        aria-describedby={describedBy(`${id}-hint`, error && `${id}-error`)}
+        onChange={(event) => onChange(event.target.value)}
+      >
+        <NativeSelectOption value="">En ninguna en particular</NativeSelectOption>
+        {choices.map((choice) => (
+          <NativeSelectOption key={choice.id} value={choice.id}>
+            {choice.name}
+          </NativeSelectOption>
+        ))}
+      </NativeSelect>
+      <FieldDescription id={`${id}-hint`}>
+        Una cuenta de ahorros o de inversión tuya.
+      </FieldDescription>
+      {error && <FieldError id={`${id}-error`}>{error}</FieldError>}
+    </Field>
   )
 }
 
