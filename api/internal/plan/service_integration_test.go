@@ -3,6 +3,7 @@ package plan_test
 import (
 	"context"
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -533,6 +534,104 @@ func TestRemovingMonthsForgetsWhatWasSaidAboutThem(t *testing.T) {
 	}
 	if n := storetest.Count(t, f.db, "plan_links"); n != 0 {
 		t.Errorf("links after taking every month out = %d, want none", n)
+	}
+}
+
+// Adding what the plan already has, in a month it would be planned for, adds
+// nothing and gives back what is there, whatever the amount and however the
+// name is written. Their day or their text tells apart two things of one
+// name, which then are two.
+func TestAddingWhatThePlanAlreadyHasAddsNothing(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	add := func(in plan.ItemInput) (store.PlanItem, bool) {
+		t.Helper()
+		item, already, err := f.svc.AddItem(ctx, f.user, uuid.New(), in)
+		if err != nil {
+			t.Fatalf("AddItem(%s %q day %d from %s): %v", in.Kind, in.Name, in.Day, in.Month, err)
+		}
+		return item, already
+	}
+	paycheck := func(day int) plan.ItemInput {
+		return plan.ItemInput{Kind: plan.KindIncome, Month: nov26, Scope: plan.ScopeFrom,
+			Name: "Ach Cre Empresa X S.A.", Amount: 65000, Day: day, MatchText: "ACH CRE EMPRESA X S.A."}
+	}
+
+	first, already := add(paycheck(16))
+	if already {
+		t.Fatalf("the first paycheck was already planned")
+	}
+	again := paycheck(16)
+	again.Name, again.Amount, again.MatchText = " ach cre  EMPRESA x s.a.", 66000, ""
+	if got, already := add(again); !already || got.ID != first.ID {
+		t.Errorf("the paycheck sent again = %s, already %v; want the first", got.ID, already)
+	}
+	wantSpans(t, f.versions(t, first.ID), span{nov26, plan.Month{}, 65000, 16})
+	// The salary's other paycheck, which chenchén suggests by the same name,
+	// has its own day.
+	if second, already := add(paycheck(30)); already || second.ID == first.ID {
+		t.Errorf("the second paycheck = %s, already %v; want one of its own", second.ID, already)
+	}
+
+	// Payments to two people, named alike, are told apart by their text.
+	person := payment(nov26, 3267, 5)
+	person.Name = plan.PersonName
+	one, _ := add(person)
+	person.MatchText = "YAPPY A PERSONA DOS"
+	if two, already := add(person); already || two.ID == one.ID {
+		t.Errorf("the payment to another person = %s, already %v; want one of its own", two.ID, already)
+	}
+
+	// Planned from December on, it is already planned for November on, but
+	// not for November alone.
+	light := plan.ItemInput{Kind: plan.KindFixed, Month: dec26, Scope: plan.ScopeFrom, Name: "Luz", Amount: 2000, Day: 20}
+	fromDecember, _ := add(light)
+	light.Month = nov26
+	if got, already := add(light); !already || got.ID != fromDecember.ID {
+		t.Errorf("Luz from November = %s, already %v; want the one from December", got.ID, already)
+	}
+	light.Scope = plan.ScopeOnly
+	if got, already := add(light); already || got.ID == fromDecember.ID {
+		t.Errorf("Luz for November alone = %s, already %v; want one of its own", got.ID, already)
+	}
+	wantSpans(t, f.versions(t, fromDecember.ID), span{dec26, plan.Month{}, 2000, 20})
+
+	// A planned purchase is planned from the month it is first set aside to
+	// the one it is due.
+	laptop := plan.ItemInput{Kind: plan.KindPurchase, Month: dec26, Name: "Laptop", Amount: 60000,
+		TargetMonth: feb27, Funding: plan.FundingMonthly}
+	planned, _ := add(laptop)
+	laptop.Month = nov26
+	if got, already := add(laptop); !already || got.ID != planned.ID || plan.MonthOf(got.StartMonth) != dec26 {
+		t.Errorf("the laptop from November = %+v, already %v; want the one from December, as it was", got, already)
+	}
+	if n := storetest.Count(t, f.db, "plan_items"); n != 7 {
+		t.Errorf("items = %d, want 7", n)
+	}
+}
+
+// The same item added several times at once is added once: looking for it
+// and adding it are one step.
+func TestAddingTheSameItemAtOnceAddsItOnce(t *testing.T) {
+	f := newFixture(t)
+	const n = 4
+	ids := make([]uuid.UUID, n)
+	errs := make([]error, n)
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Go(func() {
+			item, _, err := f.svc.AddItem(context.Background(), f.user, uuid.New(), payment(nov26, 4000, 9))
+			ids[i], errs[i] = item.ID, err
+		})
+	}
+	wg.Wait()
+	for i := range n {
+		if errs[i] != nil || ids[i] != ids[0] {
+			t.Errorf("add %d = %s (%v), want %s", i, ids[i], errs[i], ids[0])
+		}
+	}
+	if got := storetest.Count(t, f.db, "plan_items"); got != 1 {
+		t.Errorf("items = %d, want 1", got)
 	}
 }
 

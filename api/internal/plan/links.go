@@ -153,7 +153,7 @@ func (s *Service) Link(ctx context.Context, userID uuid.UUID, in LinkInput) (lin
 	if in.Month.IsZero() {
 		return store.PlanLink{}, false, ErrInvalidMonth
 	}
-	if in.Month.Sub(s.thisMonth()) > MonthsAhead {
+	if in.Month.Sub(s.ThisMonth()) > MonthsAhead {
 		return store.PlanLink{}, false, fmt.Errorf("%w: %s", ErrMonthTooFar, in.Month)
 	}
 	if err := in.check(); err != nil {

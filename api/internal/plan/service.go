@@ -53,9 +53,10 @@ type Service struct {
 
 func NewService(db *store.DB) *Service { return &Service{db: db, now: time.Now} }
 
-// thisMonth is the current month in Panama. The server decides it, not the
-// browser, so the web and Claude agree on which month has passed.
-func (s *Service) thisMonth() Month { return MonthOf(civil.Of(s.now().In(civil.Panama))) }
+// ThisMonth is the current month in Panama. The server decides it, not the
+// browser, so the web and Claude agree on which month has passed, and a
+// change Claude sends with no month is for this one.
+func (s *Service) ThisMonth() Month { return MonthOf(civil.Of(s.now().In(civil.Panama))) }
 
 // writable refuses an edit for a month the plan cannot be written in: one
 // before the current month, whose plan stays as it was, or one more than
@@ -64,7 +65,7 @@ func (s *Service) writable(m Month) error {
 	if m.IsZero() {
 		return ErrInvalidMonth
 	}
-	now := s.thisMonth()
+	now := s.ThisMonth()
 	switch {
 	case m.Before(now):
 		return fmt.Errorf("%w: %s", ErrMonthPast, m)
@@ -236,9 +237,63 @@ func (s *Service) SaveItem(ctx context.Context, userID, id uuid.UUID, in ItemInp
 	if err := s.writable(in.Month); err != nil {
 		return store.PlanItem{}, false, err
 	}
-	if err := in.normalise(s.thisMonth()); err != nil {
+	if err := in.normalise(s.ThisMonth()); err != nil {
 		return store.PlanItem{}, false, err
 	}
+	err = s.db.InTx(ctx, func(q *store.Queries) error {
+		// The user's lock makes saveItem's checks and its writes one step, so
+		// two saves of the same item, or two goals on one account, take turns.
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		item, created, err = saveItem(ctx, q, userID, id, in)
+		return err
+	})
+	if err != nil {
+		return store.PlanItem{}, false, err
+	}
+	return item, created, nil
+}
+
+// AddItem saves in as a new item under id, which the caller chose at random,
+// unless the owner's plan already has it (alreadyPlanned): then it writes
+// nothing and returns that item, with already set. It is how Claude adds to
+// the plan without choosing ids: a create it sends again, because the answer
+// to the first was lost or it asked again in other words, finds what the
+// first one saved instead of adding it twice. Looking and adding are one step
+// under the user's lock, so two such creates sent at once add one item.
+func (s *Service) AddItem(ctx context.Context, userID, id uuid.UUID, in ItemInput) (item store.PlanItem, already bool, err error) {
+	if err := s.writable(in.Month); err != nil {
+		return store.PlanItem{}, false, err
+	}
+	if err := in.normalise(s.ThisMonth()); err != nil {
+		return store.PlanItem{}, false, err
+	}
+	err = s.db.InTx(ctx, func(q *store.Queries) error {
+		if err := q.LockUser(ctx, userID); err != nil {
+			return err
+		}
+		if item, already, err = alreadyPlanned(ctx, q, userID, in); err != nil || already {
+			return err
+		}
+		var created bool
+		item, created, err = saveItem(ctx, q, userID, id, in)
+		if err == nil && !created {
+			// An id of the owner's own is a change to that item, which a
+			// create must never be.
+			return fmt.Errorf("%w: %s", ErrItemIDTaken, id)
+		}
+		return err
+	})
+	if err != nil {
+		return store.PlanItem{}, false, err
+	}
+	return item, already, nil
+}
+
+// saveItem is SaveItem's work, under the user's lock, for in already
+// normalised.
+func saveItem(ctx context.Context, q *store.Queries, userID, id uuid.UUID, in ItemInput) (item store.PlanItem, created bool, err error) {
 	want := store.PlanItem{
 		ID: id, UserID: userID, Kind: in.Kind, Name: in.Name, CategoryID: in.CategoryID,
 		MatchText: in.MatchText, AccountID: in.AccountID, Target: in.Target, TargetMonth: dateOf(in.TargetMonth),
@@ -248,65 +303,110 @@ func (s *Service) SaveItem(ctx context.Context, userID, id uuid.UUID, in ItemInp
 		price := in.Amount
 		want.Target, want.StartMonth, want.Funding = &price, in.Month.First(), in.Funding
 	}
-	err = s.db.InTx(ctx, func(q *store.Queries) error {
-		// The user's lock makes the checks below and the writes one step, so
-		// two saves of the same item, or two goals on one account, take turns.
-		if err := q.LockUser(ctx, userID); err != nil {
-			return err
-		}
-		existing, err := q.PlanItemByID(ctx, userID, id)
-		found := err == nil
-		if err != nil && !errors.Is(err, store.ErrNotFound) {
-			return err
-		}
-		if found && existing.Kind != in.Kind {
-			return fmt.Errorf("%w: %s is %s", ErrKindFixed, id, existing.Kind)
-		}
-		// The months the item will hold for are worked out before anything
-		// is written, so its account can be checked against them.
-		stored, err := q.PlanItemVersions(ctx, userID, id)
-		if err != nil {
-			return err
-		}
-		var after []Version
-		var ops []Op
-		if purchase {
-			if found && existing.StartMonth.Before(want.StartMonth) {
-				want.StartMonth = existing.StartMonth
-			}
-			after, ops = Shares(itemVersions(stored), in.Month, in.Amount, in.TargetMonth, in.Funding)
-		} else {
-			after, ops = Split(itemVersions(stored), in.Month, in.Scope, Values{Amount: in.Amount, Day: in.Day})
-		}
-		if err := checkItemLabels(ctx, q, userID, id, in, after); err != nil {
-			return err
-		}
-		switch {
-		case !found:
-			item, err = q.InsertPlanItem(ctx, want)
-			if store.IsConstraint(err, store.PlanItemsPKey) {
-				return fmt.Errorf("%w: %v", ErrItemIDTaken, err)
-			}
-			if err != nil {
-				return err
-			}
-			created = true
-		case sameLabels(existing, want):
-			item = existing
-		default:
-			if err := q.UpdatePlanItem(ctx, want); err != nil {
-				return err
-			}
-			if item, err = q.PlanItemByID(ctx, userID, id); err != nil {
-				return err
-			}
-		}
-		return applyItemOps(ctx, q, item, ops)
-	})
+	existing, err := q.PlanItemByID(ctx, userID, id)
+	found := err == nil
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return store.PlanItem{}, false, err
+	}
+	if found && existing.Kind != in.Kind {
+		return store.PlanItem{}, false, fmt.Errorf("%w: %s is %s", ErrKindFixed, id, existing.Kind)
+	}
+	// The months the item will hold for are worked out before anything is
+	// written, so its account can be checked against them.
+	stored, err := q.PlanItemVersions(ctx, userID, id)
 	if err != nil {
 		return store.PlanItem{}, false, err
 	}
-	return item, created, nil
+	var after []Version
+	var ops []Op
+	if purchase {
+		if found && existing.StartMonth.Before(want.StartMonth) {
+			want.StartMonth = existing.StartMonth
+		}
+		after, ops = Shares(itemVersions(stored), in.Month, in.Amount, in.TargetMonth, in.Funding)
+	} else {
+		after, ops = Split(itemVersions(stored), in.Month, in.Scope, Values{Amount: in.Amount, Day: in.Day})
+	}
+	if err := checkItemLabels(ctx, q, userID, id, in, after); err != nil {
+		return store.PlanItem{}, false, err
+	}
+	switch {
+	case !found:
+		item, err = q.InsertPlanItem(ctx, want)
+		if store.IsConstraint(err, store.PlanItemsPKey) {
+			return store.PlanItem{}, false, fmt.Errorf("%w: %v", ErrItemIDTaken, err)
+		}
+		if err != nil {
+			return store.PlanItem{}, false, err
+		}
+		created = true
+	case sameLabels(existing, want):
+		item = existing
+	default:
+		if err := q.UpdatePlanItem(ctx, want); err != nil {
+			return store.PlanItem{}, false, err
+		}
+		if item, err = q.PlanItemByID(ctx, userID, id); err != nil {
+			return store.PlanItem{}, false, err
+		}
+	}
+	return item, created, applyItemOps(ctx, q, item, ops)
+}
+
+// alreadyPlanned finds the user's item that in, a new one, would repeat: of
+// the same kind and name, but for case, accents and spaces, and planned for a
+// month in would be, from its month on or for it alone. A purchase is planned
+// from the month it is first set aside to the one it is due.
+//
+// Two things can share a name: the two paychecks of a salary, or payments to
+// two people, which chenchén suggests alike (PersonName). So what in says of
+// itself tells them apart too: the day, for a paycheck or a payment, or for a
+// saving that has one; and its text and its account, when it has them. Its
+// amount does not: the same payment at a new amount is a change to it, not a
+// second payment.
+func alreadyPlanned(ctx context.Context, q *store.Queries, userID uuid.UUID, in ItemInput) (store.PlanItem, bool, error) {
+	items, err := q.PlanItemsByUser(ctx, userID)
+	if err != nil {
+		return store.PlanItem{}, false, err
+	}
+	months := Version{From: in.Month}
+	switch {
+	case in.Kind == KindPurchase:
+		months.To = in.TargetMonth
+	case in.Scope == ScopeOnly:
+		months.To = in.Month
+	}
+	name := foldName(in.Name)
+	for _, it := range items {
+		if it.Kind != in.Kind || foldName(it.Name) != name ||
+			(in.MatchText != "" && foldName(it.MatchText) != foldName(in.MatchText)) ||
+			(in.AccountID != nil && !sameID(it.AccountID, in.AccountID)) {
+			continue
+		}
+		if it.Kind == KindPurchase {
+			p := Purchase{Item: &it}
+			if months.Overlaps(Version{From: p.Start(), To: p.last()}) {
+				return it, true, nil
+			}
+			continue
+		}
+		stored, err := q.PlanItemVersions(ctx, userID, it.ID)
+		if err != nil {
+			return store.PlanItem{}, false, err
+		}
+		for _, v := range itemVersions(stored) {
+			if months.Overlaps(v) && (in.Day == 0 || v.Day == in.Day) {
+				return it, true, nil
+			}
+		}
+	}
+	return store.PlanItem{}, false, nil
+}
+
+// foldName is a name or a text as two are compared: without case, Spanish
+// accents or runs of spaces, the way a rule's text is.
+func foldName(s string) string {
+	return store.FoldRuleText(strings.Join(strings.Fields(s), " "))
 }
 
 // checkItemLabels checks what an item points at, under the user's lock: its
@@ -888,6 +988,53 @@ func (s *Service) Item(ctx context.Context, userID, id uuid.UUID, m Month) (Inst
 		}
 	}
 	return Instance{}, fmt.Errorf("%w: %s has no version for %s", ErrItemNotFound, id, m)
+}
+
+// ItemNear is Item, but for a month the item is not planned for: then the
+// item as it stands in the first month after m it is planned for, or, with
+// none, in the last one before m. A month taken out of an item, or one before
+// it starts, still has the item's values beside it, which is what a change
+// that sends only some of them is made over.
+func (s *Service) ItemNear(ctx context.Context, userID, id uuid.UUID, m Month) (Instance, error) {
+	q := s.db.Q()
+	item, err := q.PlanItemByID(ctx, userID, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return Instance{}, fmt.Errorf("%w: %s", ErrItemNotFound, id)
+	}
+	if err != nil {
+		return Instance{}, err
+	}
+	if item.Kind == KindPurchase {
+		p := Purchase{Item: &item}
+		switch {
+		case m.Before(p.Start()):
+			m = p.Start()
+		case m.After(p.last()):
+			m = p.last()
+		}
+		return p.instance(m), nil
+	}
+	stored, err := q.PlanItemVersions(ctx, userID, id)
+	if err != nil {
+		return Instance{}, err
+	}
+	// The versions come in month order and never overlap, so the first one
+	// that does not end before m holds for m or is the first after it.
+	var before Instance
+	for _, v := range itemVersions(stored) {
+		switch {
+		case v.Holds(m):
+			return Instance{Item: &item, Month: m, Version: v}, nil
+		case v.From.After(m):
+			return Instance{Item: &item, Month: v.From, Version: v}, nil
+		default:
+			before = Instance{Item: &item, Month: v.To, Version: v}
+		}
+	}
+	if before.Item == nil {
+		return Instance{}, fmt.Errorf("%w: %s has no version", ErrItemNotFound, id)
+	}
+	return before, nil
 }
 
 // Cap is the cap on one of the user's categories that holds for month m:

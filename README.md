@@ -227,7 +227,7 @@ REST.
 | `list_accounts`, `list_movements`, `list_categories`, `list_rules` | `propose_recategorize` |
 | `spending_by_category`, `cash_flow` | `propose_note`, `propose_rule` |
 | `explain_drift`, `list_transfer_suggestions` | `propose_transfer_decision` |
-| `get_portfolio` | `propose_checkpoint` |
+| `get_portfolio`, `get_month_plan` | `propose_checkpoint` |
 
 **Ninguna herramienta escribe.** Una herramienta `propose_*` comprueba el cambio contra
 tus datos y lo guarda como propuesta, con un resumen que escribe el servidor y no el
@@ -236,14 +236,19 @@ aplicar se vuelve a comprobar, y un `UPDATE` condicional hace que dos clics la a
 una sola vez. Nada de lo que puede proponer cambia un saldo, y ninguna herramienta mueve
 dinero.
 
+`get_month_plan` dice lo mismo que el plan del mes: cuánto te queda libre, cuánto por día
+y cómo va cada ingreso, pago fijo, ahorro y compra planeada. Si lo gastado pasa de lo
+libre, el asistente lo dice con la cifra y sin regañar. El plan lo editas tú, en Gastos.
+
 **Claude, desde fuera.** Con `PUBLIC_URL`, el mismo servidor responde en `/api/mcp` a
 Claude (claude.ai, su app y Claude Code), con un token propio por OAuth
 ([ADR 0004](docs/adr/0004-claude-por-mcp.md)). Ahí lee lo mismo, más
 `list_pending_purchases`, `sync_plan` e `import_status`. Si la persona lo permite, además
-anota compras (`note_purchase`), pone categoría y nota (`set_category`, `set_note`) y
-entrega estados de cuenta (`prepare_import`). Nada de eso mueve un saldo, salvo el archivo
-que generó el propio banco, que entra solo si continúa una cuenta que ya existe y cuadra
-con ella; si no, queda por revisar en la app.
+anota compras (`note_purchase`), pone categoría y nota (`set_category`, `set_note`),
+guarda y quita cosas de tu plan del mes (`save_plan_item`, `remove_plan_item`) y entrega
+estados de cuenta (`prepare_import`). Nada de eso mueve un saldo, salvo el archivo que
+generó el propio banco, que entra solo si continúa una cuenta que ya existe y cuadra con
+ella; si no, queda por revisar en la app.
 
 **Ninguna herramienta acepta un `user_id`.** La identidad viene del token de la petición
 y queda fijada en el servidor MCP antes de que el modelo diga nada, así que no hay

@@ -324,12 +324,23 @@ herramienta de Claude se llama solo "plan", porque ya existe `sync_plan`.
   - las compras planeadas, con sus partes, su reconocimiento y el último mes de una que
     se quita (`end_month`), y el avance de las metas según la
     cuenta ligada;
+  - la pantalla bajo Gastos, con armar el plan desde lo que chenchén encontró, las metas
+    y las compras planeadas, y la tarjeta de Inicio, con sus avisos;
+  - Claude: `get_month_plan` en los dos servidores MCP, y `save_plan_item` y
+    `remove_plan_item` para Claude por MCP cuando la persona le deja escribir (ADR 0004).
+    El asistente de la app solo lee el plan;
   - este ADR.
 
-  Todavía no hay pantalla: el plan se lee y se escribe solo por la API.
-- **Lo que falta llega después** y enmienda este ADR donde haga falta:
-  - la pantalla bajo Gastos y la tarjeta de Inicio, con sus avisos;
-  - que Claude lea y edite el plan.
+  El plan se edita en Gastos y, si la persona lo permite, Claude lo edita por MCP.
+- **Claude da las mismas cifras.** `get_month_plan` sale del mismo cálculo que
+  `GET /api/plan`, con los niveles del servidor. Si lo gastado pasa de lo libre, Claude
+  lo dice con la cifra y sin regañar.
+- **Claude no duplica lo que guarda dos veces.** Sin `item_id`, algo del mismo tipo y con
+  el mismo nombre que el plan ya tiene en esos meses, el mismo día y con el mismo texto y
+  la misma cuenta si los da, se devuelve con `already_planned` en vez de agregarse otra
+  vez. El día y el texto separan lo que se llama igual, como las dos quincenas de un
+  sueldo o los pagos a dos personas; dos cosas distintas con el mismo nombre, el mismo
+  día y sin texto que las separe se agregan en la app, o con otro nombre.
 - **Un pago fijo que no se reconoce cuenta dos veces** hasta que la persona lo vincula.
   Siempre se ve, con sus candidatos o su pista.
 - **Los topes se quedan cortos mientras haya gasto sin categoría.** Lo que no tiene

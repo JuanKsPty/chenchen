@@ -1,6 +1,10 @@
 package plan
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/JuanKsPty/chenchen/api/internal/money"
+)
 
 var (
 	// ErrMonthPast means a write was for a month before the current one. A
@@ -141,4 +145,43 @@ func FieldProblems(err error) map[string]string {
 		}
 	}
 	return problems
+}
+
+// FieldProblemsWith is FieldProblems, with the caller's own word on the
+// amounts it could not read, by field (AmountProblem). Such an amount reached
+// the service as zero, so the caller's word replaces the service's only where
+// the service refused it for not being more than zero; anything else it said
+// about the field, such as that only a saving has a goal, is what the owner
+// needs to hear.
+func FieldProblemsWith(err error, unread map[string]string) map[string]string {
+	problems := FieldProblems(err)
+	if len(problems) == 0 {
+		return problems
+	}
+	for field, message := range unread {
+		if zero := notMoreThanZero[field]; zero != nil && errors.Is(err, zero) {
+			problems[field] = message
+		}
+	}
+	return problems
+}
+
+// notMoreThanZero is the error the service gives each amount field when it
+// is zero, which is what an amount the caller could not read becomes.
+var notMoreThanZero = map[string]error{"amount": ErrAmount, "target": ErrTarget}
+
+// AmountProblem is what the owner is told about an amount that cannot be
+// read; missing is what they are told when there is none, or it is not more
+// than zero.
+func AmountProblem(err error, missing string) string {
+	switch {
+	case errors.Is(err, money.ErrEmpty), errors.Is(err, money.ErrNotPositive):
+		return missing
+	case errors.Is(err, money.ErrTooPrecise):
+		return "El monto admite como máximo dos decimales."
+	case errors.Is(err, money.ErrOutOfRange):
+		return "El monto está fuera del rango admitido."
+	default:
+		return "El monto no tiene un formato válido. Usa por ejemplo «12.50»."
+	}
 }

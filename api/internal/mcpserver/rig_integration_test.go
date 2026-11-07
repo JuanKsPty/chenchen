@@ -32,6 +32,7 @@ import (
 	"github.com/JuanKsPty/chenchen/api/internal/mcpserver"
 	"github.com/JuanKsPty/chenchen/api/internal/movements"
 	"github.com/JuanKsPty/chenchen/api/internal/oauth"
+	"github.com/JuanKsPty/chenchen/api/internal/plan"
 	"github.com/JuanKsPty/chenchen/api/internal/proposals"
 	"github.com/JuanKsPty/chenchen/api/internal/reports"
 	"github.com/JuanKsPty/chenchen/api/internal/rules"
@@ -111,9 +112,10 @@ func newRigWith(t *testing.T, callsPerMinute int) *rig {
 	r.captures = captures.NewService(db, cats)
 	r.imports = imports.NewService(db, cats)
 	r.uploads = uploads.NewService(db, r.imports, r.accounts, cfg.OAuth.PublicURL)
+	planSvc := plan.NewService(db)
 	deps := mcpserver.Deps{Accounts: r.accounts, Movements: movementsSvc, Categories: cats, Reports: reportsSvc,
 		Transfers: transfersSvc, Investments: investmentsSvc, Rules: rulesSvc, Proposals: proposalsSvc,
-		Captures: r.captures, Uploads: r.uploads}
+		Plan: planSvc, Captures: r.captures, Uploads: r.uploads}
 	chatSvc := chat.NewService(db, deps, chat.NewUnavailable(), 1)
 	limiter := func(n int) *httpx.RateLimiter { return httpx.NewRateLimiter(n) }
 
@@ -141,6 +143,7 @@ func newRigWith(t *testing.T, callsPerMinute int) *rig {
 			Limiter:             limiter(callsPerMinute),
 		}),
 		Uploads: uploads.NewHandler(r.uploads),
+		Plan:    plan.NewHandler(planSvc),
 	})
 	r.tokens = authSvc.Tokens()
 	r.owner = r.newUser(t, "owner@example.com", cats)

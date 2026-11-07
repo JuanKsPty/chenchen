@@ -121,6 +121,7 @@ func run() error {
 		Investments: investmentsSvc,
 		Rules:       rulesSvc,
 		Proposals:   proposalsSvc,
+		Plan:        planSvc,
 		Captures:    capturesSvc,
 		Uploads:     uploadsSvc,
 	}

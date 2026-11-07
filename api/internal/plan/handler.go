@@ -108,14 +108,14 @@ func (h *Handler) saveItem(w http.ResponseWriter, r *http.Request) {
 	// the owner is told about the amount is then what the handler knows of it.
 	unread := map[string]string{}
 	if in.Amount, err = body.Amount.Cents(); err != nil {
-		unread["amount"] = amountProblem(err, "Indica un monto mayor que cero.")
+		unread["amount"] = AmountProblem(err, "Indica un monto mayor que cero.")
 	}
 	// A goal left blank is no goal, as a card's minimum payment left blank is
 	// none: a saving may have no goal, and a form sends its empty field.
 	if body.Target != nil && *body.Target != "" {
 		target, err := body.Target.Cents()
 		if err != nil {
-			unread["target"] = amountProblem(err, "Indica una meta mayor que cero.")
+			unread["target"] = AmountProblem(err, "Indica una meta mayor que cero.")
 		}
 		in.Target = &target
 	}
@@ -184,7 +184,7 @@ func (h *Handler) saveCap(w http.ResponseWriter, r *http.Request) {
 	// zero.
 	unread := map[string]string{}
 	if in.Amount, err = body.Amount.Cents(); err != nil {
-		unread["amount"] = amountProblem(err, "Indica un monto mayor que cero.")
+		unread["amount"] = AmountProblem(err, "Indica un monto mayor que cero.")
 	}
 	user := identity.MustFromContext(r.Context())
 	if err := h.svc.SaveCap(r.Context(), user, categoryID, in); err != nil {
@@ -339,43 +339,15 @@ func optionalMonth(raw string) (Month, error) {
 	return ParseMonth(raw)
 }
 
-// amountProblem is what the owner is told about an amount that cannot be
-// read; missing is what they are told when there is none, or it is not more
-// than zero.
-func amountProblem(err error, missing string) string {
-	switch {
-	case errors.Is(err, money.ErrEmpty), errors.Is(err, money.ErrNotPositive):
-		return missing
-	case errors.Is(err, money.ErrTooPrecise):
-		return "El monto admite como máximo dos decimales."
-	case errors.Is(err, money.ErrOutOfRange):
-		return "El monto está fuera del rango admitido."
-	default:
-		return "El monto no tiene un formato válido. Usa por ejemplo «12.50»."
-	}
-}
-
 // translateWith is translate, with the handler's own word on the amounts it
-// could not read. Such an amount reached the service as zero, so the
-// handler's word replaces the service's only where the service refused it
-// for not being more than zero; anything else it said about the field, such
-// as that only a saving has a goal, is what the owner needs to hear.
+// could not read (FieldProblemsWith).
 func translateWith(err error, unread map[string]string) error {
-	problems := FieldProblems(err)
+	problems := FieldProblemsWith(err, unread)
 	if len(problems) == 0 {
 		return translate(err)
 	}
-	for field, message := range unread {
-		if zero := notMoreThanZero[field]; zero != nil && errors.Is(err, zero) {
-			problems[field] = message
-		}
-	}
 	return httpx.Invalid(problems).WithCause(err)
 }
-
-// notMoreThanZero is the error the service gives each amount field when it
-// is zero, which is what an amount the handler could not read becomes.
-var notMoreThanZero = map[string]error{"amount": ErrAmount, "target": ErrTarget}
 
 // translate maps the plan's errors to HTTP responses. Something of another
 // owner's (an item, a link, a movement, a category, an account) is not
