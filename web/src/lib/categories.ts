@@ -14,6 +14,7 @@ import {
   ShoppingBasketIcon,
   TicketIcon,
   TrendingUpIcon,
+  UtensilsCrossedIcon,
   ZapIcon,
   type LucideIcon,
 } from 'lucide-react'
@@ -87,6 +88,8 @@ function normalize(name: string): string {
 
 const ICONS: Record<string, LucideIcon> = {
   alimentacion: ShoppingBasketIcon,
+  supermercado: ShoppingBasketIcon,
+  restaurantes: UtensilsCrossedIcon,
   transporte: CarIcon,
   vivienda: HouseIcon,
   servicios: ZapIcon,

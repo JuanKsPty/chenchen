@@ -13,8 +13,8 @@ import (
 // transfer and a charge is the bank's fee, which the importer's kind already
 // says; neither is a spending category. "Viajes" has no honest default either.
 var defaultCardRules = map[string]string{
-	"Comida y Bebida":     "Alimentación",
-	"Supermercados":       "Alimentación",
+	"Comida y Bebida":     "Restaurantes",
+	"Supermercados":       "Supermercado",
 	"Salud":               "Salud",
 	"Transporte":          "Transporte",
 	"Entretenimiento":     "Entretenimiento",

@@ -522,7 +522,7 @@ func TestWhatWasTypedFillsInWhatThePurchaseLacks(t *testing.T) {
 	ctx := context.Background()
 	card := r.account(t, r.user, "credit_card")
 	key := "Bearer " + r.createKey(t, r.user, card.ID)
-	food, health := r.category(t, r.user, "Alimentación"), r.category(t, r.user, "Salud")
+	food, health := r.category(t, r.user, "Supermercado"), r.category(t, r.user, "Salud")
 	r.rule(t, "super", food)
 	r.now = lateNight.Add(-10 * time.Hour)
 	type typed struct {

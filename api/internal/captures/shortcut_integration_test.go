@@ -46,7 +46,7 @@ func TestAPurchaseFromTheShortcutIsNotedOnItsDayInPanama(t *testing.T) {
 	r := newRig(t, 60, 12)
 	ctx := context.Background()
 	card := r.numbered(t, r.user, "credit_card", "**** 1111")
-	comida := r.category(t, r.user, "Alimentación")
+	comida := r.category(t, r.user, "Restaurantes")
 	r.rule(t, "café", comida)
 	key := r.createKey(t, r.user, card.ID)
 

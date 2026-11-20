@@ -135,7 +135,7 @@ func TestAManualLinkTakesATip(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	card := f.account(t, f.user, "credit_card")
-	food := f.category(t, f.user, "Alimentación")
+	food := f.category(t, f.user, "Supermercado")
 	tipped := f.line(t, card, day.AddDays(1), -4600, store.KindExpense, "CAFE UNIDO PANAMA")
 	f.statement(t, card, day.AddDays(3))
 	c, err := f.svc.Add(ctx, f.user, captures.AddInput{AccountID: card.ID, Amount: 4000, Merchant: "Café Unido", Day: day,
@@ -390,7 +390,7 @@ func TestCorrectingAPurchaseDerivesItsStateAgain(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	card := f.account(t, f.user, "credit_card")
-	food, compras := f.category(t, f.user, "Alimentación"), f.category(t, f.user, "Compras")
+	food, compras := f.category(t, f.user, "Supermercado"), f.category(t, f.user, "Compras")
 	f.rule(t, "super", food)
 	line := f.line(t, card, day, -1200, store.KindExpense, "SUPER 99 PANAMA")
 
@@ -546,7 +546,7 @@ func TestARuleFilesOpenPurchasesButNeverTheOwnersChoice(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	card := f.account(t, f.user, "credit_card")
-	food, compras := f.category(t, f.user, "Alimentación"), f.category(t, f.user, "Compras")
+	food, compras := f.category(t, f.user, "Supermercado"), f.category(t, f.user, "Compras")
 
 	pending := f.add(t, card, day, 450, "Super Rey")
 	chosen, err := f.svc.Add(ctx, f.user, captures.AddInput{AccountID: card.ID, Amount: 460, Merchant: "Super Rey",
@@ -597,7 +597,7 @@ func TestARuleAppliedToWhatIsStoredIgnoresAccents(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
 	card := f.account(t, f.user, "credit_card")
-	food := f.category(t, f.user, "Alimentación")
+	food := f.category(t, f.user, "Supermercado")
 	noted := f.add(t, card, day.AddDays(20), 450, "Café Unido")
 	line := f.line(t, card, day, -375, store.KindExpense, "CAFE UNIDO MARBELLA PANAMA PA")
 
@@ -610,14 +610,14 @@ func TestARuleAppliedToWhatIsStoredIgnoresAccents(t *testing.T) {
 		t.Errorf("applied = %d, want the line and the purchase", applied)
 	}
 	if c := f.get(t, f.user, noted.ID); c.CategoryID == nil || *c.CategoryID != food {
-		t.Errorf("purchase filed under %v, want Alimentación", c.CategoryID)
+		t.Errorf("purchase filed under %v, want Supermercado", c.CategoryID)
 	}
 	got, err := f.db.Q().EntryByID(ctx, f.user, line.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got.CategoryID == nil || *got.CategoryID != food {
-		t.Errorf("line filed under %v, want Alimentación", got.CategoryID)
+		t.Errorf("line filed under %v, want Supermercado", got.CategoryID)
 	}
 }
 

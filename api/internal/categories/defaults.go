@@ -22,7 +22,10 @@ var defaultSeeds = []defaultSeed{
 	{"Inversiones", KindIncome, ""},
 	{"Otros ingresos", KindIncome, ""},
 
-	{"Alimentación", KindExpense, ""},
+	// The weekly shop and a meal out move differently, and a card statement
+	// already tells them apart, so they are two categories, not one.
+	{"Supermercado", KindExpense, ""},
+	{"Restaurantes", KindExpense, ""},
 	{"Transporte", KindExpense, ""},
 	{"Vivienda", KindExpense, ""},
 	{"Servicios", KindExpense, ""},
