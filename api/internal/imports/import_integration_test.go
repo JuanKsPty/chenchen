@@ -673,7 +673,7 @@ func TestTheCategoryChosenSaysWhetherMoneyInIsARefundOrIncome(t *testing.T) {
 	}
 	id := list[0].ID
 	otros, _, _ := cats.FindByName(ctx, e.user, "Otros ingresos")
-	food, _, _ := cats.FindByName(ctx, e.user, "Alimentación")
+	food, _, _ := cats.FindByName(ctx, e.user, "Supermercado")
 
 	got, err := moves.SetCategory(ctx, e.user, id, &otros.ID, "user")
 	if err != nil || got.EffectiveKind() != store.KindIncome || got.Kind != store.KindRefund {
@@ -681,7 +681,7 @@ func TestTheCategoryChosenSaysWhetherMoneyInIsARefundOrIncome(t *testing.T) {
 	}
 	got, err = moves.SetCategory(ctx, e.user, id, &food.ID, "user")
 	if err != nil || got.EffectiveKind() != store.KindRefund || got.UserKind != nil {
-		t.Fatalf("under Alimentación: kind %s, user kind %v, %v; want the refund the importer said", got.EffectiveKind(), got.UserKind, err)
+		t.Fatalf("under Supermercado: kind %s, user kind %v, %v; want the refund the importer said", got.EffectiveKind(), got.UserKind, err)
 	}
 	// Taking the category away leaves the kind as it is.
 	got, err = moves.SetCategory(ctx, e.user, id, nil, "user")
