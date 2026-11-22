@@ -800,11 +800,72 @@ func (s *Service) Month(ctx context.Context, userID uuid.UUID, m Month) (Plan, e
 	if err != nil {
 		return Plan{}, err
 	}
-	return Compute(Input{
+	rec := MatchBeside(instances, movements, said, transfers, bought)
+	p := Compute(Input{
 		Month: m, Today: today, Instances: instances, Caps: caps, Parents: parents, Movements: movements,
-		Recognition: MatchBeside(instances, movements, said, transfers, bought), Cards: cards,
-		Purchases: purchases, Bought: bought, Balances: balances, Saved: saved,
-	}), nil
+		Recognition: rec, Cards: cards, Purchases: purchases, Bought: bought, Balances: balances, Saved: saved,
+	})
+	if p.State != StateCurrent {
+		return p, nil
+	}
+	cash, ok, err := s.cashOf(ctx, userID)
+	if err != nil {
+		return Plan{}, err
+	}
+	if !ok {
+		return p, nil
+	}
+	cash.PaidFrom = paidFrom(instances, movements, rec)
+	projection := Project(p, cash)
+	p.Projection = &projection
+	if projection.Lowest.Balance < 0 {
+		p.Alerts = append(p.Alerts, Alert{Kind: AlertCashShort, Level: LevelOver, DueOn: projection.Lowest.Day})
+	}
+	return p, nil
+}
+
+// cashOf reads what the projection starts from: the owner's bank accounts'
+// balance as Cuentas shows it, and the purchases noted on them that no
+// statement has printed yet. ok is false when there is nothing to start from:
+// no bank account, or one with lines that no stated balance anchors, whose
+// balance is only the sum of its lines and says nothing about what it holds.
+func (s *Service) cashOf(ctx context.Context, userID uuid.UUID) (c Cash, ok bool, err error) {
+	list, err := accounts.NewService(s.db).List(ctx, userID)
+	if err != nil {
+		return Cash{}, false, err
+	}
+	c = Cash{InCash: map[uuid.UUID]bool{}, Card: map[uuid.UUID]bool{}}
+	for _, a := range list {
+		switch {
+		case a.Type == "credit_card":
+			c.Card[a.ID] = true
+		case a.Class == "asset" && a.Type != "brokerage":
+			if !a.Anchored && a.Movements > 0 {
+				return Cash{}, false, nil
+			}
+			c.InCash[a.ID] = true
+			c.Balance += a.Balance
+			c.Pending += a.Pending
+		}
+	}
+	return c, len(c.InCash) > 0, nil
+}
+
+// paidFrom is the account each payment's latest movement went out of, by
+// item, over the months the recognition read.
+func paidFrom(instances []Instance, movements []store.PlanMovement, rec Recognition) map[uuid.UUID]uuid.UUID {
+	out := map[uuid.UUID]uuid.UUID{}
+	latest := map[uuid.UUID]civil.Date{}
+	for i, k := range rec.Paid {
+		if k == Unpaid || k >= len(instances) || instances[k].Item.Kind != KindFixed {
+			continue
+		}
+		id, mv := instances[k].Item.ID, movements[i]
+		if day, ok := latest[id]; !ok || mv.BookedOn.After(day) {
+			latest[id], out[id] = mv.BookedOn, mv.AccountID
+		}
+	}
+	return out
 }
 
 // purchaseFiled reports whether a planned purchase among items is filed

@@ -642,6 +642,9 @@ type PlanCard struct {
 	ClosingOn      civil.Date
 	DueOn          civil.Date
 	MinimumPayment *money.Cents
+	// Statement is the balance the statement printed, signed from the
+	// holder's view: a card that owed 650.00 has -650.00.
+	Statement money.Cents
 	// PaidSince is the sum of the money that came into the card as transfers
 	// booked after ClosingOn: what paid it.
 	PaidSince money.Cents
@@ -653,13 +656,13 @@ type PlanCard struct {
 // someone else pays is left out: its statement is not the owner's to pay.
 func (q *Queries) PlanCards(ctx context.Context, userID uuid.UUID) ([]PlanCard, error) {
 	rows, err := q.q.Query(ctx, `
-		SELECT a.id, s.as_of, s.due_on, s.minimum_payment_cents,
+		SELECT a.id, s.as_of, s.due_on, s.minimum_payment_cents, s.balance_cents,
 		       COALESCE((SELECT sum(e.amount_cents) FROM entries e
 		                  WHERE e.user_id = a.user_id AND e.account_id = a.id AND e.amount_cents > 0
 		                    AND COALESCE(e.user_kind, e.kind) = 'transfer' AND e.booked_on > s.as_of), 0)
 		FROM accounts a
 		CROSS JOIN LATERAL (
-		    SELECT c.as_of, c.due_on, c.minimum_payment_cents FROM balance_checkpoints c
+		    SELECT c.as_of, c.due_on, c.minimum_payment_cents, c.balance_cents FROM balance_checkpoints c
 		     WHERE c.account_id = a.id AND c.user_id = a.user_id AND c.due_on IS NOT NULL
 		     ORDER BY c.as_of DESC, c.created_at DESC LIMIT 1) s
 		WHERE a.user_id = $1 AND a.type = 'credit_card' AND NOT a.paid_by_other
@@ -672,11 +675,11 @@ func (q *Queries) PlanCards(ctx context.Context, userID uuid.UUID) ([]PlanCard, 
 	for rows.Next() {
 		var c PlanCard
 		var minimum *int64
-		var paid int64
-		if err := rows.Scan(&c.AccountID, &c.ClosingOn, &c.DueOn, &minimum, &paid); err != nil {
+		var statement, paid int64
+		if err := rows.Scan(&c.AccountID, &c.ClosingOn, &c.DueOn, &minimum, &statement, &paid); err != nil {
 			return nil, wrap("store.PlanCards", err)
 		}
-		c.MinimumPayment, c.PaidSince = centsPtr(minimum), money.Cents(paid)
+		c.MinimumPayment, c.Statement, c.PaidSince = centsPtr(minimum), money.Cents(statement), money.Cents(paid)
 		out = append(out, c)
 	}
 	return out, wrap("store.PlanCards", rows.Err())
