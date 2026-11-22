@@ -30,6 +30,53 @@ type View struct {
 	// Cards are shown beside the month and never subtracted from it.
 	Cards  []CardView  `json:"cards"`
 	Alerts []AlertView `json:"alerts"`
+	// Projection is where the bank accounts are headed by the month's end;
+	// null for any month but the current one, and while a bank account has no
+	// balance stated to start from.
+	Projection *ProjectionView `json:"projection"`
+}
+
+// ProjectionView is a Projection on the wire: the bank accounts today, at the
+// month's end and at their lowest, what the plan expects and when, and the
+// balance at the end of each day left.
+type ProjectionView struct {
+	Start      money.Amount       `json:"start"`
+	End        money.Amount       `json:"end"`
+	Lowest     ProjectedDayView   `json:"lowest"`
+	FreePerDay money.Amount       `json:"free_per_day"`
+	Events     []ProjectionEvent  `json:"events"`
+	Days       []ProjectedDayView `json:"days"`
+}
+
+// ProjectedDayView is a day's balance on the wire.
+type ProjectedDayView struct {
+	Day     civil.Date   `json:"day"`
+	Balance money.Amount `json:"balance"`
+}
+
+// ProjectionEvent is an Event on the wire; Kind is income, fixed, card, saving
+// or pending.
+type ProjectionEvent struct {
+	Day       civil.Date   `json:"day"`
+	Kind      string       `json:"kind"`
+	Name      string       `json:"name"`
+	Amount    money.Amount `json:"amount"`
+	ItemID    *uuid.UUID   `json:"item_id,omitempty"`
+	AccountID *uuid.UUID   `json:"account_id,omitempty"`
+}
+
+func projectionView(p Projection) *ProjectionView {
+	v := &ProjectionView{Start: p.Start.Amount(), End: p.End.Amount(), FreePerDay: p.FreePerDay.Amount(),
+		Lowest: ProjectedDayView{Day: p.Lowest.Day, Balance: p.Lowest.Balance.Amount()},
+		Events: make([]ProjectionEvent, 0, len(p.Events)), Days: make([]ProjectedDayView, 0, len(p.Days))}
+	for _, e := range p.Events {
+		v.Events = append(v.Events, ProjectionEvent{Day: e.Day, Kind: e.Kind, Name: e.Name, Amount: e.Amount.Amount(),
+			ItemID: e.ItemID, AccountID: e.AccountID})
+	}
+	for _, d := range p.Days {
+		v.Days = append(v.Days, ProjectedDayView{Day: d.Day, Balance: d.Balance.Amount()})
+	}
+	return v
 }
 
 // SummaryView is the month's account on the wire. PerDay is null when
@@ -351,6 +398,9 @@ func NewView(p Plan) View {
 	for _, a := range p.Alerts {
 		v.Alerts = append(v.Alerts, AlertView{Kind: a.Kind, Level: a.Level, CategoryID: a.CategoryID,
 			ItemID: a.ItemID, AccountID: a.AccountID, DueOn: a.DueOn})
+	}
+	if p.Projection != nil {
+		v.Projection = projectionView(*p.Projection)
 	}
 	return v
 }

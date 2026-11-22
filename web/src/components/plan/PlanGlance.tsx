@@ -3,7 +3,9 @@
  *
  * Inicio's look at this month's plan, right after "En qué se te va": "Plan de
  * noviembre" with "Ver plan", then "Te quedan", the figure, "unos $22 al día" and
- * the track. Past what is free, the label changes and the figure is how far, in ink
+ * the track, and, when the month has a projection, "A fin de mes llegas con unos
+ * $1,350." ("te faltarían unos $450." below zero; whole dollars, like the day's
+ * share). Past what is free, the label changes and the figure is how far, in ink
  * and unsigned ("Por encima de lo libre", "Llevas $612.40 de $580.00 libres."), never
  * a negative figure; a plan that leaves nothing free says why, as the plan's page
  * does. The words are the plan page's own (words.tsx).
@@ -23,6 +25,7 @@ import { Link } from 'react-router-dom'
 
 import { Amount, PlanTrack, SectionCard } from '@/components/kit'
 import { Button } from '@/components/ui/button'
+import { aboutMoney } from '@/lib/format'
 import { PLAN_PATH } from '@/lib/nav'
 import { usePlan } from './usePlan'
 import { headline, monthWord, perDayWords, shortfall, spentLine } from './words'
@@ -58,6 +61,13 @@ export function PlanGlance({ className }: { className?: string }) {
         </p>
         <p className="text-small font-medium text-pretty text-muted-foreground">{line}</p>
         {head.track && <PlanTrack amount={data.summary.spent} cap={data.summary.free} />}
+        {data.projection && (
+          <p className="text-small font-medium text-pretty text-muted-foreground">
+            {data.projection.end.cents < 0
+              ? `A fin de mes te faltarían unos ${aboutMoney(-data.projection.end.cents)}.`
+              : `A fin de mes llegas con unos ${aboutMoney(data.projection.end)}.`}
+          </p>
+        )}
       </div>
     </SectionCard>
   )

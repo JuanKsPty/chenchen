@@ -22,7 +22,7 @@ import (
 var (
 	readTools = []string{
 		mcpserver.ToolListAccounts, mcpserver.ToolListMovements, mcpserver.ToolListCategories, mcpserver.ToolSpending,
-		mcpserver.ToolCashFlow, mcpserver.ToolExplainDrift, mcpserver.ToolTransferSuggest, mcpserver.ToolPortfolio,
+		mcpserver.ToolCashFlow, mcpserver.ToolNetWorthHistory, mcpserver.ToolExplainDrift, mcpserver.ToolTransferSuggest, mcpserver.ToolPortfolio,
 		mcpserver.ToolListRules, mcpserver.ToolListPending, mcpserver.ToolSyncPlan, mcpserver.ToolImportStatus,
 		mcpserver.ToolMonthPlan,
 	}

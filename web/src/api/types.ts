@@ -159,6 +159,25 @@ export interface NetWorth {
   unanchored: number
 }
 
+/**
+ * The net worth at the end of a day, split like NetWorth. Partial: some account had
+ * nothing to read that day (no statement yet, no starting balance, positions never
+ * synced), and is left out of it rather than made up.
+ */
+export interface NetWorthPoint {
+  day: string
+  assets: Amount
+  owed: Amount
+  holdings: Amount
+  total: Amount
+  partial: boolean
+}
+
+/** The end of each past month, oldest first, and today last. */
+export interface NetWorthHistory {
+  points: NetWorthPoint[]
+}
+
 export interface AccountList {
   accounts: Account[]
   net_worth: NetWorth
@@ -928,6 +947,33 @@ export type PlanAlert =
   | { kind: 'cap'; level: 'near' | 'over'; category_id: string }
   | { kind: 'payment'; level: 'soon'; due_on: string; item_id: string }
   | { kind: 'payment'; level: 'soon'; due_on: string; account_id: string }
+  /** The projection runs the bank accounts below zero; due_on is its lowest day. */
+  | { kind: 'cash_short'; level: 'over'; due_on: string }
+
+/** What the projection expects on a day; amount is signed, what comes in positive. */
+export interface ProjectionEvent {
+  day: string
+  kind: 'income' | 'fixed' | 'card' | 'saving' | 'pending'
+  name: string
+  amount: Amount
+  item_id?: string
+  account_id?: string
+}
+
+/**
+ * Where the bank accounts are headed by the month's end: today's balance less the
+ * purchases noted, then what the plan expects each day, and what is free spent a
+ * day's share at a time. Only the current month has one, and only when every bank
+ * account with movements has a starting balance.
+ */
+export interface MonthProjection {
+  start: Amount
+  end: Amount
+  lowest: { day: string; balance: Amount }
+  free_per_day: Amount
+  events: ProjectionEvent[]
+  days: { day: string; balance: Amount }[]
+}
 
 /** Which way a link goes: this movement paid it, this one did not, or it was paid outside. */
 export type PlanLinkDecision = 'assign' | 'reject' | 'paid'
@@ -1033,4 +1079,5 @@ export interface MonthPlan {
   /** The credit cards with a due date, beside the month: they never come off it. */
   cards: PlanCardDue[]
   alerts: PlanAlert[]
+  projection: MonthProjection | null
 }

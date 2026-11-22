@@ -29,7 +29,8 @@ import type {
  * Hooks (frozen at the F gate; a page that needs another one defines it locally
  * with useQuery, an api/endpoints function and one of these key prefixes):
  *
- *   accounts      useMe · useAccounts · useAccount(id) · useUpdateAccount(id)
+ *   accounts      useMe · useAccounts · useAccount(id) · useNetWorthHistory({months?,
+ *                 account?}): each month's end and today · useUpdateAccount(id)
  *                 ({alias?, type?: 'checking'|'savings'}) · useDeleteAccount()(id) ·
  *                 useAddOthersCard()({alias, last4}): a card someone else pays
  *   checkpoints   useCheckpoints(accountId) · useAddCheckpoint(accountId) ·
@@ -141,6 +142,17 @@ export function useMe() {
 
 export function useAccounts() {
   return useQuery({ queryKey: keys.accounts, queryFn: api.fetchAccounts })
+}
+
+/**
+ * The net worth at the end of each past month and today, or one account's. Under the
+ * accounts key, so anything that changes a balance refreshes it with them.
+ */
+export function useNetWorthHistory(query: { months?: number; account?: string } = {}) {
+  return useQuery({
+    queryKey: [...keys.accounts, 'history', query],
+    queryFn: () => api.fetchNetWorthHistory(query),
+  })
 }
 
 export function useAccount(id: string) {

@@ -203,6 +203,10 @@ type Plan struct {
 	Cards []CardLine
 	// Alerts are said only for the current month.
 	Alerts []Alert
+	// Projection is where the bank accounts are headed by the month's end;
+	// only the current month has one, once Month adds it, and only when every
+	// bank account with lines has a balance stated to start from.
+	Projection *Projection
 	// Spending is everything spent in the month, exactly what Gastos adds up,
 	// and Charged the part of it planned items took. The rest is
 	// Summary.Spent: Spending = Summary.Spent + Charged, always.

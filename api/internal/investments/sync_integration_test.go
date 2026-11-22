@@ -131,3 +131,33 @@ func TestSyncKeepsPositionsWhenTheSectionIsMissing(t *testing.T) {
 		t.Error("a report missing sections must say so")
 	}
 }
+
+func TestSyncKeepsWhatThePositionsWereWorthThatDay(t *testing.T) {
+	svc, db, user, account := linked(t, report)
+	ctx := context.Background()
+	for range 2 {
+		if _, err := svc.Sync(ctx, user, account); err != nil {
+			t.Fatal(err)
+		}
+	}
+	days, err := db.Q().HoldingsDaysByUser(ctx, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One figure for the day the snapshot was taken, however many syncs said it.
+	got := days[account]
+	if len(got) != 1 || got[0].Day.String() != "2024-01-31" || got[0].Value != 155300 {
+		t.Fatalf("holdings days = %+v, want one: 2024-01-31 worth 1553.00", got)
+	}
+
+	// A report without positions leaves the day's figure as it was.
+	svc.newClient = func(string, string) Fetcher {
+		return cannedFlex(`<FlexQueryResponse><FlexStatements count="1"><FlexStatement accountId="U1234567" toDate="20240131"><Trades></Trades></FlexStatement></FlexStatements></FlexQueryResponse>`)
+	}
+	if _, err := svc.Sync(ctx, user, account); err != nil {
+		t.Fatal(err)
+	}
+	if n := storetest.Count(t, db, `holdings_daily WHERE account_id = $1`, account); n != 1 {
+		t.Errorf("holdings days = %d after a report without positions, want 1", n)
+	}
+}

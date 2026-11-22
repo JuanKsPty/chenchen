@@ -402,6 +402,38 @@ func (q *Queries) SumsByAccount(ctx context.Context, userID uuid.UUID) (map[uuid
 	return out, wrap("store.SumsByAccount", rows.Err())
 }
 
+// DaySum is what an account's lines that reached the balance on one day add up
+// to.
+type DaySum struct {
+	Day   civil.Date
+	Total money.Cents
+}
+
+// DailySums totals each of the user's accounts' entries by the day they
+// reached the balance, oldest first: the steps a balance took, for reading it
+// on any past day. Printed lines only, never captures (ADR-0002).
+func (q *Queries) DailySums(ctx context.Context, userID uuid.UUID) (map[uuid.UUID][]DaySum, error) {
+	rows, err := q.q.Query(ctx, `
+		SELECT account_id, balance_on, SUM(amount_cents) FROM entries
+		WHERE user_id = $1 GROUP BY account_id, balance_on ORDER BY account_id, balance_on`, userID)
+	if err != nil {
+		return nil, wrap("store.DailySums", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID][]DaySum{}
+	for rows.Next() {
+		var id uuid.UUID
+		var d DaySum
+		var total int64
+		if err := rows.Scan(&id, &d.Day, &total); err != nil {
+			return nil, wrap("store.DailySums", err)
+		}
+		d.Total = money.Cents(total)
+		out[id] = append(out[id], d)
+	}
+	return out, wrap("store.DailySums", rows.Err())
+}
+
 // SumThroughDay totals an account's entries that reached the balance on or
 // before day. Printed lines only, never captures (ADR-0002).
 func (q *Queries) SumThroughDay(ctx context.Context, accountID uuid.UUID, day civil.Date) (money.Cents, error) {

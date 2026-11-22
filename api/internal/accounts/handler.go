@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -31,6 +32,7 @@ func (h *Handler) Routes(entries http.HandlerFunc) http.Handler {
 	r := chi.NewRouter()
 	r.Get("/", h.list)
 	r.Post("/", h.addHandCard)
+	r.Get("/history", h.history)
 	r.Get("/{id}", h.get)
 	r.Patch("/{id}", h.update)
 	r.Delete("/{id}", h.delete)
@@ -60,6 +62,35 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpx.JSON(w, r, http.StatusOK, NewListView(list))
+}
+
+// history serves the net worth over time: ?months= how far back (12 unless
+// said, 36 at most) and ?account= to read one account alone.
+func (h *Handler) history(w http.ResponseWriter, r *http.Request) {
+	months := DefaultHistoryMonths
+	if raw := r.URL.Query().Get("months"); raw != "" {
+		n, err := strconv.Atoi(raw)
+		if err != nil || n < 1 || n > MaxHistoryMonths {
+			httpx.Fail(w, r, httpx.BadRequest("invalid_months", "No pudimos cargar la historia. Intenta otra vez."))
+			return
+		}
+		months = n
+	}
+	var only *uuid.UUID
+	if raw := r.URL.Query().Get("account"); raw != "" {
+		id, err := uuid.Parse(raw)
+		if err != nil {
+			httpx.Fail(w, r, TranslateError(fmt.Errorf("%w: %q", ErrNotFound, raw)))
+			return
+		}
+		only = &id
+	}
+	points, err := h.svc.History(r.Context(), identity.MustFromContext(r.Context()), months, only)
+	if err != nil {
+		httpx.Fail(w, r, TranslateError(err))
+		return
+	}
+	httpx.JSON(w, r, http.StatusOK, NewHistoryView(points))
 }
 
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
@@ -505,6 +536,33 @@ func NewListView(list []Account) ListView {
 		Assets: assets.Amount(), Owed: (-liabilities).Amount(), Holdings: holdings.Amount(),
 		Total: (assets + liabilities + holdings).Amount(), Incomplete: unanchored > 0, Unanchored: unanchored,
 	}}
+}
+
+// HistoryView is the net worth over time on the wire, oldest first and today
+// last.
+type HistoryView struct {
+	Points []HistoryPointView `json:"points"`
+}
+
+// HistoryPointView is one day of it, split like NetWorthView.
+type HistoryPointView struct {
+	Day      civil.Date   `json:"day"`
+	Assets   money.Amount `json:"assets"`
+	Owed     money.Amount `json:"owed"`
+	Holdings money.Amount `json:"holdings"`
+	Total    money.Amount `json:"total"`
+	Partial  bool         `json:"partial"`
+}
+
+// NewHistoryView builds the history's wire shape.
+func NewHistoryView(points []HistoryPoint) HistoryView {
+	out := HistoryView{Points: make([]HistoryPointView, 0, len(points))}
+	for _, p := range points {
+		out.Points = append(out.Points, HistoryPointView{Day: p.Day, Assets: p.Assets.Amount(),
+			Owed: (-p.Liabilities).Amount(), Holdings: p.Holdings.Amount(), Total: p.Total().Amount(),
+			Partial: p.Partial})
+	}
+	return out
 }
 
 // CheckpointView is a checkpoint on the wire.

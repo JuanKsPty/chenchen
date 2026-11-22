@@ -19,6 +19,8 @@
  *   PlanTrack      a plan figure's bar against what was planned: veranera up to it,
  *                  ink past it (PlanBar: a category's cap with its caption;
  *                  PlanCaption: "Quedan $180.00 de $300.00" alone)
+ *   TrendChart     a figure month by month: the line, the month being read, partial
+ *                  stretches dashed
  *   FilterChip     a filter's pill: off with a chevron, on with its value and an x
  *   SearchField    the search pill with a hidden label and a clear button
  *   KitAction      { label, to?, onClick?, icon?, disabled?, ariaLabel? } for Notice and
@@ -39,4 +41,5 @@ export { SearchField } from './SearchField'
 export { SectionCard } from './SectionCard'
 export { StatusChip } from './StatusChip'
 export { Tile } from './Tile'
+export { TrendChart, type TrendPoint } from './TrendChart'
 export type { KitAction } from './action'
