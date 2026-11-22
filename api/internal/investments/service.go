@@ -271,6 +271,22 @@ func (s *Service) apply(ctx context.Context, account store.Account, stmt ibkr.St
 				return err
 			}
 			result.Positions = len(positions)
+			// The snapshot just replaced is gone for good, so its total is
+			// kept by the day it was taken: a past net worth reads it back.
+			var worth money.Cents
+			taken := day(stmt.ToDate)
+			for _, p := range positions {
+				worth += *p.MarketValue
+				if p.AsOf.After(taken) {
+					taken = p.AsOf
+				}
+			}
+			if taken.IsZero() {
+				taken = civil.Of(s.now().In(civil.Panama))
+			}
+			if err := q.UpsertHoldingsDay(ctx, userID, accountID, taken, worth); err != nil {
+				return err
+			}
 		}
 
 		for _, c := range stmt.CashBalances {

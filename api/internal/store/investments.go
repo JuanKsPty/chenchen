@@ -152,6 +152,45 @@ func (q *Queries) HoldingsByUser(ctx context.Context, userID uuid.UUID) (map[uui
 	return out, wrap("store.HoldingsByUser", rows.Err())
 }
 
+// HoldingsDay is what a brokerage account's positions were worth on a day.
+type HoldingsDay struct {
+	Day   civil.Date
+	Value money.Cents
+}
+
+// UpsertHoldingsDay records what an account's positions were worth on day,
+// replacing what an earlier sync said for the same day.
+func (q *Queries) UpsertHoldingsDay(ctx context.Context, userID, accountID uuid.UUID, day civil.Date, value money.Cents) error {
+	_, err := q.q.Exec(ctx, `
+		INSERT INTO holdings_daily (account_id, user_id, day, value_cents) VALUES ($1, $2, $3, $4)
+		ON CONFLICT (account_id, day) DO UPDATE SET value_cents = EXCLUDED.value_cents`,
+		accountID, userID, day, int64(value))
+	return wrap("store.UpsertHoldingsDay", err)
+}
+
+// HoldingsDaysByUser lists what each of the user's brokerage accounts' positions
+// were worth on the days they were synced, oldest first.
+func (q *Queries) HoldingsDaysByUser(ctx context.Context, userID uuid.UUID) (map[uuid.UUID][]HoldingsDay, error) {
+	rows, err := q.q.Query(ctx, `SELECT account_id, day, value_cents FROM holdings_daily
+		WHERE user_id = $1 ORDER BY account_id, day`, userID)
+	if err != nil {
+		return nil, wrap("store.HoldingsDaysByUser", err)
+	}
+	defer rows.Close()
+	out := map[uuid.UUID][]HoldingsDay{}
+	for rows.Next() {
+		var id uuid.UUID
+		var d HoldingsDay
+		var v int64
+		if err := rows.Scan(&id, &d.Day, &v); err != nil {
+			return nil, wrap("store.HoldingsDaysByUser", err)
+		}
+		d.Value = money.Cents(v)
+		out[id] = append(out[id], d)
+	}
+	return out, wrap("store.HoldingsDaysByUser", rows.Err())
+}
+
 func (q *Queries) positions(ctx context.Context, op, where string, args ...any) ([]Position, error) {
 	rows, err := q.q.Query(ctx, `
 		SELECT symbol, currency, asset_class, quantity::float8, mark_price_cents, market_value_cents,
