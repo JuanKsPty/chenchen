@@ -67,6 +67,7 @@ import { FixedPaymentSheet } from '@/components/plan/FixedPaymentSheet'
 import { GoalDialog } from '@/components/plan/GoalDialog'
 import { IncomeDialog } from '@/components/plan/IncomeDialog'
 import { IncomeSheet } from '@/components/plan/IncomeSheet'
+import { MonthProjection } from '@/components/plan/MonthProjection'
 import { planMonth } from '@/components/plan/month'
 import { PlanHero } from '@/components/plan/PlanHero'
 import { PlanSetupDialog } from '@/components/plan/PlanSetupDialog'
@@ -309,6 +310,7 @@ export function PlanPage() {
               suggestions={offered?.income}
               headingRef={heroHeading}
             />
+            <MonthProjection plan={data} className={SECTION} />
             <CapsCard
               className={SECTION}
               plan={data}

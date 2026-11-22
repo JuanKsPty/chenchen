@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
+	"github.com/JuanKsPty/chenchen/api/internal/accounts"
 	"github.com/JuanKsPty/chenchen/api/internal/categories"
 	"github.com/JuanKsPty/chenchen/api/internal/civil"
 	"github.com/JuanKsPty/chenchen/api/internal/investments"
@@ -26,6 +27,7 @@ const (
 	ToolListCategories     = "list_categories"
 	ToolSpending           = "spending_by_category"
 	ToolCashFlow           = "cash_flow"
+	ToolNetWorthHistory    = "net_worth_history"
 	ToolExplainDrift       = "explain_drift"
 	ToolTransferSuggest    = "list_transfer_suggestions"
 	ToolPortfolio          = "get_portfolio"
@@ -44,6 +46,25 @@ const (
 type periodArgs struct {
 	From string `json:"from,omitempty" jsonschema:"first day, YYYY-MM-DD, inclusive. Defaults to the first of this month."`
 	To   string `json:"to,omitempty" jsonschema:"last day, YYYY-MM-DD, inclusive. Defaults to today."`
+}
+
+type historyArgs struct {
+	Months    int    `json:"months,omitempty" jsonschema:"how many months back, 1 to 36. Defaults to 12."`
+	AccountID string `json:"account_id,omitempty" jsonschema:"one account's balance alone, from list_accounts. Defaults to the whole net worth."`
+}
+
+type historyRow struct {
+	Day      string `json:"day" jsonschema:"YYYY-MM-DD: the last day of a month, or today for the last row"`
+	Assets   string `json:"assets" jsonschema:"what the bank accounts and a broker's cash hold, in dollars"`
+	Owed     string `json:"owed" jsonschema:"what the cards owe, in dollars, positive"`
+	Holdings string `json:"holdings" jsonschema:"what a broker's positions were worth, in dollars"`
+	Total    string `json:"total" jsonschema:"assets minus owed plus holdings, in dollars"`
+	Partial  bool   `json:"partial" jsonschema:"some account had nothing to read that day (no statement yet, no starting balance, positions never synced) and is left out of it"`
+}
+
+type historyResult struct {
+	Points []historyRow `json:"points" jsonschema:"oldest first; months before any statement are left out"`
+	Note   string       `json:"note"`
 }
 
 type spendingArgs struct {
@@ -273,6 +294,38 @@ func addAnalystReads(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		out := flowResult{Months: make([]flowRow, 0, len(points)), Note: "in y out en dólares positivos."}
 		for _, p := range points {
 			out.Months = append(out.Months, flowRow{Month: p.Day.String()[:7], In: p.In.String(), Out: p.Out.String()})
+		}
+		return nil, out, nil
+	})
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: ToolNetWorthHistory,
+		Description: "El patrimonio neto de la persona al cierre de cada mes y hoy: lo que tiene, lo que debe y sus inversiones. " +
+			"Con account_id, el saldo de esa cuenta sola. Úsala cuando pregunte cómo le ha ido, si está ahorrando o cuánto " +
+			"ha crecido su patrimonio.",
+		Annotations: reading("Patrimonio mes a mes"),
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, args historyArgs) (*mcp.CallToolResult, historyResult, error) {
+		if args.Months < 0 || args.Months > accounts.MaxHistoryMonths {
+			return nil, historyResult{}, fmt.Errorf("months va de 1 a %d", accounts.MaxHistoryMonths)
+		}
+		var only *uuid.UUID
+		if args.AccountID != "" {
+			id, err := parseID(args.AccountID, "account_id", "list_accounts")
+			if err != nil {
+				return nil, historyResult{}, err
+			}
+			only = &id
+		}
+		points, err := deps.Accounts.History(ctx, userID, args.Months, only)
+		if err != nil {
+			return nil, historyResult{}, toolError(err)
+		}
+		out := historyResult{Points: make([]historyRow, 0, len(points)),
+			Note: "Montos en dólares. Un día partial no es todo el patrimonio: dilo si comparas con él."}
+		for _, p := range points {
+			out.Points = append(out.Points, historyRow{Day: p.Day.String(), Assets: p.Assets.String(),
+				Owed: (-p.Liabilities).String(), Holdings: p.Holdings.String(), Total: p.Total().String(),
+				Partial: p.Partial})
 		}
 		return nil, out, nil
 	})

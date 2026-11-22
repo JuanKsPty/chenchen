@@ -63,7 +63,7 @@ func TestEveryToolIsPublishedWithASchemaAndDescription(t *testing.T) {
 	}
 
 	for _, name := range []string{
-		ToolListAccounts, ToolListMovements, ToolListCategories, ToolSpending, ToolCashFlow,
+		ToolListAccounts, ToolListMovements, ToolListCategories, ToolSpending, ToolCashFlow, ToolNetWorthHistory,
 		ToolExplainDrift, ToolTransferSuggest, ToolPortfolio, ToolListRules, ToolMonthPlan,
 		ToolProposeCategory, ToolProposeNote, ToolProposeRule, ToolProposeTransfer, ToolProposeCheckpoint,
 	} {
@@ -81,8 +81,8 @@ func TestEveryToolIsPublishedWithASchemaAndDescription(t *testing.T) {
 			t.Errorf("tool %s has no input schema", name)
 		}
 	}
-	if len(specs) != 15 {
-		t.Errorf("the server publishes %d tools, want 15 — a new one needs a test here", len(specs))
+	if len(specs) != 16 {
+		t.Errorf("the server publishes %d tools, want 16 — a new one needs a test here", len(specs))
 	}
 }
 
@@ -164,8 +164,8 @@ func TestClaudesServerKeepsTheSameClaims(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list.Tools) != 22 {
-		t.Errorf("Claude's server publishes %d tools, want 22 — a new one needs a test", len(list.Tools))
+	if len(list.Tools) != 23 {
+		t.Errorf("Claude's server publishes %d tools, want 23 — a new one needs a test", len(list.Tools))
 	}
 	forbidden := []string{"user_id", "userid", "user", "owner", "customer_id", "subject", "actor", "token", "id"}
 	verbs := map[string]bool{"deposit": true, "withdraw": true, "transfer": true, "pay": true, "send": true, "move": true}

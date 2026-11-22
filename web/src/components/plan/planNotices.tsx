@@ -9,6 +9,9 @@
  * What this month's plan has to say on Inicio: at most two pending notices, which
  * HomeNotices puts after the purchases. They come from the server's `alerts` (the
  * web and Claude say the same thing) and, most important first:
+ *   0. the bank accounts run short before the month ends: "Tus cuentas quedarían en
+ *      rojo el 14 nov" · "Mira qué sale antes de que entre tu ingreso." [Ver plan],
+ *      which opens on the month's projection
  *   1. what is free, past it: "Lo libre de noviembre ya se usó" · "Mira tu plan y
  *      ajústalo si algo cambió." [Ver plan]
  *   2. caps past theirs: "Alimentación va por encima de su tope", or "2 categorías
@@ -33,7 +36,7 @@
  * soon then, but every notice here leads to a section of the plan, and an unplanned
  * month's page is only "Arma tu plan del mes". PlanGlance keeps the same silence.
  */
-import { CalendarClockIcon, GaugeIcon } from 'lucide-react'
+import { CalendarClockIcon, GaugeIcon, TrendingDownIcon } from 'lucide-react'
 import { useMemo, type ReactNode } from 'react'
 
 import type { Account, MonthPlan, PlanAlert } from '@/api/types'
@@ -51,6 +54,7 @@ const SHOWN = 2
 
 type CapAlert = Extract<PlanAlert, { kind: 'cap' }>
 type PaymentAlert = Extract<PlanAlert, { kind: 'payment' }>
+type CashShortAlert = Extract<PlanAlert, { kind: 'cash_short' }>
 
 export interface PlanNotice {
   key: string
@@ -85,6 +89,7 @@ export function usePlanNotices(accounts: Account[]): PlanNotice[] {
     onClick: seen,
   }
 
+  const short = data.alerts.filter((a): a is CashShortAlert => a.kind === 'cash_short')
   const free = data.alerts.filter((a) => a.kind === 'free')
   const caps = data.alerts.filter((a): a is CapAlert => a.kind === 'cap')
   const payments = data.alerts.filter((a): a is PaymentAlert => a.kind === 'payment')
@@ -92,6 +97,27 @@ export function usePlanNotices(accounts: Account[]): PlanNotice[] {
   const capsNear = caps.filter((a) => a.level === 'near')
 
   const candidates: { key: string; alerts: PlanAlert[]; notice: () => ReactNode }[] = [
+    {
+      key: 'plan-plata',
+      alerts: short,
+      notice: () => {
+        const due = short[0]?.due_on
+        const day = !due
+          ? ''
+          : due === data.today
+            ? ' hoy'
+            : ` el ${formatCivilDayMonth(due)}`
+        return (
+          <Notice
+            tone="pending"
+            icon={TrendingDownIcon}
+            title={`Tus cuentas quedarían en rojo${day}`}
+            description="Mira qué sale antes de que entre tu ingreso."
+            action={toPlan}
+          />
+        )
+      },
+    },
     {
       key: 'plan-libre',
       alerts: free.filter((a) => a.level === 'over'),

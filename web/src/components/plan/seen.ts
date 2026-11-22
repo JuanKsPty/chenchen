@@ -3,7 +3,9 @@
  * only when something rises, not every time it opens.
  *
  *   alertSubject(alert)          what an alert is about: 'libre', 'tope:<category>',
- *                                'pago:<item>' or 'tarjeta:<account>:<due day>'
+ *                                'pago:<item>', 'tarjeta:<account>:<due day>' or
+ *                                'plata' (the projection runs short; not its day,
+ *                                which moves as the month goes)
  *   useUnseenPlanAlerts(plan?)   the subjects whose level is above the one last seen
  *                                ("near" after nothing, "over" after "near")
  *   markPlanSeen(plan)           every current alert's level, as seen now
@@ -43,6 +45,8 @@ export function alertSubject(alert: PlanAlert): string {
       return 'item_id' in alert
         ? `pago:${alert.item_id}`
         : `tarjeta:${alert.account_id}:${alert.due_on}`
+    case 'cash_short':
+      return 'plata'
   }
 }
 

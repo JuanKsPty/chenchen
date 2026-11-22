@@ -1,17 +1,21 @@
 /**
- * <TrendChart points label tone? className? />
+ * <TrendChart points label tone? resting? pointLabel? zeroLine? className? />
  *
  *   points  [{day: 'YYYY-MM-DD', cents, partial}], oldest first. Fewer than two draw
  *           nothing: a single figure is not a trend.
  *   label   the chart's name for screen readers: "Patrimonio neto, mes a mes".
  *   tone    'default'  a veranera line (chart-3) on a surface card.
  *           'inverse'  a white line on the veranera block (NetWorthCard).
+ *   resting     the point read when nothing points at the chart; the last by default.
+ *   pointLabel  (point, index, last) => the caption's words for a point; by default
+ *               "Hoy" for the last and the month for the rest ("Octubre 2026").
+ *   zeroLine    a dotted line at zero, when zero is within the line's range.
  *
  * A line with a soft area under it, one point per month's end and the last one today.
  * A stretch that touches a partial point (a month some account could not be read) is
  * dashed: the figure is real, but it is not all of it.
  *
- * Above the line, the point being read: today unless a pointer is over the chart, or
+ * Above the line, the point being read: the resting one unless a pointer is over the chart, or
  * the chart has focus and the arrow keys move along it (Home and End jump to the
  * ends). The caption is a live region, so moving with the keys reads each month.
  *
@@ -38,11 +42,17 @@ export function TrendChart({
   points,
   label,
   tone = 'default',
+  resting,
+  pointLabel = monthOrToday,
+  zeroLine = false,
   className,
 }: {
   points: TrendPoint[]
   label: string
   tone?: 'default' | 'inverse'
+  resting?: number
+  pointLabel?: (point: TrendPoint, index: number, last: number) => string
+  zeroLine?: boolean
   className?: string
 }) {
   const captionId = useId()
@@ -50,7 +60,7 @@ export function TrendChart({
 
   const geometry = useMemo(() => plot(points), [points])
   const last = points.length - 1
-  const index = active ?? last
+  const index = active ?? resting ?? last
   const point = points[index]
   const at = geometry?.coords[index]
   if (!geometry || !point || !at) return null
@@ -88,7 +98,7 @@ export function TrendChart({
         )}
       >
         <span className="truncate">
-          {index === last ? 'Hoy' : monthTitle(point.day)}
+          {pointLabel(point, index, last)}
           {point.partial && ' · incompleto'}
         </span>
         <Amount
@@ -121,6 +131,16 @@ export function TrendChart({
           className="absolute inset-0 size-full overflow-visible"
         >
           <path d={geometry.area} fill="currentColor" opacity={inverse ? 0.16 : 0.1} />
+          {zeroLine && geometry.zero !== null && (
+            <path
+              d={`M0 ${geometry.zero}H${WIDTH}`}
+              stroke="currentColor"
+              strokeWidth={1}
+              strokeDasharray="2 3"
+              opacity={0.5}
+              vectorEffect="non-scaling-stroke"
+            />
+          )}
           <path
             d={geometry.solid}
             fill="none"
@@ -184,5 +204,11 @@ function plot(points: TrendPoint[]) {
   }
   const line = coords.map((c, i) => `${i === 0 ? 'M' : 'L'}${c.x} ${c.y}`).join('')
   const area = `${line}L${WIDTH} ${HEIGHT}L0 ${HEIGHT}Z`
-  return { coords, solid, dashed, area }
+  const zero = low < 0 && high > 0 ? HEIGHT - (-low / (high - low)) * HEIGHT : null
+  return { coords, solid, dashed, area, zero }
+}
+
+/** "Hoy" for the last point, the month for the rest. */
+function monthOrToday(point: TrendPoint, index: number, last: number): string {
+  return index === last ? 'Hoy' : monthTitle(point.day)
 }

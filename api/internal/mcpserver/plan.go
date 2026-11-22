@@ -76,6 +76,7 @@ type monthPlanResult struct {
 	Quincenas     []planQuincena    `json:"quincenas" jsonschema:"the 1st to the 15th, and the 16th to the month's end"`
 	Cards         []planCard        `json:"cards" jsonschema:"credit card statements due, shown beside the month and never subtracted: their purchases already count as spending"`
 	Alerts        []planAlert       `json:"alerts" jsonschema:"only for the current month"`
+	Projection    *planProjection   `json:"projection" jsonschema:"only for the current month, and only when every bank account with movements has a starting balance: where the bank accounts are headed by the month's end"`
 	Suggestions   []planSuggestion  `json:"suggestions" jsonschema:"only for the current month: paychecks, payments and savings that repeat in the history and the plan does not have yet"`
 	Note          string            `json:"note"`
 }
@@ -170,13 +171,30 @@ type planCard struct {
 }
 
 type planAlert struct {
-	Kind     string `json:"kind" jsonschema:"free (what is free), cap (a category's cap) or payment (a fixed payment or a card's statement)"`
+	Kind     string `json:"kind" jsonschema:"free (what is free), cap (a category's cap), payment (a fixed payment or a card's statement) or cash_short (the projection runs the bank accounts below zero; due_on is its lowest day)"`
 	Level    string `json:"level" jsonschema:"near or over what is free or a cap; soon for a payment due within 3 days"`
 	Category string `json:"category,omitempty"`
 	ItemID   string `json:"item_id,omitempty"`
 	Item     string `json:"item,omitempty" jsonschema:"the fixed payment's name"`
 	Account  string `json:"account,omitempty" jsonschema:"the card, as list_accounts names it"`
 	DueOn    string `json:"due_on,omitempty" jsonschema:"YYYY-MM-DD"`
+}
+
+type planProjection struct {
+	Start      string            `json:"start" jsonschema:"the bank accounts today, in dollars, as list_accounts gives them: no cards, no broker"`
+	End        string            `json:"end" jsonschema:"where they land on the month's last day, in dollars"`
+	LowestDay  string            `json:"lowest_day" jsonschema:"YYYY-MM-DD, the day they are lowest"`
+	Lowest     string            `json:"lowest" jsonschema:"their balance that day, in dollars; negative means they would run short"`
+	FreePerDay string            `json:"free_per_day" jsonschema:"what is free, taken as spent each day, today included, in dollars"`
+	Events     []projectionEvent `json:"events" jsonschema:"what the plan expects from today to the month's end, by day"`
+}
+
+type projectionEvent struct {
+	Day     string `json:"day" jsonschema:"YYYY-MM-DD; something late counts today"`
+	Kind    string `json:"kind" jsonschema:"income (a paycheck still to arrive), fixed (a payment still to go out, unless a card pays it), card (what is left of a card statement, on its due date), saving (into an account outside the bank accounts) or pending (purchases noted and not yet printed)"`
+	Name    string `json:"name"`
+	Amount  string `json:"amount" jsonschema:"in dollars, signed: what comes in is positive"`
+	Account string `json:"account,omitempty" jsonschema:"the card or account, as list_accounts names it"`
 }
 
 type planSuggestion struct {
@@ -198,8 +216,9 @@ func addPlanRead(server *mcp.Server, deps Deps, userID uuid.UUID) {
 		Description: "El plan del mes de la persona al lado de lo que pasó: cuánto tiene libre para gastar (el ingreso esperado " +
 			"menos los pagos fijos, el ahorro y las compras planeadas), cuánto lleva gastado de eso, cuánto le queda y cuánto " +
 			"por día. Trae cada ingreso, pago fijo, ahorro y compra planeada con su estado, los topes por categoría, las " +
-			"quincenas, las tarjetas por pagar, los avisos y, en el mes actual, lo que su historial sugiere planear. " +
-			"Úsala cuando pregunte cuánto le queda, cómo va el mes o qué pagos le faltan.",
+			"quincenas, las tarjetas por pagar, los avisos y, en el mes actual, lo que su historial sugiere planear y con " +
+			"cuánto llegan sus cuentas a fin de mes (projection). Úsala cuando pregunte cuánto le queda, cómo va el mes, " +
+			"qué pagos le faltan o si le alcanza hasta la quincena.",
 		Annotations: reading("Ver plan del mes"),
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, args monthPlanArgs) (*mcp.CallToolResult, monthPlanResult, error) {
 		var m plan.Month // the current one
@@ -316,6 +335,16 @@ func monthPlanOut(p plan.Plan, found []plan.Suggestion, n planNames) monthPlanRe
 			row.DueOn = a.DueOn.String()
 		}
 		out.Alerts = append(out.Alerts, row)
+	}
+	if pr := p.Projection; pr != nil {
+		proj := &planProjection{Start: pr.Start.String(), End: pr.End.String(), LowestDay: pr.Lowest.Day.String(),
+			Lowest: pr.Lowest.Balance.String(), FreePerDay: pr.FreePerDay.String(),
+			Events: make([]projectionEvent, 0, len(pr.Events))}
+		for _, e := range pr.Events {
+			proj.Events = append(proj.Events, projectionEvent{Day: e.Day.String(), Kind: e.Kind, Name: e.Name,
+				Amount: e.Amount.String(), Account: n.account(e.AccountID)})
+		}
+		out.Projection = proj
 	}
 	for _, f := range found {
 		out.Suggestions = append(out.Suggestions, planSuggestion{Kind: f.Kind, Name: f.Name, Amount: f.Amount.String(),
