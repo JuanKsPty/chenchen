@@ -12,6 +12,9 @@
  * else pays is in neither: it is in its own group, Tarjetas de otros, which has no
  * total, so Debes is only what the owner owes.
  *
+ * Between the figure and the breakdown, how it moved month by month (NetWorthTrend),
+ * once there are two months to compare.
+ *
  * Without data yet it keeps its shape with placeholders. From lg it is at least
  * 280px tall, the figure on top and the breakdown at the bottom.
  */
@@ -19,6 +22,7 @@ import { useId, useMemo } from 'react'
 
 import type { Account, Amount as AmountValue, NetWorth } from '@/api/types'
 import { Amount } from '@/components/kit'
+import { NetWorthTrend } from '@/components/home/NetWorthTrend'
 import { Skeleton } from '@/components/ui/skeleton'
 import { amountOf, groupAccounts } from '@/lib/account'
 import { cn } from '@/lib/utils'
@@ -66,6 +70,8 @@ export function NetWorthCard({
           <Placeholder className="h-13 w-56" />
         )}
       </div>
+
+      {netWorth && <NetWorthTrend />}
 
       {/* Three equal columns. Each is at least as wide as its amount, so a figure
           wider than a third (a 320px phone, a seven-figure balance) sends

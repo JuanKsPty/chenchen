@@ -1,7 +1,8 @@
 /**
  * /cuentas/:id — one account (spec C-Cuenta-Desktop and C-Cuenta-Mobile).
  *
- * Top: the balance and whether it matches the bank (AccountOverview). Then, from lg on
+ * Top: the balance and whether it matches the bank (AccountOverview), and under it the
+ * balance month by month (BalanceTrendCard, once there are two months). Then, from lg on
  * a 12-column grid:
  *   - a bank account or a card: Movimientos (7) beside "Saldos del banco" (5);
  *   - a brokerage account: Posiciones (7) over Movimientos, Operaciones (5) beside.
@@ -24,6 +25,7 @@ import type { Account } from '@/api/types'
 import { AccountMovements } from '@/components/account/AccountMovements'
 import { AccountOverview } from '@/components/account/AccountOverview'
 import { useAccountActions } from '@/components/account/AccountActions'
+import { BalanceTrendCard } from '@/components/account/BalanceTrendCard'
 import { BankFiguresCard, BankFiguresSkeleton } from '@/components/account/BankFiguresCard'
 import { PositionsCard, TradesCard } from '@/components/account/Investments'
 import { ReviewSheet } from '@/components/account/ReviewSheet'
@@ -95,6 +97,8 @@ function AccountDetail({ account }: { account: Account }) {
         onAnchor={() => openCheckpoint(true)}
         onAddPurchase={openPurchase}
       />
+
+      <BalanceTrendCard account={account} />
 
       {brokerage ? (
         <div className="grid gap-4 lg:gap-6 lg:grid-cols-12 lg:grid-rows-[auto_1fr] lg:items-start">

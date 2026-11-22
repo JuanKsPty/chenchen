@@ -159,6 +159,25 @@ export interface NetWorth {
   unanchored: number
 }
 
+/**
+ * The net worth at the end of a day, split like NetWorth. Partial: some account had
+ * nothing to read that day (no statement yet, no starting balance, positions never
+ * synced), and is left out of it rather than made up.
+ */
+export interface NetWorthPoint {
+  day: string
+  assets: Amount
+  owed: Amount
+  holdings: Amount
+  total: Amount
+  partial: boolean
+}
+
+/** The end of each past month, oldest first, and today last. */
+export interface NetWorthHistory {
+  points: NetWorthPoint[]
+}
+
 export interface AccountList {
   accounts: Account[]
   net_worth: NetWorth

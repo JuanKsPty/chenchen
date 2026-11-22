@@ -26,6 +26,7 @@ import type {
   McpResource,
   Me,
   MonthPlan,
+  NetWorthHistory,
   NewShortcutKey,
   PlanCapLine,
   PlanFunding,
@@ -324,6 +325,14 @@ export const fetchCategoryTotals = (query: {
   if (query.to) params.set('to', query.to)
   if (query.kind) params.set('kind', query.kind)
   return request<{ totals: CategoryTotal[] }>(`/api/reports/categories?${params}`)
+}
+
+/** The net worth at each month's end and today; with account, that account's. */
+export const fetchNetWorthHistory = (query: { months?: number; account?: string }) => {
+  const params = new URLSearchParams()
+  if (query.months) params.set('months', String(query.months))
+  if (query.account) params.set('account', query.account)
+  return request<NetWorthHistory>(`/api/accounts/history?${params}`)
 }
 
 export const fetchFlow = (query: {
